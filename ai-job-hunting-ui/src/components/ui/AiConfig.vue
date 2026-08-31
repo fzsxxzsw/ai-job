@@ -198,7 +198,8 @@ const providerOptions = [
     {label: '火山引擎', value: 2},
     {label: '硅基流动', value: 3},
     {label: '月之暗面', value: 4},
-    {label: 'Open Router', value: 5}
+    {label: 'Open Router', value: 5},
+    {label: '阿里云百炼', value: 6}
 ]
 
 // Model options for each provider
@@ -208,7 +209,8 @@ const modelOptions = {
     2: ['deepseek-r1-250120', '...'],
     3: ['deepseek-ai/DeepSeek-V3', '...'],
     4: ['moonshot-v1-8k', 'moonshot-v1-32k', 'moonshot-v1-128k'],
-    5: ['deepseek/deepseek-chat-v3-0324:free', '...']
+    5: ['deepseek/deepseek-chat-v3-0324:free', '...'],
+    6: ['qwen3-vl-32b-thinking']
 }
 
 const formRef = ref()
@@ -222,7 +224,7 @@ const form = ref<AiConfig>({
     modelName: '',
     apiKey: '',
     baseUrl: '',
-    timeout: 60,
+    timeout: 15,
     completionsPath: '',
     testPassed: 0,
     status: 0,
@@ -330,7 +332,7 @@ const fetchConfig = async () => {
                 config = {
                     status: 0,
                     provider: 1,
-                    timeout: 60,
+                    timeout: 15,
                 }
             }
             form.value = {...form.value, ...config}
@@ -488,7 +490,9 @@ const handleTest = async () => {
         }
         isTestLoading.value = true
         try {
-            const response = await axios.post('/api/user/ai/config/test', form.value, {timeout: form.value.timeout * 1000 - 200})
+            // Let the backend own the configured deadline and leave one second
+            // for its structured timeout response to reach the UI.
+            const response = await axios.post('/api/user/ai/config/test', form.value, {timeout: form.value.timeout * 1000 + 1000})
             if (response.data.code === 200) {
                 ElNotification({
                     title: '测试通过',
@@ -564,7 +568,7 @@ const handleSendDebug = async () => {
             messageList: debugHistory.value.slice(0, debugHistory.value.length - 1)
         }
         const resp = await axios.post('/api/user/ai/config/debug', payload, {
-            timeout: 60000,
+            timeout: 16000,
             headers: {'Content-Type': 'application/json'}
         })
         const data = resp?.data?.data || {}

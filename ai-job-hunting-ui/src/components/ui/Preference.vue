@@ -54,29 +54,28 @@
                         <el-checkbox v-model="userStore.user.preference.cneE" label="" size="large"/>
                         公司名排除&nbsp;&nbsp;&nbsp;
                     </template>
-                    <el-select v-model="userStore.user.preference.cne"
+                    <el-select v-model="visibleCompanyExclusions"
                                multiple
                                filterable
-                               remote
                                allow-create
-                               default-first-option
+                               clearable
                                :reserve-keyword="false"
-                               placeholder="公司名排除"
-                               style="width: 240px">
-                        <el-option v-for="(item,inx) in ['请输入公司名']"
-                                   :key="inx"
-                                   :label="item"
-                                   :value="item"/>
-                    </el-select>
+                               placeholder="输入公司关键词后按 Enter"
+                               style="width: 240px"/>
                 </el-form-item>
             </div>
 
             <div style="display: flex">
                 <el-form-item label="工作名包含" style="margin-left: -40px;" prop="jobNameInclude">
                     <template #label>
-                        <el-checkbox v-model="userStore.user.preference.jniE" label="" size="large"/>
-                        工作名包含
+                        岗位名规则
                     </template>
+                    <el-select v-model="userStore.user.preference.jobTitleMatchMode"
+                               style="width: 150px; margin-right: 8px">
+                        <el-option label="必须匹配（推荐）" value="required"/>
+                        <el-option label="仅作为偏好" value="prefer"/>
+                        <el-option label="关闭规则" value="off"/>
+                    </el-select>
                     <el-select v-model="userStore.user.preference.jni"
                                multiple
                                filterable
@@ -85,7 +84,7 @@
                                default-first-option
                                :reserve-keyword="false"
                                placeholder="工作名包含"
-                               style="width: 240px">
+                               style="width: 300px">
                         <el-option v-for="(item,inx) in ['请输入工作名']"
                                    :key="inx"
                                    :label="item"
@@ -162,11 +161,11 @@
             <!--            <div class="form-bottom">-->
             <div style="display: flex">
                 <div style="display: flex;height: 40px">
-                    <el-checkbox v-model="userStore.user.preference.srE" label="" size="large"/>
+                    <span style="line-height: 40px; margin-right: 8px; white-space: nowrap">薪资硬范围</span>
                     <el-input class="input-opt"
                               v-model="userStore.user.preference.sr"
                               style="width: 324px"
-                              placeholder="薪资范围 例:9-15">
+                              placeholder="超出不投，例如 13-18">
                         <template #prepend>
                             <el-select v-model="userStore.user.preference.srT" placeholder="月薪(k)"
                                        style="width: 100px">
@@ -187,33 +186,102 @@
                 </el-form-item>
             </div>
 
-            <el-form-item label="AI过滤(语义匹配)" prop="aiFilter">
+            <div class="benefit-preference-row">
+                <el-form-item label="周末双休">
+                    <el-select v-model="userStore.user.preference.weekendMode" style="width: 180px">
+                        <el-option label="优先投递（推荐）" value="prefer"/>
+                        <el-option label="必须明确标注" value="required"/>
+                        <el-option label="关闭偏好" value="off"/>
+                    </el-select>
+                </el-form-item>
+                <el-form-item label="五险一金">
+                    <el-select v-model="userStore.user.preference.insuranceMode" style="width: 180px">
+                        <el-option label="优先投递（推荐）" value="prefer"/>
+                        <el-option label="必须明确标注" value="required"/>
+                        <el-option label="关闭偏好" value="off"/>
+                    </el-select>
+                </el-form-item>
+                <el-text type="info" class="benefit-preference-tip">
+                    “优先”会先处理已明确标注的岗位；“必须”会过滤未明确标注的岗位。
+                </el-text>
+            </div>
+
+            <div class="commute-preference-row">
+                <el-form-item label="通勤位置">
+                    <el-select v-model="userStore.user.preference.commuteLocations"
+                               multiple
+                               filterable
+                               allow-create
+                               default-first-option
+                               :reserve-keyword="false"
+                               placeholder="例如：所在城区、附近商圈、地铁线路"
+                               style="width: 420px">
+                    </el-select>
+                </el-form-item>
+                <el-form-item label="位置要求">
+                    <el-select v-model="userStore.user.preference.commuteMode" style="width: 180px">
+                        <el-option label="优先附近岗位（推荐）" value="prefer"/>
+                        <el-option label="必须匹配位置" value="required"/>
+                        <el-option label="关闭偏好" value="off"/>
+                    </el-select>
+                </el-form-item>
+                <el-text type="warning" class="commute-preference-tip">
+                    为保护隐私，建议填写附近商圈、地铁站或行政区，不要填写家庭门牌号。
+                </el-text>
+            </div>
+
+            <div class="resume-match-row">
+                <el-form-item label="简历-JD本地匹配">
+                    <el-checkbox v-model="userStore.user.preference.resumeMatchE" size="large">
+                        启用匹配评分
+                    </el-checkbox>
+                </el-form-item>
+                <el-form-item label="匹配参考线">
+                    <el-input-number v-model="userStore.user.preference.resumeMatchMinScore"
+                                     :min="0" :max="100" :step="5" :disabled="!userStore.user.preference.resumeMatchE"/>
+                </el-form-item>
+                <el-text type="primary" class="resume-match-tip">
+                    本地代码会按“已验证岗位名 + 结构化技能 + JD硬性/优先条件”分层加权，并给出命中、缺口和置信度；不调用大模型，也不会仅因分数低而跳过。只有下方附加AI筛选条件启用时才会请求大模型。
+                </el-text>
+            </div>
+
+            <el-form-item label="附加AI筛选条件" prop="aiFilter">
                 <template #label>
                     <el-checkbox v-model="userStore.user.preference.afE" label="" size="large"/>
                     <el-tooltip effect="dark" raw-content content="
-    批量投递时AI会通过你的提示词过滤筛选相应岗位<p/><span style='color:red;'>未在【产品列表】中购买【ai过滤】产品请勿开启,页面会报错
-    </span><br/>过滤提示词举例：我希望找到武汉的java岗位，薪资至少20K，不考虑学历要求为本科及以下、或者需要超过10年工作经验的职位。
-    </span><br/>与简历信息不互通，如果依赖您的某些信息，请通过提示词告知AI
+    在简历-JD评分之外追加自然语言要求。<br/>例如：不接受外包、长期出差或频繁夜班。
     " placement="bottom">
-                    AI 过滤(语义匹配)
+                    附加AI筛选条件
                     </el-tooltip>
                 </template>
-                <el-input type="textarea" v-model="userStore.user.preference.af"/>
+                <el-input type="textarea" v-model="userStore.user.preference.af"
+                          placeholder="选填：例如不接受外包、长期出差或频繁夜班"/>
             </el-form-item>
 
-            <el-form-item label="发送自定义招呼语" prop="jobContentExclude">
-                <template #label>
-                    <el-checkbox v-model="userStore.user.preference.cgE" label="" size="large"/>
-                    发送自定义招呼语
-                </template>
-                <el-input type="textarea" v-model="userStore.user.preference.cg"/>
-                <el-button size="small" type="primary" @click="generateGreet" :disabled="isGenerating">AI生成招呼语</el-button>
+            <el-form-item label="首次沟通消息" prop="jobContentExclude">
+                <el-select v-model="userStore.user.preference.greetingDeliveryMode" style="width: 100%; margin-bottom: 8px">
+                    <el-option label="平台默认招呼（纯规则投递）" value="platform-default"/>
+                    <el-option label="自定义招呼（后台补发，不阻塞投递）" value="custom-queued"/>
+                    <el-option label="自定义招呼（严格确认，通道未就绪时不投递）" value="custom-required"/>
+                </el-select>
+                <el-alert v-if="userStore.user.preference.greetingDeliveryMode === 'platform-default'"
+                          title="纯规则投递不依赖 AI 或聊天通道；首次沟通由 BOSS 平台处理。"
+                          type="info" :closable="false" style="margin-bottom: 8px"/>
+                <el-alert v-else-if="userStore.user.preference.greetingDeliveryMode === 'custom-queued'"
+                          title="聊天通道暂时不可用时，招呼语会去重入队后后台补发，不会卡住岗位投递。"
+                          type="warning" :closable="false" style="margin-bottom: 8px"/>
+                <el-input v-if="userStore.user.preference.greetingDeliveryMode !== 'platform-default'"
+                          type="textarea" v-model="userStore.user.preference.cg"/>
+                <el-button v-if="userStore.user.preference.greetingDeliveryMode !== 'platform-default'"
+                           size="small" type="primary" @click="generateGreet" :disabled="isGenerating">
+                    AI生成招呼语
+                </el-button>
             </el-form-item>
 
-            <el-form-item label="发送图片简历" prop="jobContentExclude" class="form-item-upload" style="margin-left: 0;">
+            <el-form-item label="回复后发送图片简历" prop="jobContentExclude" class="form-item-upload" style="margin-left: 0;">
                 <template #label>
                     <el-checkbox v-model="userStore.user.preference.cIE" label="" size="large"/>
-                    发送图片简历&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+                    双方回复后发送&nbsp;&nbsp;&nbsp;
                 </template>
 
                 <el-upload
@@ -226,6 +294,9 @@
                     <el-button size="small" type="primary">选择图片简历</el-button>
                 </el-upload>
                 <el-tag v-if="userStore.user.preference.cI" type="success" size="small" style="margin-left: 5px;">已上传</el-tag>
+                <div style="font-size: 12px; color: #909399; margin-top: 4px; width: 100%;">
+                    首次沟通只发送招呼语；BOSS 放开发简历能力后再发送，避免无效调用。
+                </div>
             </el-form-item>
 
             <div style="display: flex;margin-bottom: 10px;">
@@ -234,15 +305,26 @@
                 </el-checkbox>
                 &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
                 <p class="time-interval">投递间隔</p>
-                <el-input-number v-model="userStore.user.preference.pi" :min="3" :max="60"
-                                 size="small"></el-input-number>
+                <el-input-number v-model="userStore.user.preference.pi"
+                                 :min="SAFE_MIN_PUSH_INTERVAL_SECONDS" :max="600"
+                                  size="small"></el-input-number>
                 <p class="time-interval">秒</p>
                 &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
                 <p class="time-interval">翻页间隔</p>
-                <el-input-number v-model="userStore.user.preference.npi" :min="6" :max="60"
-                                 size="small"></el-input-number>
+                <el-input-number v-model="userStore.user.preference.npi"
+                                 :min="SAFE_MIN_NEXT_PAGE_INTERVAL_SECONDS" :max="900"
+                                  size="small"></el-input-number>
                 <p class="time-interval">秒</p>
             </div>
+
+            <el-alert
+                class="safety-interval-tip"
+                :title="`安全节流已启用：投递间隔最低 ${SAFE_MIN_PUSH_INTERVAL_SECONDS} 秒，翻页间隔最低 ${SAFE_MIN_NEXT_PAGE_INTERVAL_SECONDS} 秒`"
+                description="当前设置会在运行页同步展示，便于开始前核对。"
+                type="info"
+                :closable="false"
+                show-icon
+            />
 
             <el-text class="mx-1 top-title" type="warning">交互设置</el-text>
 
@@ -326,15 +408,20 @@
 </template>
 
 <script lang="ts" setup>
-import {inject, reactive, ref} from 'vue'
+import {computed, inject, reactive, ref} from 'vue'
 import {FormInstance, FormRules, ElNotification, ElMessageBox} from 'element-plus';
 import {ElMessage} from "../../utils/tools";
 import {UserStore} from '../../stores'
 import {AxiosInstance} from "axios";
-import {PreferenceConfig} from "../../stores/types";
+import {applyPreferenceDefaults, PreferenceConfig} from "../../stores/types";
 import {loginInterceptor} from "../../utils/tools";
 import {Tools} from "../../platform/utils";
 import {AbsPlatform} from "../../platform/platform";
+import {
+    SAFE_MIN_NEXT_PAGE_INTERVAL_SECONDS,
+    SAFE_MIN_PUSH_INTERVAL_SECONDS,
+} from "../../platform/safetyLimits";
+import {customGreetingEnabled} from "../../platform/greetingPolicy";
 
 import {ServerStore} from "../../stores/server";
 import {TampermonkeyApi} from "../../platform/utils";
@@ -343,6 +430,18 @@ const axios = inject('$axios') as AxiosInstance
 const platform = inject('$platform') as AbsPlatform;
 const userStore = UserStore();
 const serverStore = ServerStore();
+const protectedCompanyKeywords = new Set(
+    Tools.HARD_BLOCKED_COMPANY_KEYWORDS.map(keyword => keyword.trim()).filter(Boolean)
+)
+const visibleCompanyExclusions = computed<string[]>({
+    get: () => (userStore.user.preference.cne || [])
+        .filter(keyword => !protectedCompanyKeywords.has(String(keyword).trim())),
+    set: (keywords) => {
+        const protectedKeywords = (userStore.user.preference.cne || [])
+            .filter(keyword => protectedCompanyKeywords.has(String(keyword).trim()))
+        userStore.user.preference.cne = Array.from(new Set([...keywords, ...protectedKeywords]))
+    },
+})
 
 interface RuleForm {
     phone: string,
@@ -424,7 +523,7 @@ const importSetting = async () => {
     }).then(({ value }) => {
         try {
             const importedPreference = JSON.parse(value);
-            userStore.user.preference = { ...importedPreference };
+            userStore.user.preference = applyPreferenceDefaults({ ...importedPreference });
             ElNotification({
                 title: '导入成功',
                 message: '偏好设置已导入，请点击保存偏好设置以持久化保存',
@@ -460,6 +559,25 @@ const submitForm = async (formEl: FormInstance | undefined) => {
 
     if (!valid) {
         return;
+    }
+    if (userStore.user.preference.jobTitleMatchMode === 'required'
+        && !(userStore.user.preference.jni || []).some(keyword => String(keyword || '').trim())) {
+        ElMessage({
+            message: '岗位名规则选择“必须匹配”时，请至少填写一个目标岗位关键词',
+            type: 'error',
+            duration: 3000,
+        })
+        return
+    }
+    userStore.user.preference.jniE = userStore.user.preference.jobTitleMatchMode === 'required'
+    userStore.user.preference.cgE = customGreetingEnabled(userStore.user.preference.greetingDeliveryMode)
+    if (userStore.user.preference.cgE && !String(userStore.user.preference.cg || '').trim()) {
+        ElMessage({
+            message: '选择自定义招呼语模式时，请先填写招呼语内容',
+            type: 'error',
+            duration: 3000,
+        })
+        return
     }
 
     // 无论是否在线，都先更新本地镜像和全局最新镜像
@@ -544,7 +662,7 @@ const generateGreet = debounceImmediate(async () => {
     isGenerating.value = true;
 
     try {
-        const response = await axios.post('/api/job/ai/assistant/generate/greeting', {}, {timeout: 30000});
+        const response = await axios.post('/api/job/ai/assistant/generate/greeting', {}, {timeout: 16000});
         userStore.user.preference.cg = response.data.data;
         ElNotification({
             message: '招呼语生成成功，请点击下方保存偏好设置',
@@ -568,10 +686,7 @@ const generateGreet = debounceImmediate(async () => {
  * 偏好设置默认值处理
  */
 const preferenceDefaultValueHandler = () => {
-    // ai坐席延迟回复
-    if (!userStore.user.preference.dr) {
-        userStore.user.preference.dr = 0;
-    }
+    userStore.user.preference = applyPreferenceDefaults(userStore.user.preference)
 }
 
 preferenceDefaultValueHandler()
@@ -597,6 +712,49 @@ preferenceDefaultValueHandler()
     margin-top: 10px;
     margin-right: 1px;
     margin-left: 1px;
+}
+
+.safety-interval-tip {
+    margin: -2px 0 18px;
+    max-width: 860px;
+}
+
+.benefit-preference-row {
+    display: flex;
+    align-items: flex-start;
+    flex-wrap: wrap;
+    gap: 0 24px;
+    margin: 6px 0 10px;
+}
+
+.benefit-preference-tip {
+    line-height: 40px;
+}
+
+.commute-preference-row {
+    display: flex;
+    align-items: flex-start;
+    flex-wrap: wrap;
+    gap: 0 24px;
+    margin-bottom: 10px;
+}
+
+.commute-preference-tip {
+    width: 100%;
+    margin: -12px 0 8px 96px;
+}
+
+.resume-match-row {
+    display: flex;
+    align-items: flex-start;
+    flex-wrap: wrap;
+    gap: 0 24px;
+    margin: 6px 0 10px;
+}
+
+.resume-match-tip {
+    width: 100%;
+    margin: -12px 0 8px 96px;
 }
 
 

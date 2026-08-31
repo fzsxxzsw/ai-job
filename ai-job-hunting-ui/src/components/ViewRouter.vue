@@ -1,13 +1,27 @@
 <script setup lang="ts">
-import {inject, shallowRef} from "vue";
+import {inject, onMounted, onUnmounted, shallowRef} from "vue";
 import {Platform} from "../platform/platform.js";
+import {AI_JOB_ROUTE_CHANGE_EVENT} from "../runtime/routeHost";
 
 const platform = inject('$platform') as Platform;
 
-// 获取平台对应组件
 const renderComponent = shallowRef(null)
-platform.getRenderComponent().then((data: any) => {
-    renderComponent.value = data
+let loadVersion = 0
+
+const loadRenderComponent = async () => {
+    const expectedVersion = ++loadVersion
+    renderComponent.value = null
+    const component = await platform.getRenderComponent()
+    if (expectedVersion === loadVersion) renderComponent.value = component || null
+}
+
+onMounted(() => {
+    void loadRenderComponent()
+    window.addEventListener(AI_JOB_ROUTE_CHANGE_EVENT, loadRenderComponent)
+})
+
+onUnmounted(() => {
+    window.removeEventListener(AI_JOB_ROUTE_CHANGE_EVENT, loadRenderComponent)
 })
 
 </script>

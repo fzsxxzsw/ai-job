@@ -24,70 +24,128 @@
             </div>
             <div class="server-mode-tip">
                 <el-tag :type="serverStore.isOnline ? 'success' : 'warning'" effect="dark">
-                    {{ serverStore.isOnline ? '在线模式：功能全开' : '本地模式：AI功能受限' }}
+                    {{ serverStore.isOnline ? '服务器已连接' : '服务器离线：AI 功能不可用' }}
                 </el-tag>
             </div>
         </div>
     </el-card>
 
-    <br>
+    <el-card class="operation-status-card" shadow="never">
+        <template #header>
+            <div class="status-card-header">
+                <span>投递与消息状态</span>
+                <el-tag :type="pushStatus === PushStatus.PUSHING ? 'success' : pushStatus === PushStatus.PAUSE ? 'warning' : 'info'">
+                    {{ pushStatusLabel }}
+                </el-tag>
+            </div>
+        </template>
 
-    <el-text size="large" class="mx-1" type="primary">投递成功：{{
-            pushResultCounter.successCount
-        }}&nbsp;&nbsp;&nbsp;
-    </el-text>
-    <el-text size="large" class="mx-1" type="danger"> 投递失败：{{
-            pushResultCounter.failCount
-        }}&nbsp;&nbsp;&nbsp;
-    </el-text>
-    <el-text size="large" class="mx-1"> 单次投递限制数量：</el-text>
-    <el-input-number v-model="selfDefPushCountLimit" :min="-1" :max="100"
-                     @change="selfDefPushCountLimitChange"/>
-    <span v-if="!isProdEnv()">
-        &nbsp;&nbsp;&nbsp;MOCK投递&nbsp; <el-switch v-model="mockPush"/>
-    </span>
-    <br>
-    <br>
+        <div class="operation-status-grid">
+            <div class="status-metric">
+                <span class="status-metric-label">今日已发起沟通</span>
+                <strong>{{ todayPushSuccessCount }}</strong>
+                <small>无本地数量上限；平台明确阻拦时停止</small>
+            </div>
+            <div class="status-metric">
+                <span class="status-metric-label">今日投递失败</span>
+                <strong class="metric-danger">{{ todayPushFailCount }}</strong>
+                <small>仅统计已返回失败的请求</small>
+            </div>
+            <div class="status-metric">
+                <span class="status-metric-label">当前安全间隔</span>
+                <strong>{{ effectivePushInterval }} 秒</strong>
+                <small>翻页 {{ effectiveNextPageInterval }} 秒</small>
+            </div>
+            <div class="status-metric status-metric-control">
+                <span class="status-metric-label">停止条件</span>
+                <strong>手动停止 / 平台阻拦</strong>
+                <small>持续处理，不设本地数量上限</small>
+            </div>
+        </div>
 
-    <el-tooltip effect="dark" raw-content content="
-    在Boss中更新了附件简历后请重新导入<p/>
-    - 仅用于AI坐席定制化回复
-    " placement="bottom">
-        <el-button :icon="Upload as any" type="primary" @click="handlerImport"
-                   :disabled="!serverStore.isOnline"
-                   :loading="importResumeLoading"><p
-            style="font-size: 15px">导入简历</p>
-        </el-button>
-    </el-tooltip>
+        <div class="health-tags">
+            <el-tag :type="greetingModeType" effect="plain">
+                {{ greetingModeLabel }}
+            </el-tag>
+            <el-tag :type="aiReplyHealthType" effect="plain">
+                {{ aiReplyHealthLabel }}
+            </el-tag>
+            <el-tag :type="aiSeatChannelReady ? 'success' : 'warning'" effect="plain">
+                消息通道{{ aiSeatChannelReady ? '已连接' : '未连接' }}
+            </el-tag>
+            <el-tag :type="pendingSendCount > 0 ? 'warning' : 'success'" effect="plain">
+                待发送/重试 {{ pendingSendCount }}
+            </el-tag>
+            <el-tag :type="awaitingReceiptCount > 0 ? 'warning' : 'success'" effect="plain">
+                待页面送达回执 {{ awaitingReceiptCount }}
+            </el-tag>
+            <el-tag v-if="failedDeliveryCount > 0" type="danger" effect="plain">
+                近 14 天发送失败 {{ failedDeliveryCount }}
+            </el-tag>
+            <el-tag v-if="blockedDeliveryCount > 0" type="danger" effect="plain">
+                近 14 天已拦截 {{ blockedDeliveryCount }}
+            </el-tag>
+            <el-tag type="success" effect="plain">近 14 天招呼已送达/已读 {{ greetingReceiptCount }}</el-tag>
+            <el-tag type="success" effect="plain">近 14 天 AI 回复已送达/已读 {{ aiReplyReceiptCount }}</el-tag>
+            <el-tag v-if="ungreetedConversationCount > 0" type="danger" effect="plain">
+                会话仅创建未发招呼 {{ ungreetedConversationCount }}
+            </el-tag>
+            <el-tag type="info" effect="plain">脚本 {{ runtimeScriptVersion }}</el-tag>
+        </div>
 
-    <el-tooltip effect="dark" raw-content content="
-    先通过Boss的筛选功能圈选你的意向岗位<p/><span style='color:red;'>在【偏好设置-投递设置】中选择</span><br/>您的投递偏好，用于精准投递岗位
-    " placement="bottom">
-        <el-button :icon="Promotion as any" :type="pushBtnType" @click="handlerPush"><p style="font-size: 15px">
-            {{ pushBtnText }}</p>
-        </el-button>
-    </el-tooltip>
+        <div v-if="riskStopReason" class="runtime-alert risk-stop-panel">
+            <el-alert title="BOSS 风控熔断已生效，投递与自动发送已停止"
+                      :description="riskStopReason"
+                      type="error" :closable="false" show-icon/>
+            <div class="risk-stop-actions">
+                <span>请先关闭 AI 回复并停止投递；确认 BOSS 官方页面已恢复后再解除。</span>
+                <el-button type="warning" plain size="small" @click="handleClearRiskStop">
+                    确认已恢复，解除熔断
+                </el-button>
+            </div>
+        </div>
+        <el-alert v-else-if="dailyLimitReason"
+                  class="runtime-alert"
+                  title="今日新增沟通已暂停"
+                  :description="dailyLimitReason"
+                  type="warning" :closable="false" show-icon/>
+        <el-alert v-else-if="pendingSendCount > 0"
+                  class="runtime-alert"
+                  :title="`发送队列正在处理 ${pendingSendCount} 条消息`"
+                  :description="pendingQueueDescription"
+                  type="info" :closable="false" show-icon/>
+    </el-card>
 
-    <el-button type="warning" :icon="Collection as any" color="#626aef" @click.stop="handlerAISeatClick" :disabled="!serverStore.isOnline">产品列表</el-button>
-    <el-tooltip effect="dark" raw-content content="
-    AI坐席：<span style='color:red;'>支持试用，点击开关开启试用</span><br/>
-    - 自动响应hr的消息,根据您的简历信息进行定制化回答。<br/>
-    - 高意向职位邮件通知，快速筛选出最合适的职位。<br/>
-    - 快捷发送简历，交换 wx、联系方式。<br/>
-    - hr拒绝挽留，不放过每一个机会。<br/>
-    " placement="bottom">
-        <el-button :icon="Service as any" color="#626aef" :disabled="!serverStore.isOnline">
-            <p style="font-size: 15px">
-                <span>AI坐席 </span>
+    <div class="action-toolbar">
+        <el-tooltip effect="dark" content="从 BOSS 附件简历更新 AI 回复所需的简历信息" placement="bottom">
+            <el-button :icon="Upload as any" type="primary" @click="handlerImport"
+                       :disabled="!serverStore.isOnline" :loading="importResumeLoading">
+                导入简历
+            </el-button>
+        </el-tooltip>
+
+        <el-tooltip effect="dark" content="按当前偏好处理已筛选的岗位；每次都需要手动启动" placement="bottom">
+            <el-button :icon="Promotion as any" :type="pushBtnType" @click="handlerPush">
+                {{ pushBtnText }}
+            </el-button>
+        </el-tooltip>
+
+        <el-button type="warning" :icon="Collection as any" color="#626aef"
+                   @click.stop="handlerAISeatClick" :disabled="!serverStore.isOnline">产品列表</el-button>
+        <el-tooltip effect="dark" content="服务器在线且消息通道连接时，AI 会处理招聘方发来的消息" placement="bottom">
+            <el-button :icon="Service as any" color="#626aef" :disabled="!serverStore.isOnline">
+                <span>AI 回复</span>
                 <el-switch active-text="开" inactive-text="关" inline-prompt
                            style="--el-switch-on-color: #13ce66; --el-switch-off-color: #ff4949"
                            v-model="userStore.user.aiSeatStatus"
                            :disabled="!serverStore.isOnline"
                            @change="handlerAISeatStatusChange"/>
-            </p>
-        </el-button>
-    </el-tooltip>
-    <el-link type="primary" href="https://www.bilibili.com/video/BV1y6PjesEvi"  target="_blank" style="margin-left: 10px;margin-top: 10px;">点击查看AI坐席效果演示</el-link>
+            </el-button>
+        </el-tooltip>
+        <span v-if="!isProdEnv()" class="mock-control">
+            MOCK 投递 <el-switch v-model="mockPush"/>
+        </span>
+    </div>
 
     <!-- 固定位置的停止投递按钮 -->
     <div v-show="pushStatus === PushStatus.PUSHING" class="fixed-stop-button">
@@ -169,7 +227,7 @@
                 <el-button type="danger" :icon="Shop" @click="showOrderGroup">
                     更多产品
                 </el-button>
-                <el-input :suffix-icon="Wallet" v-model="promotionCode" style="margin-left: 10px;width: 240px" placeholder="请输入您的优惠码" />
+                <el-input :suffix-icon="Wallet" v-model="promotionCode" style="margin-left: 10px;width: 240px" placeholder="请输入优惠码" />
                 <el-link :icon="PriceTag" type="primary" style="margin-left: 30px;" target="_blank" href="https://www.bilibili.com/video/BV1HKAyebESp">点击获取优惠码(评论区)</el-link>
 
             </div>
@@ -230,19 +288,34 @@
 <script setup lang="ts">
 import axiosOriginal, {AxiosInstance} from "axios";
 import {CircleCloseFilled, PriceTag, Promotion, Service, Shop, Upload, Wallet, Collection, RefreshRight} from '../icons';
-import {h, inject, ref, Ref, onMounted, onUnmounted} from "vue";
+import {computed, h, inject, ref, Ref, onMounted, onUnmounted} from "vue";
 import {PushStatus} from "../../enums";
 import {AbsPlatform} from "../../platform/platform";
-import {Tools} from "../../platform/utils";
+import {TampermonkeyApi, Tools} from "../../platform/utils";
 import {ElMessage, fetchWithGM_request, isProdEnv, loginInterceptor, silentlyLogin} from "../../utils/tools";
 import logger from '../../logging'
 import {SSEClient} from "../../utils/sse";
 import {LoginStore, pushResultCount, UserStore} from "../../stores";
-import {ServerStore} from "../../stores/server";
-import {ElNotification} from "element-plus";
+import {DEFAULT_SERVER_URL, ServerStore} from "../../stores/server";
+import {ElMessageBox, ElNotification} from "element-plus";
 import {LogRecorder} from "../../logging/record";
+import {GM_getValue, GM_info} from "$";
+import {readDeliveryAudit} from "../../platform/deliveryAudit";
+import {countBlockingDeliveries, type RetryQueueEntry} from "../../platform/deliveryQueue";
+import {clearBossRiskCircuit, getBossRiskStop} from "../../platform/bossRiskControl";
+import {isLegacyLocalDailyLimit, makeBossDailyLimitKey} from "../../platform/bossDailyLimit";
+import {
+    SAFE_MIN_NEXT_PAGE_INTERVAL_SECONDS,
+    SAFE_MIN_PUSH_INTERVAL_SECONDS,
+} from "../../platform/safetyLimits";
+import {
+    customGreetingEnabled,
+    greetingRequiresReadyChannel,
+    normalizeGreetingDeliveryMode,
+} from "../../platform/greetingPolicy";
 
 import {userRemoteLoad} from "../../stores/remote";
+import {PushRunStore} from "../../stores/pushRun";
 
 const platform = inject('$platform') as AbsPlatform;
 const axios = inject('$axios') as AxiosInstance
@@ -250,11 +323,17 @@ const serverStore = ServerStore();
 const tempServerUrl = ref(serverStore.baseUrl);
 
 const handleUpdateServer = async () => {
-    serverStore.setBaseUrl(tempServerUrl.value);
+    try {
+        serverStore.setBaseUrl(tempServerUrl.value);
+        tempServerUrl.value = serverStore.baseUrl;
+    } catch (error) {
+        ElMessage.error(error instanceof Error ? error.message : '服务器地址格式不正确');
+        return;
+    }
     await serverStore.checkConnection();
     if (serverStore.isOnline) {
         // 连接成功后，立即尝试加载/同步配置
-        userRemoteLoad();
+        userRemoteLoad(true);
 
         const countdown = ref(3);
         let timer: any = null;
@@ -307,20 +386,40 @@ const handleResetServer = async () => {
         await handleUpdateServer();
     } else {
         // 容错处理
-        const DEFAULT_URL = 'https://43.138.246.37/';
-        serverStore.setBaseUrl(DEFAULT_URL);
-        tempServerUrl.value = DEFAULT_URL;
+        serverStore.setBaseUrl(DEFAULT_SERVER_URL);
+        tempServerUrl.value = DEFAULT_SERVER_URL;
         ElMessage.success('已重置为默认服务器地址');
         await handleUpdateServer();
     }
 };
 
-const pushStatus = ref(PushStatus.NOT_START)
-const pushBtnType = ref<'primary' | 'warning'>('primary')
-const pushBtnText = ref<string>('开始投递')
+const pushRunStore = PushRunStore()
+const pushStatus = computed(() => pushRunStore.isActive ? PushStatus.PUSHING
+    : pushRunStore.status === 'idle' ? PushStatus.NOT_START : PushStatus.PAUSE)
+const pushBtnType = computed<'primary' | 'warning'>(() => pushRunStore.isActive ? 'warning' : 'primary')
+const pushBtnText = computed(() => pushRunStore.isActive ? '停止投递' : '开始投递')
 const aiSeatBuyVisible = ref(false)
 const importResumeLoading = ref<boolean>(false);
 const productListLoading = ref<boolean>(false);
+const aiSeatChannelReady = ref(false)
+const pendingGreetingCount = ref(0)
+const pendingAiReplyCount = ref(0)
+const pendingSendCount = ref(0)
+const awaitingReceiptCount = ref(0)
+const failedDeliveryCount = ref(0)
+const blockedDeliveryCount = ref(0)
+const ungreetedConversationCount = ref(0)
+const greetingReceiptCount = ref(0)
+const aiReplyReceiptCount = ref(0)
+const todayPushSuccessCount = ref(0)
+const todayPushFailCount = ref(0)
+const riskStopReason = ref('')
+const dailyLimitReason = ref('')
+const runtimeStatus = Tools.window.__AI_JOB_HELPER_RUNTIME_STATUS__
+const runtimeScriptVersion = [
+    runtimeStatus?.version || GM_info?.script?.version || '未知版本',
+    runtimeStatus?.buildId ? `build ${runtimeStatus.buildId}` : '',
+].filter(Boolean).join(' · ')
 
 // 创建日志记录器实例
 const logRecorder = new LogRecorder();
@@ -341,6 +440,50 @@ let loginStore = LoginStore();
 let pushResultCounter = pushResultCount();
 
 const userStore = UserStore();
+const effectivePushInterval = computed(() => Math.max(
+    SAFE_MIN_PUSH_INTERVAL_SECONDS,
+    Number(userStore.user.preference?.pi) || SAFE_MIN_PUSH_INTERVAL_SECONDS,
+))
+const effectiveNextPageInterval = computed(() => Math.max(
+    SAFE_MIN_NEXT_PAGE_INTERVAL_SECONDS,
+    Number(userStore.user.preference?.npi) || SAFE_MIN_NEXT_PAGE_INTERVAL_SECONDS,
+))
+const greetingMode = computed(() => normalizeGreetingDeliveryMode(
+    userStore.user.preference?.greetingDeliveryMode,
+    !!userStore.user.preference?.cgE,
+    userStore.user.preference?.cg,
+))
+const greetingModeLabel = computed(() => ({
+    'platform-default': '纯规则投递：平台默认招呼',
+    'custom-queued': '自定义招呼：后台补发',
+    'custom-required': '自定义招呼：严格确认',
+}[greetingMode.value]))
+const greetingModeType = computed<'success' | 'warning' | 'info'>(() =>
+    greetingMode.value === 'platform-default' ? 'success'
+        : greetingMode.value === 'custom-required' ? 'warning' : 'info')
+const pendingQueueDescription = computed(() => greetingMode.value === 'custom-required'
+    ? '严格模式会等待自定义招呼语取得 BOSS 服务器确认；无需重复点击。'
+    : '消息队列在后台独立补发，不阻塞纯规则岗位投递。')
+const pushStatusLabel = computed(() => {
+    if (pushRunStore.status === 'preparing') return '正在执行启动预检'
+    if (pushRunStore.status === 'running') return '投递进行中'
+    if (pushRunStore.status === 'stopping') return '正在停止'
+    if (pushRunStore.status === 'completed') return '本轮已完成'
+    if (pushRunStore.status === 'blocked') return `已阻止：${pushRunStore.reason || '前置条件不满足'}`
+    if (pushRunStore.status === 'failed') return '运行异常'
+    if (pushRunStore.status === 'stopped') return '已停止'
+    return '等待手动启动'
+})
+const aiReplyHealthType = computed<'success' | 'warning' | 'danger' | 'info'>(() => {
+    if (!userStore.user.aiSeatStatus) return 'info'
+    if (!serverStore.isOnline) return 'danger'
+    return aiSeatChannelReady.value ? 'success' : 'warning'
+})
+const aiReplyHealthLabel = computed(() => {
+    if (!userStore.user.aiSeatStatus) return 'AI 回复未启用'
+    if (!serverStore.isOnline) return 'AI 回复不可用：服务器离线'
+    return aiSeatChannelReady.value ? 'AI 回复通道已就绪' : 'AI 回复等待消息通道'
+})
 // --------------------------------------------------函数定义-------------------------------------------------------------
 
 // 获取最新的投递记录
@@ -440,7 +583,7 @@ const handlerImport = async () => {
     if (!zpData.attachmentList || zpData.attachmentList.length == 0) {
         importResumeLoading.value = false;
         ElMessage({
-            message: "请先在BOSS个人中心上传附件简历；作为ai坐席定制化回复的基础",
+            message: "请先在 BOSS 个人中心上传附件简历，作为 AI 回复的简历依据",
             type: 'error',
             duration: 3000
         })
@@ -506,57 +649,198 @@ const handlerFixedStopPush = () => {
     scrollToTop();
 }
 
-/**
- * 单次投递次数限制
- */
-const selfDefPushCountLimit = ref<number>(platform.selfDefPushCountLimit);
-const selfDefPushCountLimitChange = (val: number) => {
-    platform.selfDefPushCountLimit = val;
-}
+const AUTO_START_PUSH_KEY = 'ai-job-hunting-auto-start-push'
+// 安全迁移：旧版本可能把自动真投保存在 localStorage。新版本永久清除该状态，
+// 进入职位页只能由用户手动点击开始，刷新页面也不会自动恢复投递。
+localStorage.setItem(AUTO_START_PUSH_KEY, 'false')
 
 // 非生产环境支持mock投递
 const mockPush = ref<boolean>(false)
 
-const startPush = () => {
-
+const executePushRun = async () => {
     if (!loginInterceptor()) {
-        return;
+        return {status: 'blocked', reason: 'BOSS 或本地服务尚未登录'} as const
+    }
+    try {
+        // Login becoming ready is not proof that the preference request has completed.
+        // Always await the authoritative server config before the first BOSS side effect,
+        // otherwise cgE/cg can still be empty and create a bare “正在沟通” session.
+        await userRemoteLoad(true)
+    } catch (error: any) {
+        logRecorder.error('用户偏好尚未加载，已阻止开始投递', error?.message || error)
+        ElMessage({
+            type: 'error',
+            message: '用户偏好尚未加载，未开始投递',
+        })
+        return {status: 'blocked', reason: '用户偏好尚未加载'} as const
+    }
+
+    if (!serverStore.isOnline) {
+        logRecorder.error('后端服务器离线，未开始投递')
+        ElMessage({
+            type: 'error',
+            message: '后端服务器离线，请先连接服务器并确认配置加载成功',
+        })
+        return {status: 'blocked', reason: '后端服务器离线'} as const
+    }
+
+    const configuredGreeting = userStore.user.preference?.cg?.trim() || ''
+    const configuredGreetingMode = normalizeGreetingDeliveryMode(
+        userStore.user.preference?.greetingDeliveryMode,
+        !!userStore.user.preference?.cgE,
+        configuredGreeting,
+    )
+    userStore.user.preference.greetingDeliveryMode = configuredGreetingMode
+    userStore.user.preference.cgE = customGreetingEnabled(configuredGreetingMode)
+    if (customGreetingEnabled(configuredGreetingMode) && !configuredGreeting) {
+        logRecorder.error('已选择自定义招呼语模式，但招呼语内容为空')
+        ElMessage({
+            type: 'error',
+            message: '自定义招呼语内容为空，未开始投递',
+        })
+        return {status: 'blocked', reason: '自定义招呼语未配置'} as const
+    }
+
+    const riskStop = getBossRiskStop()
+    if (riskStop) {
+        logRecorder.error(`BOSS 风控熔断已生效，未开始投递：${riskStop.reason}`)
+        ElMessage({
+            type: 'error',
+            message: `BOSS 已阻拦，未开始投递：${riskStop.reason}`,
+        })
+        return {status: 'blocked', reason: riskStop.reason} as const
+    }
+
+    if (greetingRequiresReadyChannel(configuredGreetingMode)
+        && !Tools.window.AIJobHelperChatBridge?.isReady?.()) {
+        ElMessage({
+            type: 'info',
+            message: '正在连接 BOSS 消息服务，请稍候…',
+            duration: 2500,
+        })
+        let channelReady = false
+        try {
+            channelReady = await Promise.resolve(
+                Tools.window.AIJobHelperChatBridge?.ensureReady?.(10_000),
+            ) === true
+        } finally {
+            // ensureReady 不产生投递副作用；结束后仍需检查用户是否在预检阶段停止。
+        }
+        if (pushRunStore.stopRequested) {
+            return {status: 'stopped', reason: '用户在消息通道预检阶段停止'} as const
+        }
+        if (!channelReady) {
+            const channelError = Tools.window.AIJobHelperChatBridge?.getLastError?.()
+                || 'BOSS 消息服务尚未完成初始化'
+            logRecorder.error(`消息服务未就绪，未开始投递：${channelError}`)
+            ElMessage({
+                type: 'error',
+                message: `消息服务未就绪，未开始投递：${channelError}`,
+                duration: 6000,
+            })
+            return {status: 'blocked', reason: channelError} as const
+        }
+    } else if (configuredGreetingMode === 'custom-queued'
+        && !Tools.window.AIJobHelperChatBridge?.isReady?.()) {
+        const diagnostics = Tools.window.AIJobHelperChatBridge?.getDiagnostics?.()
+        const reason = diagnostics?.summary || Tools.window.AIJobHelperChatBridge?.getLastError?.()
+            || '通道暂未就绪'
+        logRecorder.warn(`自定义招呼语将在后台补发，纯规则投递继续：${reason}`)
+    } else if (configuredGreetingMode === 'platform-default') {
+        logRecorder.info('使用纯规则投递与平台默认招呼，不检查 AI 或聊天通道')
+    }
+
+    if (pushRunStore.stopRequested) {
+        return {status: 'stopped', reason: '用户在启动预检阶段停止'} as const
+    }
+    if (!pushRunStore.markRunning()) {
+        return {status: 'stopped', reason: '投递启动已取消'} as const
     }
 
     platform.pushMock = mockPush.value
 
-    pushStatus.value = PushStatus.PUSHING
-    pushBtnType.value = 'warning'
-    pushBtnText.value = '停止投递'
-
     // 开始更新投递记录
     startRecordsUpdate();
 
-    let pushResultPromise = platform.startPush();
-
-    //   投递结果处理
-    pushResultPromise.then(() => {
+    try {
+        const outcome = await platform.startPush()
+        if (outcome.status === 'completed') {
+            ElMessage({message: '批量投递完成', type: 'success', duration: 3000})
+        } else if (outcome.status === 'blocked') {
+            ElMessage({
+                message: `平台已阻拦，投递已停止：${outcome.reason || '未知原因'}`,
+                type: 'warning',
+                duration: 5000,
+            })
+        }
+        return outcome
+    } catch (error: any) {
+        logRecorder.error('投递流程异常结束', error?.message || error)
         ElMessage({
-            message: "批量投递完成",
-            type: 'success',
-            duration: 3000
+            message: `投递流程异常结束：${error?.message || '未知错误'}`,
+            type: 'error',
+            duration: 5000,
         })
-        setTimeout(() => {
-            pushStatus.value = PushStatus.PAUSE;
-            pushBtnType.value = 'primary'
-            pushBtnText.value = '开始投递'
-            // 停止更新投递记录
-            stopRecordsUpdate();
-        }, 200)
-    })
+        throw error
+    } finally {
+        stopRecordsUpdate()
+    }
 }
+
+const startPush = async () => {
+    if (pushRunStore.isActive || !loginInterceptor()) return
+    try {
+        const execution = await pushRunStore.run(executePushRun, () => platform.pausePush())
+        if (!execution.acquired) {
+            ElMessage({
+                type: 'warning',
+                message: '另一个 BOSS 标签页或当前页面已有投递任务正在运行',
+                duration: 5000,
+            })
+        }
+    } catch (_) {
+        // executePushRun 已记录并展示具体异常；这里避免点击事件产生未处理 Promise。
+    }
+}
+
 const pausePush = () => {
+    pushRunStore.stop()
     platform.pausePush()
-    pushStatus.value = PushStatus.PAUSE;
-    pushBtnType.value = 'primary'
-    pushBtnText.value = '开始投递'
     // 停止更新投递记录
     stopRecordsUpdate();
+}
+
+const handleClearRiskStop = async () => {
+    if (pushRunStore.isActive) {
+        ElMessage.warning('请先点击“停止投递”，等待当前投递任务完全停止')
+        return
+    }
+    if (userStore.user.aiSeatStatus) {
+        ElMessage.warning('请先关闭“AI 回复”开关，避免解除后自动处理新消息')
+        return
+    }
+
+    try {
+        await ElMessageBox.confirm(
+            '仅当你已在 BOSS 官方页面确认账号恢复正常时解除。解除后不会自动启动投递或 AI 回复。',
+            '解除本地风控熔断',
+            {
+                confirmButtonText: '确认解除',
+                cancelButtonText: '取消',
+                type: 'warning',
+            },
+        )
+    } catch (_) {
+        return
+    }
+
+    if (!clearBossRiskCircuit()) {
+        ElMessage.error('本地熔断状态清除失败，请刷新页面后重试')
+        return
+    }
+    riskStopReason.value = ''
+    logRecorder.warn('用户确认 BOSS 账号已恢复，已解除本地风控熔断；投递与 AI 回复保持停止')
+    ElMessage.success('本地风控熔断已解除；请按需手动开启 AI 回复或投递')
 }
 
 const handlerAISeatClick = async () => {
@@ -714,9 +998,74 @@ if (!loginStore.login && !loginStore.loginFailStatus) {
     })
 }
 
+let aiSeatHealthTimer: number | null = null
+onMounted(() => {
+    // The run belongs to the Pinia store, not this component. When the user
+    // switches menus and comes back, reconnect the transient log view to the
+    // still-running task instead of presenting a second Start button.
+    if (pushRunStore.isActive) startRecordsUpdate()
+    const readDeliveryQueue = (key: string): RetryQueueEntry[] => {
+        try {
+            const gmQueue = GM_getValue(key, '') as string
+            const queue = JSON.parse(gmQueue || localStorage.getItem(key) || '[]')
+            return Array.isArray(queue) ? queue.filter(item => item?.key) : []
+        } catch (_) {
+            return []
+        }
+    }
+
+    const refreshAiSeatHealth = () => {
+        aiSeatChannelReady.value = !!Tools.window.AIJobHelperChatBridge?.isReady?.()
+        const greetingQueue = readDeliveryQueue('ai-job-pending-greetings-v1')
+        const aiReplyQueue = readDeliveryQueue('ai-job-pending-ai-replies-v1')
+        pendingGreetingCount.value = countBlockingDeliveries(greetingQueue)
+        pendingAiReplyCount.value = countBlockingDeliveries(aiReplyQueue)
+        pendingSendCount.value = pendingGreetingCount.value + pendingAiReplyCount.value
+
+        const deliveryAudit = readDeliveryAudit()
+        awaitingReceiptCount.value = deliveryAudit.filter(item => item.status === 'acknowledged').length
+        failedDeliveryCount.value = deliveryAudit.filter(item => item.status === 'failed').length
+        blockedDeliveryCount.value = deliveryAudit.filter(item => item.status === 'blocked').length
+        greetingReceiptCount.value = deliveryAudit.filter(item => item.kind === 'greeting'
+            && item.status === 'receipt' && !!item.bossId && !!item.conversationKey
+            && !!item.clientMid && !!item.serverMid).length
+        aiReplyReceiptCount.value = deliveryAudit.filter(item => item.kind === 'ai-reply'
+            && item.status === 'receipt' && !!item.bossId && !!item.conversationKey
+            && !!item.clientMid && !!item.serverMid).length
+        ungreetedConversationCount.value = location.pathname.includes('/web/geek/chat')
+            ? Array.from(document.querySelectorAll('li')).filter(item =>
+                item.textContent?.includes('您正在与Boss') && !item.textContent?.includes('[草稿]')
+            ).length
+            : 0
+
+        todayPushSuccessCount.value = Number(TampermonkeyApi.GmGetValue(
+            TampermonkeyApi.PUSH_SUCCESS_COUNT,
+            pushResultCounter.successCount,
+        )) || 0
+        todayPushFailCount.value = Number(TampermonkeyApi.GmGetValue(
+            TampermonkeyApi.PUSH_FAIL_COUNT,
+            pushResultCounter.failCount,
+        )) || 0
+        riskStopReason.value = getBossRiskStop()?.reason || ''
+        const storedDailyLimit = TampermonkeyApi.GmGetValue(makeBossDailyLimitKey(), false)
+        if (isLegacyLocalDailyLimit(storedDailyLimit)) {
+            TampermonkeyApi.GmSetValue(makeBossDailyLimitKey(), false)
+        }
+        const activeDailyLimit = isLegacyLocalDailyLimit(storedDailyLimit) ? false : storedDailyLimit
+        dailyLimitReason.value = activeDailyLimit === true
+            ? 'BOSS 已标记今日沟通达到平台上限'
+            : typeof activeDailyLimit === 'string' ? activeDailyLimit : ''
+    }
+    refreshAiSeatHealth()
+    aiSeatHealthTimer = window.setInterval(refreshAiSeatHealth, 1000)
+})
+
 // 组件卸载时清理定时器
 onUnmounted(() => {
     stopRecordsUpdate();
+    if (aiSeatHealthTimer !== null) {
+        window.clearInterval(aiSeatHealthTimer)
+    }
 });
 
 // --------------------------------------------------流程处理-------------------------------------------------------------
@@ -789,6 +1138,92 @@ onUnmounted(() => {
 
 .server-mode-tip {
     margin-left: auto;
+}
+
+.operation-status-card {
+    margin-bottom: 14px;
+    border-color: #dcdfe6;
+}
+
+.status-card-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-weight: 600;
+}
+
+.operation-status-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 12px;
+}
+
+.status-metric {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 12px;
+    border-radius: 8px;
+    background: #f5f7fa;
+}
+
+.status-metric-label,
+.status-metric small {
+    color: #606266;
+}
+
+.status-metric strong {
+    color: #303133;
+    font-size: 22px;
+    line-height: 1.2;
+}
+
+.status-metric .metric-danger {
+    color: #f56c6c;
+}
+
+.status-metric-control :deep(.el-input-number) {
+    width: 120px;
+}
+
+.health-tags,
+.action-toolbar {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.health-tags {
+    margin-top: 14px;
+}
+
+.runtime-alert {
+    margin-top: 12px;
+}
+
+.risk-stop-actions {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 10px 12px;
+    color: #7a4b00;
+    background: #fdf6ec;
+    border: 1px solid #faecd8;
+    border-top: 0;
+    border-radius: 0 0 4px 4px;
+}
+
+.action-toolbar {
+    margin-bottom: 14px;
+}
+
+.mock-control {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: #606266;
 }
 
 .my-header {
