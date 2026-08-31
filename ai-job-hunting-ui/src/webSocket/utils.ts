@@ -45,13 +45,18 @@ export function getMsgBody(data: any): string {
 }
 
 
-export function normalizeNumber(number: any): number {
-    if (typeof number === 'string' || typeof number === 'number') {
-        return number as number;
-    } else if ('low' in number) {
-        return number.toNumber();
+export function normalizeNumber(value: any): number {
+    if (typeof value === 'number') {
+        return Number.isFinite(value) ? value : 0
     }
-
-    return 0;
+    if (typeof value === 'string') {
+        const parsed = Number(value)
+        return Number.isFinite(parsed) ? parsed : 0
+    }
+    if (value && typeof value.toNumber === 'function') {
+        const parsed = value.toNumber()
+        return Number.isFinite(parsed) ? parsed : 0
+    }
+    return 0
 }
 

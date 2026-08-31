@@ -1,6 +1,7 @@
 // 因为window.ChatWebsocket的出现,暂时用不到了
 
 import {Logger, LogLevel} from "../logging";
+import {decodeMqttPublishHeader} from "./mqttFrame";
 
 const logger = new Logger();
 logger.setLogLevel(LogLevel.Debug)
@@ -73,14 +74,14 @@ export const mqtt = {
 
         return Uint8Array.from([...fixedHeader, ...variableHeader, ...payload]);
     },
-    decode(buffer: Uint8Array, flags = 3) {
-        const dup = !!(flags & 8);
-        const qos = (flags & 6) >> 1;
+    decode(buffer: Uint8Array, flags?: number) {
+        // Read flags from the actual MQTT fixed header. Assuming QoS 1 shifts the
+        // protobuf payload by two bytes when BOSS publishes a QoS 0 ACK/message.
+        const {dup, qos, retain} = decodeMqttPublishHeader(buffer, flags)
         const {length: remainingLength, bytesUsedToEncodeLength} = decodeLength(
             buffer,
             1
         );
-        const retain = !!(flags & 1);
         const utf = new TextDecoder("utf-8");
         const topicStart = bytesUsedToEncodeLength + 1;
         let decodedTopic = decodeUTF8String(buffer, topicStart, utf);

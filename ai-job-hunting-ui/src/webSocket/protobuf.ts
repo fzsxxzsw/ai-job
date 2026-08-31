@@ -2,6 +2,7 @@ import protobuf from "protobufjs";
 import {Tools} from "../platform/utils";
 import logging from "../logging";
 import {LogRecorder} from "../logging/record";
+import {nextClientMid} from "./clientMid";
 const logRecorder: LogRecorder = new LogRecorder('call');
 
 interface TechwolfUser {
@@ -34,6 +35,7 @@ interface TechwolfMessage {
     body: TechwolfMessageBody; // 6
     //  @int64
     cmid?: string; // 11
+    offline?: boolean; // 7
 }
 
 
@@ -54,21 +56,29 @@ export class Message {
     msgObj: any;
     hex: string;
 
+    static createClientMid(): string {
+        return nextClientMid()
+    }
+
     constructor({
                     form_uid,
                     to_uid,
                     to_name,
                     content,
                     image,
+                    clientMid,
                 }: {
         form_uid: string;
         to_uid: string;
         to_name: string;
         content: string;
-        image: { originImage: string, tinyImage: string } | undefined
+        image: { originImage: string, tinyImage: string } | undefined;
+        clientMid?: string;
     }) {
         const r = new Date().getTime();
-        const d = r + 68256432452609;
+        // A retry must keep the same clientMid. BOSS can then de-duplicate a message
+        // whose server ACK was lost, instead of treating every retry as new content.
+        const d = clientMid || Message.createClientMid();
         const data: any = {
             messages: [
                 {
@@ -82,7 +92,7 @@ export class Message {
                         source: 0,
                     },
                     type: 1,
-                    mid: d.toString(),
+                    mid: d,
                     time: r.toString(),
                     body: {
                         type: image ? 3 : 1,
@@ -97,7 +107,7 @@ export class Message {
                             }
                         } : {}
                     },
-                    cmid: d.toString(),
+                    cmid: d,
                 },
             ],
             type: 1,
@@ -115,34 +125,41 @@ export class Message {
         return this.msg.buffer.slice(0, this.msg.byteLength);
     }
 
-    send() {
-        if (Tools.window.ChatWebsocket) {
+    async send(retries: number = 3, retryDelayMs: number = 500): Promise<boolean> {
+        let initAttempted = false;
+        for (let attempt = 1; attempt <= retries; attempt++) {
             try {
-                Tools.window.ChatWebsocket.send(this);
+                // A one-shot caller used to call ensureReady and then immediately
+                // leave the loop without ever sending. Resolve readiness first,
+                // then attempt the write in the same iteration.
+                if (!Tools.window.AIJobHelperChatBridge?.isReady?.() && !initAttempted) {
+                    initAttempted = true;
+                    await Promise.resolve(Tools.window.AIJobHelperChatBridge?.ensureReady?.(8_000))
+                }
+                // Only the bridge resolves true after BOSS returns messageSync for this
+                // exact clientMid. Merely invoking a legacy send method is not delivery
+                // evidence and must never clear a greeting/AI-reply retry queue.
+                if (Tools.window.AIJobHelperChatBridge?.isReady?.()
+                    && await Promise.resolve(Tools.window.AIJobHelperChatBridge.send(this))) {
+                    return true;
+                }
             } catch (e) {
-                logRecorder.error("发送自定义消息失败", e);
+                logRecorder.warn(`消息发送通道第${attempt}次尝试失败`, e)
             }
-            return;
-        }
-        if (this.msgObj.body.type === 3) {
-            try {
-                Tools.window.ChatWebsocketImage.send(this);
-            } catch (e) {
-                logRecorder.error("发送图片消息失败", e);
+            if (attempt < retries) {
+                await Tools.sleep(retryDelayMs)
             }
-            return;
         }
-
-        if (Tools.window.GeekChatCore) {
-            try {
-                Tools.window.GeekChatCore.getInstance().getClient().client.send(this);
-            } catch (e) {
-                logRecorder.warn("发送自定义消息失败; boss可能更新了1，请反馈", e)
-            }
-            return;
+        if (Number((this.msgObj as any).__dispatchedAt || 0) > 0) {
+            logRecorder.warn(this.msgObj.body.type === 3
+                ? "图片消息已交给BOSS SDK，ACK暂未返回；已暂停重发"
+                : "文本消息已交给BOSS SDK，ACK暂未返回；已暂停重发")
+        } else {
+            logRecorder.error(this.msgObj.body.type === 3
+                ? "发送图片消息失败：通道未就绪"
+                : "发送文本消息失败：通道未就绪")
         }
-
-        logRecorder.warn("发送自定义消息失败; boss可能更新了，请反馈")
+        return false;
     }
 }
 
@@ -150,11 +167,15 @@ export class Message {
 export class MessageRead {
     msg: Uint8Array;
     hex: string;
+    userId: string;
+    messageId: string;
 
     constructor({userId, messageId,}: {
         userId: string;
         messageId: string;
     }) {
+        this.userId = String(userId)
+        this.messageId = String(messageId)
         const r = new Date().getTime();
         const d = r + 68256432452609;
         const data: any = {
@@ -180,16 +201,48 @@ export class MessageRead {
         return this.msg.buffer.slice(0, this.msg.byteLength);
     }
 
-    send() {
-
-        if (Tools.window.ChatWebsocket) {
-            Tools.window.ChatWebsocket.send(this);
-            return;
+    async send(): Promise<boolean> {
+        const bridgeRead = Tools.window.AIJobHelperChatBridge?.sendRead
+        if (bridgeRead) {
+            try {
+                if (await Promise.resolve(bridgeRead.call(
+                    Tools.window.AIJobHelperChatBridge,
+                    this.userId,
+                    this.messageId,
+                ))) return true
+            } catch (error) {
+                logRecorder.warn('已读回执 GeekChatCore 发送失败，尝试原生兼容通道', error)
+            }
         }
-        if (Tools.window.ChatWebsocketImage) {
-            Tools.window.ChatWebsocketImage.send(this);
-            return;
+        const bridgeSend = Tools.window.AIJobHelperChatBridge?.send
+        if (bridgeSend) {
+            try {
+                // The bridge is async. Testing the Promise object itself would always be
+                // truthy and silently suppress the legacy read-receipt fallback on `false`.
+                if (await Promise.resolve(bridgeSend.call(Tools.window.AIJobHelperChatBridge, this))) {
+                    return true
+                }
+            } catch (error) {
+                logRecorder.warn('已读回执 bridge 发送失败，尝试兼容通道', error)
+            }
         }
+        if (Tools.window.ChatWebsocket?.send) {
+            try {
+                await Promise.resolve(Tools.window.ChatWebsocket.send(this))
+                return true
+            } catch (error) {
+                logRecorder.warn('已读回执 ChatWebsocket 发送失败，尝试图片通道', error)
+            }
+        }
+        if (Tools.window.ChatWebsocketImage?.send) {
+            try {
+                await Promise.resolve(Tools.window.ChatWebsocketImage.send(this))
+                return true
+            } catch (error) {
+                logRecorder.warn('已读回执兼容通道发送失败', error)
+            }
+        }
+        return false
     }
 }
 
