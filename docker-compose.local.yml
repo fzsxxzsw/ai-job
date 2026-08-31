@@ -1,0 +1,88 @@
+name: job-helper
+
+services:
+  frontend:
+    image: nginx:1.27-alpine
+    container_name: job-helper-frontend
+    restart: unless-stopped
+    volumes:
+      - ./ai-job-hunting-ui/public:/usr/share/nginx/html:ro
+    ports:
+      - "127.0.0.1:5173:80"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1/healthz | grep -qx ok"]
+      interval: 15s
+      timeout: 3s
+      retries: 6
+    networks:
+      - job-helper
+
+  mysql:
+    image: mysql:8.0
+    container_name: job-helper-mysql
+    restart: unless-stopped
+    command:
+      - --default-authentication-plugin=mysql_native_password
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+    environment:
+      TZ: Asia/Shanghai
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ai_job
+      MYSQL_USER: ai_job
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./ai-job-hunting-server/src/main/resources/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h localhost -uroot -p$$MYSQL_ROOT_PASSWORD --silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+    networks:
+      - job-helper
+
+  backend:
+    container_name: job-helper-backend
+    restart: unless-stopped
+    build:
+      context: ./ai-job-hunting-server
+      dockerfile: Dockerfile.local
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      TZ: Asia/Shanghai
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+      SMART_PASSWORD: ${SMART_PASSWORD}
+      KIMI_API_KEY: ${KIMI_API_KEY:-}
+      AI_API_KEY: ${AI_API_KEY:-}
+      AI_BASE_URL: ${AI_BASE_URL:-https://dashscope.aliyuncs.com/compatible-mode/v1}
+      AI_COMPLETIONS_PATH: ${AI_COMPLETIONS_PATH:-/chat/completions}
+      AI_MODEL: ${AI_MODEL:-qwen3-vl-32b-thinking}
+      AI_TIMEOUT_SECONDS: ${AI_TIMEOUT_SECONDS:-15}
+      AI_THINKING_BUDGET: ${AI_THINKING_BUDGET:-256}
+      JAVA_TOOL_OPTIONS: "-XX:MaxRAMPercentage=70 -XX:+UseG1GC -XX:+ExitOnOutOfMemoryError -Dfile.encoding=UTF-8"
+    ports:
+      # AI 后端仅通过 Windows 防火墙向本机局域网开放。
+      - "${BACKEND_BIND_ADDRESS:-127.0.0.1}:9100:9100"
+      # Smart Config 管理端口仍只允许本机访问。
+      - "127.0.0.1:6768:6768"
+    volumes:
+      - app_logs:/app/logs
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:9100/actuator/health | grep -q '\"status\":\"UP\"'"]
+      interval: 15s
+      timeout: 5s
+      retries: 8
+      start_period: 20s
+    networks:
+      - job-helper
+
+networks:
+  job-helper:
+    driver: bridge
+
+volumes:
+  mysql_data:
+  app_logs:

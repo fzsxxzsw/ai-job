@@ -1,0 +1,59 @@
+name: Local runtime maintenance
+
+on:
+  push:
+    branches:
+      - master
+      - 'codex/**'
+    paths:
+      - '.env.example'
+      - '.github/workflows/local-runtime-maintenance.yml'
+      - 'ai-job-hunting-server/Dockerfile.local'
+      - 'ai-job-hunting-server/application-local.properties'
+      - 'ai-job-hunting-ui/public/healthz'
+      - 'docker-compose.local.yml'
+      - '*-job-helper.ps1'
+      - '本机部署说明.md'
+  pull_request:
+    paths:
+      - '.env.example'
+      - '.github/workflows/local-runtime-maintenance.yml'
+      - 'ai-job-hunting-server/Dockerfile.local'
+      - 'ai-job-hunting-server/application-local.properties'
+      - 'ai-job-hunting-ui/public/healthz'
+      - 'docker-compose.local.yml'
+      - '*-job-helper.ps1'
+      - '本机部署说明.md'
+  workflow_dispatch:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Parse PowerShell maintenance scripts
+        shell: pwsh
+        run: |
+          $failed = $false
+          Get-ChildItem -LiteralPath . -Filter '*-job-helper.ps1' | ForEach-Object {
+            $tokens = $null
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile(
+              $_.FullName,
+              [ref]$tokens,
+              [ref]$errors
+            ) | Out-Null
+            if ($errors.Count -gt 0) {
+              $failed = $true
+              $errors | ForEach-Object { Write-Error ("{0}: {1}" -f $_.Extent.File, $_.Message) }
+            }
+          }
+          if ($failed) { exit 1 }
+      - name: Validate Docker Compose configuration
+        run: docker compose --env-file .env.example -f docker-compose.local.yml config --quiet
+      - name: Validate frontend health asset
+        shell: pwsh
+        run: |
+          if ((Get-Content -Raw ai-job-hunting-ui/public/healthz).Trim() -ne 'ok') {
+            throw 'Frontend health asset must contain exactly ok.'
+          }
