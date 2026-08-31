@@ -1,29 +1,48 @@
 import {reactive, ref} from 'vue'
 import {defineStore} from 'pinia'
-import {PreferenceConfig, User} from "./types";
+import {applyPreferenceDefaults, PreferenceConfig, User} from "./types";
 import logger from "../logging";
 import platform, {PlatformTypeEnum} from "../platform/platform";
 import {TampermonkeyApi} from "../platform/utils";
+import {nextSharedDailyCounterValue} from "../platform/bossDailyLimit";
 
 export const pushResultCount = defineStore('pushResultCount', () => {
     const notMatchCount = ref(0)
-    const successCount = ref(TampermonkeyApi.GmGetValue(TampermonkeyApi.PUSH_SUCCESS_COUNT, 0))
+    let successCountKey = TampermonkeyApi.PUSH_SUCCESS_COUNT
+    let failCountKey = TampermonkeyApi.PUSH_FAIL_COUNT
+    const successCount = ref(Number(TampermonkeyApi.GmGetValue(successCountKey, 0)) || 0)
     const onceSuccessCount = ref(0)
-    const failCount = ref(TampermonkeyApi.GmGetValue(TampermonkeyApi.PUSH_FAIL_COUNT, 0))
+    const failCount = ref(Number(TampermonkeyApi.GmGetValue(failCountKey, 0)) || 0)
 
     function notMatchIncr() {
         notMatchCount.value++
     }
 
     function successIncr() {
-        successCount.value++
+        const currentKey = TampermonkeyApi.PUSH_SUCCESS_COUNT
+        if (currentKey !== successCountKey) {
+            successCountKey = currentKey
+            successCount.value = Number(TampermonkeyApi.GmGetValue(currentKey, 0)) || 0
+        }
+        successCount.value = nextSharedDailyCounterValue(
+            successCount.value,
+            TampermonkeyApi.GmGetValue(currentKey, 0),
+        )
         onceSuccessCount.value++
-        TampermonkeyApi.GmSetValue(TampermonkeyApi.PUSH_SUCCESS_COUNT, successCount.value)
+        TampermonkeyApi.GmSetValue(currentKey, successCount.value)
     }
 
     function failIncr() {
-        failCount.value++
-        TampermonkeyApi.GmSetValue(TampermonkeyApi.PUSH_FAIL_COUNT, failCount.value)
+        const currentKey = TampermonkeyApi.PUSH_FAIL_COUNT
+        if (currentKey !== failCountKey) {
+            failCountKey = currentKey
+            failCount.value = Number(TampermonkeyApi.GmGetValue(currentKey, 0)) || 0
+        }
+        failCount.value = nextSharedDailyCounterValue(
+            failCount.value,
+            TampermonkeyApi.GmGetValue(currentKey, 0),
+        )
+        TampermonkeyApi.GmSetValue(currentKey, failCount.value)
     }
 
     function clearOnceSuccessCount() {
@@ -79,6 +98,7 @@ function getLocalUser(): User {
         jsonData = '{"phone":"","email":"","preference":{},"preferenceMap":{}}'
     }
     let user = JSON.parse(jsonData) as User;
+    user.preference = applyPreferenceDefaults(user.preference)
     logger.debug("获取本地用户配置", user)
     return user;
 }

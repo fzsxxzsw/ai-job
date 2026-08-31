@@ -1,5 +1,14 @@
 import {LoginStore, UserStore} from "./index";
-import {PreferenceConfig} from "./types";
+import {
+    applyPreferenceDefaults,
+    PreferenceConfig,
+} from "./types";
+import {
+    SAFE_DEFAULT_NEXT_PAGE_INTERVAL_SECONDS,
+    SAFE_DEFAULT_PUSH_INTERVAL_SECONDS,
+    SAFE_MIN_NEXT_PAGE_INTERVAL_SECONDS,
+    SAFE_MIN_PUSH_INTERVAL_SECONDS,
+} from "../platform/safetyLimits";
 import {ServerStore} from "./server";
 import {TampermonkeyApi} from "../platform/utils";
 import logging from "../logging";
@@ -9,40 +18,70 @@ import {LogRecorder} from "../logging/record";
 
 const logRecorder = new LogRecorder();
 
-export function userRemoteLoad() {
+const USER_CONFIG_CACHE_TTL_MS = 15_000;
+let activeUserLoad: Promise<void> | null = null;
+
+function applyUserConfig(userStore: ReturnType<typeof UserStore>, user: any) {
+    userStore.user = user
+    if (!userStore?.user) {
+        throw new Error("用户偏好配置为空")
+    }
+    userStore.user.preference = applyPreferenceDefaults(userStore.user.preference)
+    userStore.user.preference.pi = Math.max(
+        SAFE_MIN_PUSH_INTERVAL_SECONDS,
+        Number(userStore.user.preference.pi) || SAFE_DEFAULT_PUSH_INTERVAL_SECONDS,
+    )
+    userStore.user.preference.npi = Math.max(
+        SAFE_MIN_NEXT_PAGE_INTERVAL_SECONDS,
+        Number(userStore.user.preference.npi) || SAFE_DEFAULT_NEXT_PAGE_INTERVAL_SECONDS,
+    )
+}
+
+export function userRemoteLoad(forceRefresh = false): Promise<void> {
     logRecorder.info("加载用户偏好配置")
     const userStore = UserStore()
     const loginStore = LoginStore();
     const serverStore = ServerStore();
 
     if (loginStore.loginFailStatus){
-        return;
+        return Promise.resolve();
+    }
+
+    const mirrorKey = serverStore.getMirrorKey('user_config')
+    const mirrorUpdatedAtKey = `${mirrorKey}:updated_at`
+    const mirrorData = TampermonkeyApi.GmGetValue(mirrorKey, null)
+    const mirrorUpdatedAt = Number(TampermonkeyApi.GmGetValue(mirrorUpdatedAtKey, 0))
+
+    // Userscript may be injected repeatedly during BOSS navigation or in another tab.
+    // Reuse the server-scoped mirror briefly so these injections do not hammer userinfo.
+    if (!forceRefresh && mirrorData && Date.now() - mirrorUpdatedAt < USER_CONFIG_CACHE_TTL_MS) {
+        applyUserConfig(userStore, mirrorData)
+        logRecorder.info("使用短时用户配置镜像，跳过重复请求")
+        return Promise.resolve()
+    }
+
+    if (activeUserLoad) {
+        return activeUserLoad
     }
 
     // 先尝试静默登录
-    silentlyLogin("").then(_ => {
+    activeUserLoad = silentlyLogin("").then(_ => {
         logging.debug("调用接口加载用户偏好配置")
         return axios.post("/api/user/userinfo", {})
     }).then(resp => {
-        userStore.user = resp?.data?.data
-        if (!userStore?.user){
-            throw new Error("用户偏好配置为空")
-        }
+        applyUserConfig(userStore, resp?.data?.data)
 
         // 成功获取数据，同时存入特定服务器镜像和全局最新镜像
-        const mirrorKey = serverStore.getMirrorKey('user_config')
         const globalMirrorKey = serverStore.getGlobalMirrorKey('user_config')
         TampermonkeyApi.GmSetValue(mirrorKey, userStore.user)
+        TampermonkeyApi.GmSetValue(mirrorUpdatedAtKey, Date.now())
         TampermonkeyApi.GmSetValue(globalMirrorKey, userStore.user)
 
-        userStore.user.preference.pi = userStore.user.preference.pi || 3
-        userStore.user.preference.npi = userStore.user.preference.npi || 6
         logRecorder.info("从服务器加载配置成功")
     }).catch(error => {
         logRecorder.warn("从服务器加载配置失败，尝试读取本地镜像", error.message)
 
         // 1. 优先尝试从当前服务器的镜像加载
-        const mirrorKey = serverStore.getMirrorKey('user_config')
         let mirrorData = TampermonkeyApi.GmGetValue(mirrorKey, null)
 
         // 2. 如果当前服务器没有镜像，尝试从全局最新镜像加载
@@ -55,7 +94,7 @@ export function userRemoteLoad() {
         }
 
         if (mirrorData) {
-            userStore.user = mirrorData
+            applyUserConfig(userStore, mirrorData)
             logRecorder.info("已加载本地镜像配置 (离线模式)")
         } else {
             loginStore.loginFail()
@@ -66,5 +105,9 @@ export function userRemoteLoad() {
         if (!userStore.user.preference) {
             userStore.user.preference = {} as PreferenceConfig
         }
+        userStore.user.preference = applyPreferenceDefaults(userStore.user.preference)
+        activeUserLoad = null
     })
+
+    return activeUserLoad
 }

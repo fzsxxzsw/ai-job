@@ -3,7 +3,17 @@ import { defineStore } from 'pinia'
 import { TampermonkeyApi } from "../platform/utils"
 
 const SERVER_URL_KEY = 'custom_server_url'
-export const DEFAULT_SERVER_URL = 'https://43.138.246.37/'
+export const DEFAULT_SERVER_URL = 'http://127.0.0.1:9100/'
+
+function normalizeServerUrl(url: string) {
+    const parsed = new URL(url.trim())
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+        throw new Error('服务器地址仅支持 http 或 https')
+    }
+    parsed.hash = ''
+    parsed.search = ''
+    return parsed.toString()
+}
 
 export const ServerStore = defineStore('server', () => {
     // 从 GM_getValue 获取保存的地址，如果没有则使用默认地址
@@ -18,11 +28,9 @@ export const ServerStore = defineStore('server', () => {
      * 更新服务器地址并持久化
      */
     function setBaseUrl(url: string) {
-        if (!url.endsWith('/')) {
-            url += '/'
-        }
-        baseUrl.value = url
-        TampermonkeyApi.GmSetValue(SERVER_URL_KEY, url)
+        const normalizedUrl = normalizeServerUrl(url)
+        baseUrl.value = normalizedUrl
+        TampermonkeyApi.GmSetValue(SERVER_URL_KEY, normalizedUrl)
         status.value = 'checking'
     }
 
@@ -62,13 +70,9 @@ export const ServerStore = defineStore('server', () => {
     async function checkConnection() {
         status.value = 'checking'
         try {
-            const response = await fetch(`${baseUrl.value}api/user/userinfo`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': localStorage.getItem('Authorization') || ''
-                },
-                body: JSON.stringify({})
+            const response = await fetch(`${baseUrl.value}actuator/health`, {
+                method: 'GET',
+                cache: 'no-store'
             })
             if (response.ok) {
                 status.value = 'online'
