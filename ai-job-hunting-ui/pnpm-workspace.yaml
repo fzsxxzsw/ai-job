@@ -1,0 +1,5 @@
+allowBuilds:
+  esbuild: true
+  javascript-obfuscator: true
+  protobufjs: true
+  vue-demi: true

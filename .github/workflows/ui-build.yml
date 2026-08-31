@@ -1,0 +1,37 @@
+name: UI build
+
+on:
+  push:
+    branches:
+      - master
+      - 'codex/**'
+  pull_request:
+    paths:
+      - 'ai-job-hunting-ui/**'
+      - '.github/workflows/ui-build.yml'
+  workflow_dispatch:
+
+jobs:
+  test-and-build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ai-job-hunting-ui
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: ai-job-hunting-ui/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm test
+      - run: pnpm run build:local:bundle
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ai-job-hunting-local-runtime
+          path: ai-job-hunting-ui/dist/ai-job-hunting.user.js
+          if-no-files-found: error

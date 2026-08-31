@@ -5,7 +5,10 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "test": "node scripts/run-tests.mjs",
     "build": "vue-tsc --noEmit && vite build",
+    "build:local:bundle": "vue-tsc --noEmit && vite build --mode personal",
+    "build:local": "pnpm run build:local:bundle && node scripts/sync-local-runtime.mjs",
     "preview": "vite preview"
   },
   "dependencies": {
