@@ -1,8 +1,30 @@
 import {GM_getValue, GM_setValue, GM_notification, GM_addValueChangeListener, GM_xmlhttpRequest, unsafeWindow} from "$";
+import {
+    makeBossDailyLimitKey,
+    makePushFailCountKey,
+    makePushSuccessCountKey,
+} from "./bossDailyLimit";
 
 export class Tools {
 
     public static window: any = unsafeWindow
+
+    /**
+     * 本地个人版永久硬屏蔽公司关键词。
+     * 该规则独立于用户可编辑偏好，防止误删配置后发生投递、招呼或 AI 自动回复。
+     */
+    public static readonly HARD_BLOCKED_COMPANY_KEYWORDS: string[] = ['潮一']
+
+    public static isHardBlockedCompany(...values: Array<string | null | undefined>): boolean {
+        const normalizedValues = values
+            .filter((value): value is string => typeof value === 'string')
+            .map(value => value.normalize('NFKC').replace(/\s+/g, '').toLowerCase())
+
+        return Tools.HARD_BLOCKED_COMPANY_KEYWORDS.some(keyword => {
+            const normalizedKeyword = keyword.normalize('NFKC').replace(/\s+/g, '').toLowerCase()
+            return normalizedValues.some(value => value.includes(normalizedKeyword))
+        })
+    }
 
     /**
      * 模糊匹配
@@ -124,10 +146,16 @@ export class Tools {
 export class TampermonkeyApi {
     static CUR_CK = ""
     static LOCAL_CONFIG = "config";
-    static PUSH_SUCCESS_COUNT = "pushSuccessCount:" + Tools.getCurDay();
-    static PUSH_FAIL_COUNT = "pushFailCount:" + Tools.getCurDay();
+    static get PUSH_SUCCESS_COUNT(): string {
+        return makePushSuccessCountKey()
+    }
+    static get PUSH_FAIL_COUNT(): string {
+        return makePushFailCountKey()
+    }
     static ACTIVE_ENABLE = "activeEnable";
-    static PUSH_LIMIT = "push_limit" + Tools.getCurDay();
+    static get PUSH_LIMIT(): string {
+        return makeBossDailyLimitKey()
+    }
     // 投递锁是否被占用，可重入；value表示当前正在投递的job
     static PUSH_LOCK = "push_lock";
 
@@ -231,11 +259,11 @@ export class MessageCache {
     /**
      * 检查是否处理过消息
      * @param bossId - Boss ID
-     * @param text - 消息内容，仅前 10 位参与计算
+     * @param messageId - BOSS server message id（DOM 恢复消息使用稳定伪 id）
      * @returns 是否已处理
      */
-    public isMessageProcessed(bossId: number, text: string): boolean {
-        const key = this.generateKey(bossId, text);
+    public isMessageProcessed(bossId: number, messageId: string | number): boolean {
+        const key = this.generateKey(bossId, messageId);
         const cache = this.getCache();
         const validCache = this.cleanExpiredCache(cache);
 
@@ -246,11 +274,11 @@ export class MessageCache {
     /**
      * 标记消息为已处理
      * @param bossId - Boss ID
-     * @param text - 消息内容，仅前 10 位参与计算
+     * @param messageId - BOSS server message id（DOM 恢复消息使用稳定伪 id）
      * @param expiration - 过期时间，单位毫秒（可选，默认 1 分钟）
      */
-    public markMessageAsProcessed(bossId: number, text: string, expiration?: number): void {
-        const key = this.generateKey(bossId, text);
+    public markMessageAsProcessed(bossId: number, messageId: string | number, expiration?: number): void {
+        const key = this.generateKey(bossId, messageId);
         const cache = this.getCache();
 
         cache[key] = {
@@ -263,12 +291,12 @@ export class MessageCache {
     /**
      * 生成唯一键
      * @param bossId - Boss ID
-     * @param text - 消息内容
+     * @param messageId - BOSS server message id
      * @returns 唯一键
      */
-    private generateKey(bossId: number, text: string): string {
-        const trimmedText = text.slice(0, 10); // 截取前 10 位
-        return `${bossId}:${trimmedText}`;
+    private generateKey(bossId: number, messageId: string | number): string {
+        const normalizedId = String(messageId ?? '').trim()
+        return `${bossId}:${normalizedId}`;
     }
 }
 

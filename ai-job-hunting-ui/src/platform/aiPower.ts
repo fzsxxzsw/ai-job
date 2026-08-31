@@ -8,24 +8,32 @@ export class AiPower {
                 question: question,
                 jobKey: jobKey,
                 jobInfo: {
-                    // 完整的title需要调用getBossData接口获取，代价较大; 这暂时用jobTitle代替
                     jobTitle: bossUserInfo.jobTitle,
+                    brandName: bossUserInfo.brandName,
+                    positionTitle: bossUserInfo.positionTitle,
+                    recruiterName: bossUserInfo.recruiterName,
                 }
             },
             {
-                // ask接口超时时间设为30s；部分ai回复较慢
-                timeout: 90000
+                // 后端模型调用上限为15秒；额外1秒用于返回结构化超时结果。
+                timeout: 16000
             })
     }
-    public static async filter(prompt: string, jobBaseInfo: string, jobExtInfo: string): Promise<any> {
+    public static async filter(prompt: string, jobBaseInfo: string, jobExtInfo: string,
+                               resumeMatchEnabled: boolean, minMatchScore: number,
+                               titleRuleStatus?: string, titleMatchedKeywords: string[] = []): Promise<any> {
         return axios.post("api/job/filter/one", {
                 prompt: prompt,
                 jobBaseInfo: jobBaseInfo,
-                jobExtInfo: jobExtInfo
+                jobExtInfo: jobExtInfo,
+                resumeMatchEnabled: resumeMatchEnabled,
+                minMatchScore: minMatchScore,
+                titleRuleStatus: titleRuleStatus,
+                titleMatchedKeywords: titleMatchedKeywords
             },
             {
-                // 部分ai回复较慢
-                timeout: 60000
+                // 本地规则通常毫秒级完成；附加 AI 条件最多等待 15 秒，避免阻塞投递循环。
+                timeout: 15000
             })
     }
 

@@ -85,4 +85,9 @@ interface BossUserInfo {
 
     jobTitle: string,
 
+    /** 公司、职位和招聘者拆分字段，用于新版 BOSS 联系人列表（不再暴露 Vue 实例）恢复联系人。 */
+    brandName?: string,
+    positionTitle?: string,
+    recruiterName?: string,
+
 }
