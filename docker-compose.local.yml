@@ -10,7 +10,7 @@ services:
     ports:
       - "127.0.0.1:5173:80"
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1/healthz | grep -qx ok"]
+      test: ["CMD-SHELL", "tmp=$$(mktemp) || exit 1; trap 'rm -f \"$$tmp\"' EXIT; wget -qO \"$$tmp\" http://127.0.0.1/healthz || exit 1; hex=$$(od -An -tx1 \"$$tmp\" | tr -d ' \\n'); case \"$$hex\" in 6f6b|6f6b0a|6f6b0d0a) exit 0 ;; *) exit 1 ;; esac"]
       interval: 15s
       timeout: 3s
       retries: 6

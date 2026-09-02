@@ -74,6 +74,44 @@ Assert-Equal -Actual $emptyOutput.Count -Expected 0 -Name "empty successful prob
 $repositoryRoot = Split-Path -Parent $PSScriptRoot
 $startScript = Get-Content -Raw -LiteralPath (Join-Path $repositoryRoot "start-job-helper.ps1")
 $releaseScript = Get-Content -Raw -LiteralPath (Join-Path $repositoryRoot "release-job-helper.ps1")
+$composeScript = Get-Content -Raw -LiteralPath (Join-Path $repositoryRoot "docker-compose.local.yml")
+$expectedFrontendHealthLine = 'test: ["CMD-SHELL", "tmp=$$(mktemp) || exit 1; trap ''rm -f \"$$tmp\"'' EXIT; wget -qO \"$$tmp\" http://127.0.0.1/healthz || exit 1; hex=$$(od -An -tx1 \"$$tmp\" | tr -d '' \\n''); case \"$$hex\" in 6f6b|6f6b0a|6f6b0d0a) exit 0 ;; *) exit 1 ;; esac"]'
+if (-not $composeScript.Contains($expectedFrontendHealthLine)) {
+    throw "Frontend healthcheck must use the exact byte whitelist and cleanup-safe temporary-file probe."
+}
+if (-not $expectedFrontendHealthLine.Contains('wget -qO \"$$tmp\" http://127.0.0.1/healthz || exit 1') -or
+    -not $expectedFrontendHealthLine.Contains('trap ''rm -f \"$$tmp\"'' EXIT')) {
+    throw "Frontend healthcheck must preserve wget failure and clean its temporary file."
+}
+
+function Test-FrontendHealthBytes {
+    param([AllowEmptyCollection()][byte[]]$Bytes)
+    $hex = ($Bytes | ForEach-Object { $_.ToString("x2") }) -join ""
+    return $hex -in @("6f6b", "6f6b0a", "6f6b0d0a")
+}
+$validHealthFixtures = @(
+    [pscustomobject]@{ name = "no newline"; bytes = [byte[]]@(0x6f, 0x6b) },
+    [pscustomobject]@{ name = "LF"; bytes = [byte[]]@(0x6f, 0x6b, 0x0a) },
+    [pscustomobject]@{ name = "CRLF"; bytes = [byte[]]@(0x6f, 0x6b, 0x0d, 0x0a) }
+)
+foreach ($fixture in $validHealthFixtures) {
+    if (-not (Test-FrontendHealthBytes -Bytes $fixture.bytes)) {
+        throw "Valid frontend health fixture was rejected: $($fixture.name)"
+    }
+}
+$invalidHealthFixtures = @(
+    [pscustomobject]@{ name = "empty"; bytes = [byte[]]@() },
+    [pscustomobject]@{ name = "okay"; bytes = [byte[]]@(0x6f, 0x6b, 0x61, 0x79) },
+    [pscustomobject]@{ name = "embedded CR"; bytes = [byte[]]@(0x6f, 0x0d, 0x6b) },
+    [pscustomobject]@{ name = "two LF"; bytes = [byte[]]@(0x6f, 0x6b, 0x0a, 0x0a) },
+    [pscustomobject]@{ name = "two CRLF"; bytes = [byte[]]@(0x6f, 0x6b, 0x0d, 0x0a, 0x0d, 0x0a) },
+    [pscustomobject]@{ name = "multiple lines"; bytes = [byte[]]@(0x6f, 0x6b, 0x0a, 0x62, 0x61, 0x64, 0x0a) }
+)
+foreach ($fixture in $invalidHealthFixtures) {
+    if (Test-FrontendHealthBytes -Bytes $fixture.bytes) {
+        throw "Invalid frontend health fixture was accepted: $($fixture.name)"
+    }
+}
 if ($startScript -match '(?i)\balembic\b') {
     throw "Daily startup must not run Agent database migrations."
 }
