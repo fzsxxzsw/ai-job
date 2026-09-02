@@ -43,7 +43,7 @@ catch { Write-Host "Java backend: not healthy" }
 
 try {
     $agent = Invoke-RestMethod -Uri "http://127.0.0.1:9101/health/ready" -TimeoutSec 3
-    Write-Host "Python Agent: $($agent.status) at http://127.0.0.1:9101/ (graph=$($agent.checks.graph), read-only)"
+    Write-Host "Python Agent: $($agent.status) at http://127.0.0.1:9101/ (graph=$($agent.checks.graph), checkpoint=$($agent.checks.checkpoint), migration=$($agent.checks.migration), outbox-only)"
 }
 catch { Write-Host "Python Agent: not healthy" }
 

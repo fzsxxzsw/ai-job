@@ -13,6 +13,16 @@ foreach ($name in @("UI build", "Local runtime maintenance", "Python Agent build
     if ($required -notcontains $name) { throw "Required workflow missing: $name" }
 }
 
+$repositoryRoot = Split-Path -Parent $PSScriptRoot
+$startScript = Get-Content -Raw -LiteralPath (Join-Path $repositoryRoot "start-job-helper.ps1")
+$releaseScript = Get-Content -Raw -LiteralPath (Join-Path $repositoryRoot "release-job-helper.ps1")
+if ($startScript -match '(?i)\balembic\b') {
+    throw "Daily startup must not run Agent database migrations."
+}
+if ($releaseScript -notmatch 'alembic\s+-c\s+/app/alembic\.ini\s+upgrade\s+head') {
+    throw "Release must apply the explicit versioned Agent migration."
+}
+
 $head = "0123456789abcdef0123456789abcdef01234567"
 $diff = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
 Assert-Equal -Actual (Get-JobHelperSourceIdentity -HeadSha $head -WorkingTreeDirty $false) `

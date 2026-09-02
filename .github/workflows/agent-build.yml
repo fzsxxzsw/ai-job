@@ -15,6 +15,23 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: agent_ci_root
+          MYSQL_DATABASE: agent_ci
+          MYSQL_USER: agent_ci
+          MYSQL_PASSWORD: agent_ci_password
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -pagent_ci_root --silent"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=20
+    env:
+      AGENT_TEST_DATABASE_URL: mysql+asyncmy://agent_ci:agent_ci_password@127.0.0.1:3306/agent_ci?charset=utf8mb4
     defaults:
       run:
         working-directory: ai-job-agent
@@ -26,15 +43,40 @@ jobs:
           enable-cache: true
           cache-dependency-glob: ai-job-agent/uv.lock
       - run: uv sync --frozen
+      - name: Apply and validate Agent-only migration
+        env:
+          AGENT_DATABASE_URL: ${{ env.AGENT_TEST_DATABASE_URL }}
+        run: |
+          uv run alembic -c alembic.ini upgrade head
+          uv run alembic -c alembic.ini check
       - run: uv run pytest
       - name: Build Agent container
         run: docker build --tag job-helper-agent:ci .
-      - name: Smoke-test container liveness and readiness
+      - name: Smoke-test container durable checkpoint, MySQL, migration, and interrupt
         shell: bash
         run: |
           set -euo pipefail
-          container_id="$(docker run --rm --detach --publish 127.0.0.1:19101:9101 job-helper-agent:ci)"
-          trap 'docker rm --force "$container_id" >/dev/null 2>&1 || true' EXIT
+          db_args=(
+            --add-host host.docker.internal:host-gateway
+            -e AGENT_DB_HOST=host.docker.internal
+            -e AGENT_DB_PORT=3306
+            -e AGENT_DB_USER=agent_ci
+            -e AGENT_DB_PASSWORD=agent_ci_password
+            -e AGENT_DB_NAME=agent_ci
+          )
+          docker run --rm "${db_args[@]}" job-helper-agent:ci \
+            alembic -c /app/alembic.ini upgrade head
+          checkpoint_volume="agent-ci-checkpoints-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          docker volume create "$checkpoint_volume" >/dev/null
+          container_id="$(docker run --rm --detach \
+            --publish 127.0.0.1:19101:9101 \
+            --volume "$checkpoint_volume:/app/data" \
+            "${db_args[@]}" \
+            -e AGENT_PERSISTENCE_ENABLED=true \
+            -e AGENT_INTERNAL_TOKEN=agent-ci-internal-token-0000000000000000 \
+            -e AGENT_SUBJECT_REF=agent-ci-container \
+            job-helper-agent:ci)"
+          trap 'docker rm --force "$container_id" >/dev/null 2>&1 || true; docker volume rm "$checkpoint_volume" >/dev/null 2>&1 || true' EXIT
           for attempt in $(seq 1 30); do
             if curl --fail --silent http://127.0.0.1:19101/health/ready > /tmp/agent-ready.json; then
               break
@@ -44,11 +86,55 @@ jobs:
           curl --fail --silent http://127.0.0.1:19101/health/live > /tmp/agent-live.json
           python - <<'PY'
           import json
+          import urllib.request
+          import uuid
           from pathlib import Path
 
           live = json.loads(Path('/tmp/agent-live.json').read_text())
           ready = json.loads(Path('/tmp/agent-ready.json').read_text())
           assert live == {'status': 'alive', 'service': 'job-helper-agent'}
           assert ready['status'] == 'ready'
-          assert ready['checks'] == {'graph': 'compiled', 'config': 'valid'}
+          assert ready['checks'] == {
+              'graph': 'compiled',
+              'config': 'valid',
+              'checkpoint': 'writable',
+              'database': 'reachable',
+              'migration': 'current',
+          }
+
+          token = {'X-Internal-Token': 'agent-ci-internal-token-0000000000000000'}
+          create_body = json.dumps({
+              'request_id': str(uuid.uuid4()),
+              'source_job_ref': f'ci-job-{uuid.uuid4().hex}',
+              'title': 'Python Engineer',
+              'description': 'FastAPI',
+              'excluded_keywords': [],
+              'required_keywords': ['python'],
+          }).encode()
+          request = urllib.request.Request(
+              'http://127.0.0.1:19101/api/v1/runs',
+              data=create_body,
+              headers={**token, 'Content-Type': 'application/json'},
+              method='POST',
+          )
+          run = json.load(urllib.request.urlopen(request))
+          assert run['status'] == 'WAITING_APPROVAL'
+          resume_body = json.dumps({
+              'proposal_id': run['proposal']['proposal_id'],
+              'interrupt_id': run['interrupt_id'],
+              'preview_hash': run['proposal']['preview_hash'],
+              'decision_request_id': str(uuid.uuid4()),
+              'decision': 'REJECT',
+              'reason': 'CI smoke must not enqueue an action',
+          }).encode()
+          request = urllib.request.Request(
+              f"http://127.0.0.1:19101/api/v1/runs/{run['run_id']}/resume",
+              data=resume_body,
+              headers={**token, 'Content-Type': 'application/json'},
+              method='POST',
+          )
+          completed = json.load(urllib.request.urlopen(request))
+          assert completed['status'] == 'COMPLETED'
+          assert completed['result']['outcome'] == 'REJECTED'
+          assert completed['result']['action_status'] is None
           PY

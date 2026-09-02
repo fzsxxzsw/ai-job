@@ -1,5 +1,6 @@
 from enum import StrEnum
 from typing import Annotated
+from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
@@ -11,6 +12,19 @@ class Decision(StrEnum):
     REJECT = "REJECT"
     REVIEW = "REVIEW"
     MATCH = "MATCH"
+
+
+class RunStatus(StrEnum):
+    CREATED = "CREATED"
+    RUNNING = "RUNNING"
+    WAITING_APPROVAL = "WAITING_APPROVAL"
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
+
+
+class ApprovalDecision(StrEnum):
+    APPROVE = "APPROVE"
+    REJECT = "REJECT"
 
 
 class JobDecisionRequest(BaseModel):
@@ -36,3 +50,70 @@ class JobDecisionResponse(BaseModel):
     reasons: list[str]
     evidence: list[DecisionEvidence]
     policy_version: str
+
+
+SourceJobRef = Annotated[
+    str,
+    StringConstraints(
+        min_length=1,
+        max_length=128,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+    ),
+]
+
+
+class RunCreateRequest(JobDecisionRequest):
+    request_id: UUID
+    source_job_ref: SourceJobRef
+
+
+class ActionProposal(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    proposal_id: UUID
+    action_kind: str = Field(pattern=r"^CONTACT_JOB$")
+    target_ref: SourceJobRef
+    preview: str = Field(max_length=500)
+    preview_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
+
+
+class ResumeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    proposal_id: UUID
+    interrupt_id: str = Field(min_length=1, max_length=128)
+    preview_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
+    decision_request_id: UUID
+    decision: ApprovalDecision
+    reason: str | None = Field(default=None, max_length=1000)
+
+
+class RunResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    run_id: UUID
+    request_id: UUID
+    status: RunStatus
+    decision: Decision | None = None
+    proposal: ActionProposal | None = None
+    interrupt_id: str | None = None
+    result: dict[str, object] | None = None
+    policy_version: str
+    graph_version: str
+
+
+class RunEventResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    event_id: UUID
+    seq: int
+    event_type: str
+    payload: dict[str, object]
+    occurred_at: str
+
+
+class RunHistoryResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    run_id: UUID
+    events: list[RunEventResponse]

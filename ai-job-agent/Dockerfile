@@ -17,15 +17,19 @@ RUN uv sync --frozen --no-dev
 FROM python:3.12-slim-bookworm
 
 ENV PATH="/app/.venv/bin:$PATH" \
+    LANGGRAPH_STRICT_MSGPACK=true \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1
 WORKDIR /app
 
-RUN groupadd --system agent && useradd --system --gid agent --home-dir /app agent
+RUN groupadd --system agent && useradd --system --gid agent --home-dir /app agent && \
+    mkdir -p /app/data && chown agent:agent /app/data
 COPY --from=builder --chown=agent:agent /app/.venv /app/.venv
 COPY --from=builder --chown=agent:agent /app/src /app/src
+COPY --chown=agent:agent alembic.ini /app/alembic.ini
+COPY --chown=agent:agent alembic /app/alembic
 
 USER agent
 EXPOSE 9101
 
-CMD ["uvicorn", "job_helper_agent.main:app", "--host", "0.0.0.0", "--port", "9101"]
+CMD ["uvicorn", "job_helper_agent.main:app", "--host", "0.0.0.0", "--port", "9101", "--workers", "1"]

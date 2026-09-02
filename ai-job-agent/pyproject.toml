@@ -1,13 +1,18 @@
 [project]
 name = "job-helper-agent"
 version = "0.1.0"
-description = "Recoverable Job Helper agent service (Phase 1: read-only decisions)"
+description = "Recoverable Job Helper agent service with durable approvals and an action outbox"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
 dependencies = [
+    "alembic>=1.19.1,<2.0.0",
+    "asyncmy>=0.2.14,<0.3.0",
+    "cryptography>=46.0.0,<47.0.0",
     "fastapi>=0.116.0,<1.0.0",
     "langgraph>=1.0.0,<2.0.0",
+    "langgraph-checkpoint-sqlite>=3.1.1,<4.0.0",
     "pydantic>=2.11.0,<3.0.0",
+    "sqlalchemy[asyncio]>=2.0.52,<2.1.0",
     "uvicorn>=0.35.0,<1.0.0",
 ]
 

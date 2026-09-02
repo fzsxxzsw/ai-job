@@ -15,7 +15,7 @@ class DecisionState(TypedDict):
     normalized_text: NotRequired[str]
     normalized_excluded_keywords: NotRequired[list[str]]
     normalized_required_keywords: NotRequired[list[str]]
-    decision: NotRequired[Decision]
+    decision: NotRequired[str]
     reasons: NotRequired[list[str]]
     evidence: NotRequired[list[dict[str, str | None]]]
 
@@ -73,7 +73,7 @@ def apply_keyword_policy(state: DecisionState) -> dict[str, object]:
     ]
     if excluded_matches:
         return {
-            "decision": Decision.REJECT,
+            "decision": Decision.REJECT.value,
             "reasons": ["An excluded keyword was found in the job information."],
             "evidence": [
                 {"rule": "excluded_keyword", "keyword": keyword}
@@ -83,7 +83,7 @@ def apply_keyword_policy(state: DecisionState) -> dict[str, object]:
 
     if not normalized_text:
         return {
-            "decision": Decision.REVIEW,
+            "decision": Decision.REVIEW.value,
             "reasons": ["The job title and description do not contain enough information."],
             "evidence": [{"rule": "insufficient_information", "keyword": None}],
         }
@@ -93,7 +93,7 @@ def apply_keyword_policy(state: DecisionState) -> dict[str, object]:
     ]
     if required_keywords and not required_matches:
         return {
-            "decision": Decision.REVIEW,
+            "decision": Decision.REVIEW.value,
             "reasons": ["None of the required keywords were found."],
             "evidence": [
                 {"rule": "required_keywords_not_found", "keyword": keyword}
@@ -110,7 +110,7 @@ def apply_keyword_policy(state: DecisionState) -> dict[str, object]:
         else [{"rule": "job_information_present", "keyword": None}]
     )
     return {
-        "decision": Decision.MATCH,
+        "decision": Decision.MATCH.value,
         "reasons": ["The job passed the read-only keyword policy."],
         "evidence": evidence,
     }

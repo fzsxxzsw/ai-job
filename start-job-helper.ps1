@@ -59,7 +59,7 @@ function Get-HttpBytes {
 
 function Assert-RequiredEnvironment {
     $required = @(
-        "MYSQL_ROOT_PASSWORD", "MYSQL_PASSWORD", "SMART_PASSWORD", "AI_API_KEY",
+        "MYSQL_ROOT_PASSWORD", "MYSQL_PASSWORD", "SMART_PASSWORD", "AGENT_INTERNAL_TOKEN", "AI_API_KEY",
         "AI_BASE_URL", "AI_MODEL", "AI_TIMEOUT_SECONDS", "AI_THINKING_BUDGET"
     )
     $missing = @($required | Where-Object {
@@ -213,7 +213,7 @@ Wait-HttpHealth -Name "Python Agent" -Uri "http://127.0.0.1:9101/health/ready" -
 
 Write-Host "Job Helper is ready: channel=$($receipt.channel) sha=$($receipt.releaseSha) build=$($receipt.buildId) runtime_sha256=$servedSha"
 Write-Host "Java API:     http://127.0.0.1:9100/"
-Write-Host "Python Agent: http://127.0.0.1:9101/ (read-only)"
+Write-Host "Python Agent: http://127.0.0.1:9101/ (durable approval/outbox API; no executor)"
 Write-Host "Frontend:     http://127.0.0.1:5173/"
 }
 finally {

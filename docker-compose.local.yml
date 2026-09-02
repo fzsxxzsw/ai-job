@@ -97,8 +97,23 @@ services:
         io.job-helper.build-channel: ${JOB_HELPER_BUILD_CHANNEL:-unreleased}
     environment:
       TZ: Asia/Shanghai
+      AGENT_PERSISTENCE_ENABLED: "true"
+      AGENT_CHECKPOINT_PATH: /app/data/langgraph-checkpoints.sqlite3
+      AGENT_DB_HOST: mysql
+      AGENT_DB_PORT: "3306"
+      AGENT_DB_USER: ai_job
+      AGENT_DB_PASSWORD: ${MYSQL_PASSWORD}
+      AGENT_DB_NAME: ai_job
+      AGENT_INTERNAL_TOKEN: ${AGENT_INTERNAL_TOKEN:-}
+      AGENT_SUBJECT_REF: ${AGENT_SUBJECT_REF:-local-installation}
+      LANGGRAPH_STRICT_MSGPACK: "true"
+    depends_on:
+      mysql:
+        condition: service_healthy
     ports:
       - "127.0.0.1:9101:9101"
+    volumes:
+      - agent_data:/app/data
     healthcheck:
       test: ["CMD", "python", "-c", "import json, urllib.request; response = urllib.request.urlopen('http://127.0.0.1:9101/health/ready', timeout=3); payload = json.load(response); raise SystemExit(0 if response.status == 200 and payload.get('status') == 'ready' else 1)"]
       interval: 15s
@@ -115,3 +130,4 @@ networks:
 volumes:
   mysql_data:
   app_logs:
+  agent_data:

@@ -97,6 +97,32 @@ function Ensure-InfrastructureImage {
     if ($LASTEXITCODE -ne 0) { throw "Required infrastructure image '$Image' could not be acquired." }
 }
 
+function Invoke-AgentMigration {
+    param(
+        [Parameter(Mandatory)][string]$AgentImage,
+        [Parameter(Mandatory)][string]$EnvPath,
+        [Parameter(Mandatory)][string]$ComposeFile
+    )
+    $previousAgentImage = $env:JOB_HELPER_AGENT_IMAGE
+    try {
+        $env:JOB_HELPER_AGENT_IMAGE = $AgentImage
+        Write-Host "Starting MySQL only for the explicit Agent schema migration..."
+        & docker compose --env-file $EnvPath -f $ComposeFile up -d --no-build --pull never mysql
+        if ($LASTEXITCODE -ne 0) { throw "MySQL startup for Agent migration failed." }
+        $deadline = [DateTime]::UtcNow.AddSeconds(90)
+        do {
+            Start-Sleep -Milliseconds 750
+            $health = (& docker inspect --format '{{.State.Health.Status}}' job-helper-mysql 2>$null | Select-Object -First 1)
+        } while ($health -ne "healthy" -and [DateTime]::UtcNow -lt $deadline)
+        if ($health -ne "healthy") { throw "MySQL did not become healthy for Agent migration." }
+        Write-Host "Applying the versioned Agent-only Alembic migration..."
+        & docker compose --env-file $EnvPath -f $ComposeFile run --rm --no-deps agent `
+            alembic -c /app/alembic.ini upgrade head
+        if ($LASTEXITCODE -ne 0) { throw "Agent migration failed with exit code $LASTEXITCODE." }
+    }
+    finally { $env:JOB_HELPER_AGENT_IMAGE = $previousAgentImage }
+}
+
 function Write-JsonAtomically {
     param(
         [Parameter(Mandatory)][object]$Value,
@@ -212,6 +238,8 @@ $buildSnapshot = [pscustomobject]@{
 
 $backendImage = [string]$buildReceipt.backendImage
 $agentImage = [string]$buildReceipt.agentImage
+$envPath = Join-Path $PSScriptRoot ".env"
+$composeFile = Join-Path $PSScriptRoot "docker-compose.local.yml"
 $immutableReceiptRoot = Join-Path $PSScriptRoot ".job-helper-releases"
 $immutableReleaseDirectory = Join-Path $immutableReceiptRoot $buildId
 $immutableReceiptPath = Join-Path $immutableReleaseDirectory "receipt.json"
@@ -241,6 +269,7 @@ $mysqlImageId = (& docker image inspect --format '{{.Id}}' "mysql:8.0" | Select-
 if ($frontendImageId -notmatch '^sha256:[a-f0-9]{64}$' -or $mysqlImageId -notmatch '^sha256:[a-f0-9]{64}$') {
     throw "Infrastructure image identities are unavailable."
 }
+Invoke-AgentMigration -AgentImage $agentImage -EnvPath $envPath -ComposeFile $composeFile
 
 $frontendDirectory = Join-Path $PSScriptRoot "ai-job-hunting-ui"
 $publishedRuntime = Join-Path $frontendDirectory "public\ai-job-hunting-runtime.js"
