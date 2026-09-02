@@ -13,6 +13,64 @@ foreach ($name in @("UI build", "Local runtime maintenance", "Python Agent build
     if ($required -notcontains $name) { throw "Required workflow missing: $name" }
 }
 
+$retryState = [pscustomobject]@{
+    attempts = 0
+    delays = New-Object Collections.Generic.List[int]
+}
+$retryOutput = Invoke-JobHelperRetryProbe `
+    -CommandLabel "git ls-remote" `
+    -DelayMilliseconds 5 `
+    -Delay { param($milliseconds) $retryState.delays.Add($milliseconds) } `
+    -Probe {
+        $retryState.attempts++
+        if ($retryState.attempts -lt 3) {
+            return [pscustomobject]@{ ExitCode = 35; Output = "TLS handshake failed" }
+        }
+        return [pscustomobject]@{ ExitCode = 0; Output = "remote-ref" }
+    }
+Assert-Equal -Actual $retryOutput -Expected "remote-ref" -Name "third probe succeeds"
+Assert-Equal -Actual $retryState.attempts -Expected 3 -Name "retry attempt count"
+Assert-Equal -Actual $retryState.delays.Count -Expected 2 -Name "retry delay count"
+
+$secretToken = "token-that-must-not-appear"
+$failureState = [pscustomobject]@{ attempts = 0 }
+$networkFailure = $null
+try {
+    Invoke-JobHelperRetryProbe `
+        -CommandLabel "gh run list" `
+        -DelayMilliseconds 0 `
+        -Delay {} `
+        -Probe {
+            $failureState.attempts++
+            return [pscustomobject]@{ ExitCode = 4; Output = "auth failed: $secretToken" }
+        }
+}
+catch { $networkFailure = $_.Exception.Message }
+Assert-Equal -Actual $failureState.attempts -Expected 3 -Name "retry upper bound"
+if ([string]::IsNullOrWhiteSpace($networkFailure) -or
+    -not $networkFailure.Contains("network/auth query failed") -or
+    -not $networkFailure.Contains("gh run list") -or
+    -not $networkFailure.Contains("exit code 4") -or
+    $networkFailure.Contains($secretToken)) {
+    throw "Exhausted network/auth retry did not produce a safe diagnostic."
+}
+
+$emptyState = [pscustomobject]@{
+    attempts = 0
+    delays = New-Object Collections.Generic.List[int]
+}
+$emptyOutput = @(Invoke-JobHelperRetryProbe `
+    -CommandLabel "git ls-remote" `
+    -DelayMilliseconds 5 `
+    -Delay { param($milliseconds) $emptyState.delays.Add($milliseconds) } `
+    -Probe {
+        $emptyState.attempts++
+        return [pscustomobject]@{ ExitCode = 0; Output = @() }
+    })
+Assert-Equal -Actual $emptyState.attempts -Expected 1 -Name "empty successful probe count"
+Assert-Equal -Actual $emptyState.delays.Count -Expected 0 -Name "empty successful probe delay count"
+Assert-Equal -Actual $emptyOutput.Count -Expected 0 -Name "empty successful probe output"
+
 $repositoryRoot = Split-Path -Parent $PSScriptRoot
 $startScript = Get-Content -Raw -LiteralPath (Join-Path $repositoryRoot "start-job-helper.ps1")
 $releaseScript = Get-Content -Raw -LiteralPath (Join-Path $repositoryRoot "release-job-helper.ps1")

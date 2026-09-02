@@ -47,8 +47,12 @@ function Assert-PushedRequiredWorkflows {
     if ([string]::IsNullOrWhiteSpace($branch) -or $head -notmatch '^[a-f0-9]{40}$') {
         throw "A named Git branch and valid HEAD are required."
     }
-    $remoteLine = (& git ls-remote --heads $RemoteName "refs/heads/$branch" 2>$null | Select-Object -First 1)
-    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($remoteLine)) {
+    $remoteLines = @(Invoke-JobHelperRetryProbe -CommandLabel "git ls-remote" -Probe {
+        $output = @(& git ls-remote --heads $RemoteName "refs/heads/$branch" 2>$null)
+        [pscustomobject]@{ ExitCode = $LASTEXITCODE; Output = $output }
+    })
+    $remoteLine = $remoteLines | Select-Object -First 1
+    if ([string]::IsNullOrWhiteSpace($remoteLine)) {
         throw "Branch '$branch' has not been pushed to remote '$RemoteName'."
     }
     if ((([string]$remoteLine -split '\s+')[0]).ToLowerInvariant() -ne $head) {
@@ -56,27 +60,53 @@ function Assert-PushedRequiredWorkflows {
     }
 
     $repository = Get-GitHubRepositoryFromRemote -RemoteName $RemoteName
-    $runsJson = & gh api --method GET "repos/$repository/actions/runs" `
-        -f "head_sha=$head" -f "branch=$branch" -f "per_page=100"
-    if ($LASTEXITCODE -ne 0) { throw "GitHub Actions status could not be verified." }
-    $runs = @((($runsJson | ConvertFrom-Json).workflow_runs) | Where-Object {
-        $_.head_sha -eq $head -and $_.head_branch -eq $branch
+    $runsJson = @(Invoke-JobHelperRetryProbe -CommandLabel "gh run list" -Probe {
+        $output = @(& gh run list --repo $repository --branch $branch --commit $head `
+            --limit 100 --json databaseId,name,headSha,headBranch,status,conclusion,createdAt 2>$null)
+        [pscustomobject]@{ ExitCode = $LASTEXITCODE; Output = $output }
     })
+    $runsDocument = $runsJson -join [Environment]::NewLine
+    $runs = if ([string]::IsNullOrWhiteSpace($runsDocument)) {
+        @()
+    }
+    else {
+        @($runsDocument | ConvertFrom-Json) | Where-Object {
+            $_.headSha -eq $head -and $_.headBranch -eq $branch
+        }
+    }
 
     $verifiedRunIds = [ordered]@{}
     foreach ($workflowName in $requiredWorkflows) {
         $run = $runs | Where-Object { $_.name -eq $workflowName } |
-            Sort-Object -Property created_at -Descending | Select-Object -First 1
+            Sort-Object -Property createdAt -Descending | Select-Object -First 1
         if ($null -eq $run) {
             throw "Required workflow '$workflowName' did not run for $repository@$head."
         }
-        if ($run.status -ne "completed") {
+        $runId = [long]$run.databaseId
+        $runJson = @(Invoke-JobHelperRetryProbe -CommandLabel "gh run view" -Probe {
+            $output = @(& gh run view $runId --repo $repository `
+                --json databaseId,name,headSha,headBranch,status,conclusion 2>$null)
+            [pscustomobject]@{ ExitCode = $LASTEXITCODE; Output = $output }
+        })
+        $runDocument = $runJson -join [Environment]::NewLine
+        $verifiedRun = if ([string]::IsNullOrWhiteSpace($runDocument)) {
+            $null
+        }
+        else { $runDocument | ConvertFrom-Json }
+        if ($null -eq $verifiedRun -or
+            $verifiedRun.databaseId -ne $runId -or
+            $verifiedRun.name -ne $workflowName -or
+            $verifiedRun.headSha -ne $head -or
+            $verifiedRun.headBranch -ne $branch) {
+            throw "Required workflow '$workflowName' details did not match $repository@$head."
+        }
+        if ($verifiedRun.status -ne "completed") {
             throw "Required workflow '$workflowName' is still running for $repository@$head."
         }
-        if ($run.conclusion -ne "success") {
-            throw "Required workflow '$workflowName' concluded '$($run.conclusion)' for $repository@$head."
+        if ($verifiedRun.conclusion -ne "success") {
+            throw "Required workflow '$workflowName' concluded '$($verifiedRun.conclusion)' for $repository@$head."
         }
-        $verifiedRunIds[$workflowName] = [long]$run.id
+        $verifiedRunIds[$workflowName] = $runId
     }
 
     Write-Host "Verified pushed HEAD and all required workflows for $repository@$head."

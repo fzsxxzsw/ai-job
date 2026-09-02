@@ -5,6 +5,40 @@ function Get-JobHelperRequiredWorkflows {
     return @("UI build", "Local runtime maintenance", "Python Agent build")
 }
 
+function Invoke-JobHelperRetryProbe {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][scriptblock]$Probe,
+        [Parameter(Mandatory)][string]$CommandLabel,
+        [ValidateRange(1, 3)][int]$MaxAttempts = 3,
+        [ValidateRange(0, 5000)][int]$DelayMilliseconds = 750,
+        [scriptblock]$Delay = { param([int]$Milliseconds) Start-Sleep -Milliseconds $Milliseconds }
+    )
+    $sanitizedLabel = $CommandLabel.Trim()
+    if ($sanitizedLabel -notmatch '^[A-Za-z][A-Za-z0-9-]*(?: [A-Za-z][A-Za-z0-9-]*){0,2}$') {
+        throw "Command label must contain only a short command name without arguments."
+    }
+
+    $lastExitCode = -1
+    for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
+        $probeResult = & $Probe
+        if ($null -eq $probeResult -or
+            $probeResult.PSObject.Properties.Name -notcontains "ExitCode" -or
+            $probeResult.PSObject.Properties.Name -notcontains "Output") {
+            throw "Probe '$sanitizedLabel' must return ExitCode and Output."
+        }
+        $lastExitCode = [int]$probeResult.ExitCode
+        if ($lastExitCode -eq 0) {
+            return $probeResult.Output
+        }
+        if ($attempt -lt $MaxAttempts) {
+            $null = & $Delay $DelayMilliseconds
+        }
+    }
+
+    throw "network/auth query failed: $sanitizedLabel (exit code $lastExitCode) after $MaxAttempts attempts."
+}
+
 function Get-JobHelperSourceIdentity {
     param(
         [Parameter(Mandatory)][ValidatePattern('^[a-f0-9]{40}$')][string]$HeadSha,
@@ -176,6 +210,7 @@ function Invoke-JobHelperCandidateRollback {
 
 Export-ModuleMember -Function @(
     "Get-JobHelperRequiredWorkflows",
+    "Invoke-JobHelperRetryProbe",
     "Get-JobHelperSourceIdentity",
     "Get-JobHelperWorkspaceSnapshot",
     "Assert-JobHelperWorkspaceSnapshotEqual",
