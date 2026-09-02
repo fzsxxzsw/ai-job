@@ -5,7 +5,6 @@ import com.maple.ai.job.hunting.emums.ProductTypeEnum;
 import com.maple.ai.job.hunting.utils.PermissionConfigUtil;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.springframework.boot.test.context.SpringBootTest;
 
 import java.util.List;
 import java.util.Set;
@@ -17,7 +16,6 @@ import static org.junit.jupiter.api.Assertions.*;
  * Created Date: 2024/12/19
  * Description: 产品权限配置测试类
  */
-@SpringBootTest
 public class ProductPermissionTest {
 
     private ProductPermissionConfig productPermissionConfig;
@@ -30,12 +28,14 @@ public class ProductPermissionTest {
 
     @Test
     public void testSimplePermissionConfig() {
-        // 测试简单权限配置
+        // 测试默认的 AI 坐席或自有 API 权限配置
         List<List<Integer>> permissionGroups = productPermissionConfig.getPermissionGroups("/api/job/seeker/cloned/ask");
         assertNotNull(permissionGroups);
-        assertEquals(1, permissionGroups.size());
+        assertEquals(2, permissionGroups.size());
         assertEquals(1, permissionGroups.get(0).size());
         assertEquals(ProductTypeEnum.AI_SEAT.getCode(), permissionGroups.get(0).get(0));
+        assertEquals(1, permissionGroups.get(1).size());
+        assertEquals(ProductTypeEnum.CUSTOM_API.getCode(), permissionGroups.get(1).get(0));
     }
 
     @Test

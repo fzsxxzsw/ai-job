@@ -4,14 +4,20 @@ import com.maple.ai.job.hunting.common.HeaderContext;
 import com.maple.ai.job.hunting.model.entity.SendEmailEntity;
 import com.maple.ai.job.hunting.service.biz.EmailService;
 import jakarta.annotation.Resource;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.SpringBootTest;
 
 import java.util.Collections;
 import java.util.HashMap;
 
+/**
+ * Manual integration test. It requires an isolated database and a stubbed mail
+ * transport. The {@code *IT} name keeps it out of the normal Surefire unit gate.
+ */
+@Tag("manual-integration")
 @SpringBootTest(classes = AiJobHuntingApplication.class)
-public class EmailTest {
+public class EmailIT {
 
     @Resource
     private EmailService emailService;

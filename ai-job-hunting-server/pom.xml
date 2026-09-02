@@ -238,14 +238,25 @@
                     <source>17</source>
                     <target>17</target>
                     <release>17</release>
-                    <fork>true</fork>
-                    <executable>D:\Program Dev Kit\JDK\jdk-17.0.11+9\bin\javac.exe</executable>
                 </configuration>
             </plugin>
 
             <plugin>
                 <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-maven-plugin</artifactId>
+            </plugin>
+
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <configuration>
+                    <includes>
+                        <include>**/*Test.java</include>
+                    </includes>
+                    <excludes>
+                        <exclude>**/*IT.java</exclude>
+                    </excludes>
+                </configuration>
             </plugin>
         </plugins>
         <finalName>ai-job</finalName>

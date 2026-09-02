@@ -9,6 +9,8 @@ on:
     paths:
       - '.env.example'
       - '.github/workflows/local-runtime-maintenance.yml'
+      - 'ai-job-hunting-server/pom.xml'
+      - 'ai-job-hunting-server/src/**'
       - 'ai-job-hunting-server/Dockerfile.local'
       - 'ai-job-hunting-server/application-local.properties'
       - 'ai-job-hunting-ui/public/healthz'
@@ -20,6 +22,19 @@ on:
   workflow_dispatch:
 
 jobs:
+  test-java-backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: maven
+      - name: Run Java 17 Maven tests
+        working-directory: ai-job-hunting-server
+        run: mvn -B test
+
   validate:
     runs-on: ubuntu-latest
     steps:

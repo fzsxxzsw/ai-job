@@ -8,17 +8,21 @@ import org.apache.http.entity.StringEntity;
 import org.apache.http.impl.client.CloseableHttpClient;
 import org.apache.http.impl.client.HttpClients;
 import org.apache.http.util.EntityUtils;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 import java.util.UUID;
 
 /**
- * Job Agent 测试员
+ * Manual end-to-end test. It requires an already-started backend on port 9100
+ * and a stubbed AI provider. The {@code *IT} name keeps it out of the normal
+ * Surefire unit gate.
  *
  * @author gaoping
  * @since 2025/02/27
  */
-public class JobAgentTest {
+@Tag("manual-integration")
+public class JobAgentIT {
 
     public static final String[] TEST_QUESTIONS = {
             "fjwoeffjwoeifjiwjfowfjwoi43839j843754%$#$*^&^&^%",
