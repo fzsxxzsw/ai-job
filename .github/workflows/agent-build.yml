@@ -1,0 +1,54 @@
+name: Python Agent build
+
+on:
+  push:
+    branches:
+      - master
+      - 'codex/**'
+  pull_request:
+    paths:
+      - 'ai-job-agent/**'
+      - '.github/workflows/agent-build.yml'
+      - 'docker-compose.local.yml'
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ai-job-agent
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: '0.11.23'
+          enable-cache: true
+          cache-dependency-glob: ai-job-agent/uv.lock
+      - run: uv sync --frozen
+      - run: uv run pytest
+      - name: Build Agent container
+        run: docker build --tag job-helper-agent:ci .
+      - name: Smoke-test container liveness and readiness
+        shell: bash
+        run: |
+          set -euo pipefail
+          container_id="$(docker run --rm --detach --publish 127.0.0.1:19101:9101 job-helper-agent:ci)"
+          trap 'docker rm --force "$container_id" >/dev/null 2>&1 || true' EXIT
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:19101/health/ready > /tmp/agent-ready.json; then
+              break
+            fi
+            sleep 1
+          done
+          curl --fail --silent http://127.0.0.1:19101/health/live > /tmp/agent-live.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          live = json.loads(Path('/tmp/agent-live.json').read_text())
+          ready = json.loads(Path('/tmp/agent-ready.json').read_text())
+          assert live == {'status': 'alive', 'service': 'job-helper-agent'}
+          assert ready['status'] == 'ready'
+          assert ready['checks'] == {'graph': 'compiled', 'config': 'valid'}
+          PY

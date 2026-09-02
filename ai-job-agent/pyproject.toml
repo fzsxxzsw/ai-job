@@ -1,0 +1,29 @@
+[project]
+name = "job-helper-agent"
+version = "0.1.0"
+description = "Recoverable Job Helper agent service (Phase 1: read-only decisions)"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "fastapi>=0.116.0,<1.0.0",
+    "langgraph>=1.0.0,<2.0.0",
+    "pydantic>=2.11.0,<3.0.0",
+    "uvicorn>=0.35.0,<1.0.0",
+]
+
+[dependency-groups]
+dev = [
+    "httpx>=0.28.0,<1.0.0",
+    "pytest>=8.4.0,<10.0.0",
+]
+
+[build-system]
+requires = ["hatchling>=1.27.0,<2.0.0"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/job_helper_agent"]
+
+[tool.pytest.ini_options]
+addopts = "-q"
+testpaths = ["tests"]

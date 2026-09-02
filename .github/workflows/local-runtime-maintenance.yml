@@ -5,15 +5,6 @@ on:
     branches:
       - master
       - 'codex/**'
-    paths:
-      - '.env.example'
-      - '.github/workflows/local-runtime-maintenance.yml'
-      - 'ai-job-hunting-server/Dockerfile.local'
-      - 'ai-job-hunting-server/application-local.properties'
-      - 'ai-job-hunting-ui/public/healthz'
-      - 'docker-compose.local.yml'
-      - '*-job-helper.ps1'
-      - '本机部署说明.md'
   pull_request:
     paths:
       - '.env.example'
@@ -23,6 +14,8 @@ on:
       - 'ai-job-hunting-ui/public/healthz'
       - 'docker-compose.local.yml'
       - '*-job-helper.ps1'
+      - 'job-helper-release-common.psm1'
+      - 'tests/job-helper-maintenance.tests.ps1'
       - '本机部署说明.md'
   workflow_dispatch:
 
@@ -57,3 +50,50 @@ jobs:
           if ((Get-Content -Raw ai-job-hunting-ui/public/healthz).Trim() -ne 'ok') {
             throw 'Frontend health asset must contain exactly ok.'
           }
+      - name: Test release receipt and tag behavior
+        shell: pwsh
+        run: .\tests\job-helper-maintenance.tests.ps1
+
+  validate-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Parse maintenance scripts on Windows PowerShell
+        shell: powershell
+        run: |
+          $failed = $false
+          Get-ChildItem -LiteralPath . -Filter '*-job-helper.ps1' | ForEach-Object {
+            $tokens = $null
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile(
+              $_.FullName,
+              [ref]$tokens,
+              [ref]$errors
+            ) | Out-Null
+            if ($errors.Count -gt 0) {
+              $failed = $true
+              $errors | ForEach-Object { Write-Error ("{0}: {1}" -f $_.Extent.File, $_.Message) }
+            }
+          }
+          if ($failed) { exit 1 }
+      - name: Verify command responsibility boundaries
+        shell: powershell
+        run: |
+          $start = Get-Content -Raw start-job-helper.ps1
+          $build = Get-Content -Raw build-job-helper.ps1
+          $release = Get-Content -Raw release-job-helper.ps1
+          if ($start -notmatch '--no-build' -or $start -notmatch '--pull never') {
+            throw 'Start must prohibit builds and pulls.'
+          }
+          if ($start -match 'pnpm|mvn|sync-local-runtime') {
+            throw 'Start contains a build or publication command.'
+          }
+          if ($build -match 'compose[^\r\n]+up' -or $build -match 'sync-local-runtime\.mjs\s*(?:$|[\r\n])') {
+            throw 'Build contains startup or runtime publication.'
+          }
+          if (-not $release.Contains('Get-JobHelperRequiredWorkflows')) {
+            throw 'Release does not consume the tested required-workflow contract.'
+          }
+      - name: Test release receipt and tag behavior
+        shell: powershell
+        run: .\tests\job-helper-maintenance.tests.ps1

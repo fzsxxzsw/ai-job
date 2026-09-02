@@ -2,7 +2,7 @@ name: job-helper
 
 services:
   frontend:
-    image: nginx:1.27-alpine
+    image: ${JOB_HELPER_FRONTEND_IMAGE:-nginx:1.27-alpine}
     container_name: job-helper-frontend
     restart: unless-stopped
     volumes:
@@ -18,7 +18,7 @@ services:
       - job-helper
 
   mysql:
-    image: mysql:8.0
+    image: ${JOB_HELPER_MYSQL_IMAGE:-mysql:8.0}
     container_name: job-helper-mysql
     restart: unless-stopped
     command:
@@ -43,11 +43,16 @@ services:
       - job-helper
 
   backend:
+    image: ${JOB_HELPER_BACKEND_IMAGE:-job-helper-backend:release}
     container_name: job-helper-backend
     restart: unless-stopped
     build:
       context: ./ai-job-hunting-server
       dockerfile: Dockerfile.local
+      labels:
+        org.opencontainers.image.revision: ${JOB_HELPER_BUILD_SHA:-unreleased}
+        io.job-helper.build-id: ${JOB_HELPER_BUILD_ID:-unreleased}
+        io.job-helper.build-channel: ${JOB_HELPER_BUILD_CHANNEL:-unreleased}
     depends_on:
       mysql:
         condition: service_healthy
@@ -76,6 +81,30 @@ services:
       timeout: 5s
       retries: 8
       start_period: 20s
+    networks:
+      - job-helper
+
+  agent:
+    image: ${JOB_HELPER_AGENT_IMAGE:-job-helper-agent:release}
+    container_name: job-helper-agent
+    restart: unless-stopped
+    build:
+      context: ./ai-job-agent
+      dockerfile: Dockerfile
+      labels:
+        org.opencontainers.image.revision: ${JOB_HELPER_BUILD_SHA:-unreleased}
+        io.job-helper.build-id: ${JOB_HELPER_BUILD_ID:-unreleased}
+        io.job-helper.build-channel: ${JOB_HELPER_BUILD_CHANNEL:-unreleased}
+    environment:
+      TZ: Asia/Shanghai
+    ports:
+      - "127.0.0.1:9101:9101"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import json, urllib.request; response = urllib.request.urlopen('http://127.0.0.1:9101/health/ready', timeout=3); payload = json.load(response); raise SystemExit(0 if response.status == 200 and payload.get('status') == 'ready' else 1)"]
+      interval: 15s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
     networks:
       - job-helper
 

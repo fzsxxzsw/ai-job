@@ -1,252 +1,221 @@
+[CmdletBinding()]
+param(
+    [string]$ReleaseReceiptPath = "",
+    [switch]$SkipOperationLock
+)
+
 $ErrorActionPreference = "Stop"
+$ProgressPreference = "SilentlyContinue"
 Set-Location -LiteralPath $PSScriptRoot
+Import-Module (Join-Path $PSScriptRoot "job-helper-release-common.psm1") -Force
+$operationLock = if ($SkipOperationLock) { $null } else { Enter-JobHelperOperationLock -WorkspaceRoot $PSScriptRoot }
+try {
 
-$frontendDirectory = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "ai-job-hunting-ui")).Path
-$backendDirectory = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "ai-job-hunting-server")).Path
+$composeFile = Join-Path $PSScriptRoot "docker-compose.local.yml"
 $envPath = Join-Path $PSScriptRoot ".env"
-
-if (-not (Test-Path -LiteralPath $envPath)) {
-    throw ".env is missing. Copy .env.example and configure the local deployment before starting."
+$runtimePath = Join-Path $PSScriptRoot "ai-job-hunting-ui\public\ai-job-hunting-runtime.js"
+if ([string]::IsNullOrWhiteSpace($ReleaseReceiptPath)) {
+    $activePointerPath = Join-Path $PSScriptRoot ".job-helper-active.json"
+    if (-not (Test-Path -LiteralPath $activePointerPath -PathType Leaf)) {
+        throw "No active release pointer exists. Run release-job-helper.ps1 first."
+    }
+    $activePointer = Get-Content -Raw -LiteralPath $activePointerPath | ConvertFrom-Json
+    if ($activePointer.schemaVersion -ne 1 -or
+        [string]::IsNullOrWhiteSpace([string]$activePointer.receiptPath)) {
+        throw "The active release pointer is invalid."
+    }
+    $ReleaseReceiptPath = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot ([string]$activePointer.receiptPath)))
+    $workspacePrefix = $PSScriptRoot.TrimEnd('\') + '\'
+    if (-not $ReleaseReceiptPath.StartsWith($workspacePrefix, [StringComparison]::OrdinalIgnoreCase)) {
+        throw "The active release pointer escapes the workspace."
+    }
 }
 
 function Get-LocalEnvValue {
     param([Parameter(Mandatory)][string]$Name)
-
     $prefix = "$Name="
-    $line = Get-Content -LiteralPath $envPath |
-        Where-Object { $_.StartsWith($prefix, [System.StringComparison]::Ordinal) } |
-        Select-Object -First 1
+    $line = Get-Content -LiteralPath $envPath | Where-Object {
+        $_.StartsWith($prefix, [System.StringComparison]::Ordinal)
+    } | Select-Object -First 1
     if ($null -eq $line) { return "" }
     return $line.Substring($prefix.Length).Trim().Trim('"').Trim("'")
 }
 
-$requiredEnvNames = @(
-    "MYSQL_ROOT_PASSWORD",
-    "MYSQL_PASSWORD",
-    "SMART_PASSWORD",
-    "AI_API_KEY",
-    "AI_BASE_URL",
-    "AI_MODEL",
-    "AI_TIMEOUT_SECONDS",
-    "AI_THINKING_BUDGET"
-)
-$missingEnvNames = @(
-    $requiredEnvNames | Where-Object { [string]::IsNullOrWhiteSpace((Get-LocalEnvValue -Name $_)) }
-)
-if ($missingEnvNames.Count -gt 0) {
-    throw "Required .env entries are missing or empty: $($missingEnvNames -join ', ')"
-}
-if ((Get-LocalEnvValue -Name "AI_MODEL") -ne "qwen3-vl-32b-thinking") {
-    throw "AI_MODEL must be qwen3-vl-32b-thinking for this deployment."
-}
-if ((Get-LocalEnvValue -Name "AI_TIMEOUT_SECONDS") -ne "15") {
-    throw "AI_TIMEOUT_SECONDS must be 15 for this deployment."
-}
-if ((Get-LocalEnvValue -Name "AI_THINKING_BUDGET") -ne "256") {
-    throw "AI_THINKING_BUDGET must be 256 for the qwen3-vl-32b-thinking low-latency profile."
+function Get-BytesSha256 {
+    param([Parameter(Mandatory)][byte[]]$Bytes)
+    $algorithm = [Security.Cryptography.SHA256]::Create()
+    try {
+        return ([BitConverter]::ToString($algorithm.ComputeHash($Bytes))).Replace("-", "").ToLowerInvariant()
+    }
+    finally { $algorithm.Dispose() }
 }
 
-function Get-FrontendListenerProcesses {
-    param([int]$Port)
+function Get-HttpBytes {
+    param([Parameter(Mandatory)][string]$Uri)
+    $client = New-Object Net.WebClient
+    try { return ,$client.DownloadData($Uri) }
+    finally { $client.Dispose() }
+}
 
-    $listenerProcessIds = @(
-        Get-NetTCPConnection -State Listen -LocalPort $Port -ErrorAction SilentlyContinue |
-            Select-Object -ExpandProperty OwningProcess -Unique
+function Assert-RequiredEnvironment {
+    $required = @(
+        "MYSQL_ROOT_PASSWORD", "MYSQL_PASSWORD", "SMART_PASSWORD", "AI_API_KEY",
+        "AI_BASE_URL", "AI_MODEL", "AI_TIMEOUT_SECONDS", "AI_THINKING_BUDGET"
     )
-    foreach ($listenerProcessId in $listenerProcessIds) {
-        $listenerProcess = Get-CimInstance Win32_Process `
-            -Filter "ProcessId = $listenerProcessId" `
-            -ErrorAction SilentlyContinue
-        if (-not $listenerProcess) {
-            throw "Port $Port is listening, but its owning process ($listenerProcessId) could not be inspected. Refusing to reuse the port."
-        }
-        $listenerProcess
+    $missing = @($required | Where-Object {
+        [string]::IsNullOrWhiteSpace((Get-LocalEnvValue -Name $_))
+    })
+    if ($missing.Count -gt 0) {
+        throw "Required .env entries are missing or empty: $($missing -join ', ')"
     }
 }
 
-function Test-IsProjectFrontendProcess {
-    param([object]$ProcessInfo)
-
-    $commandLine = [string]$ProcessInfo.CommandLine
-    if ([string]::IsNullOrWhiteSpace($commandLine)) {
-        return $false
+function Get-DockerImageMetadata {
+    param([Parameter(Mandatory)][string]$Image)
+    $json = & docker image inspect $Image 2>$null
+    if ($LASTEXITCODE -ne 0) {
+        throw "Required local image '$Image' is missing. Start never pulls or builds images."
     }
-
-    $usesProjectDirectory = $commandLine.IndexOf(
-        $frontendDirectory,
-        [System.StringComparison]::OrdinalIgnoreCase
-    ) -ge 0
-    $isViteProcess = $commandLine -match '(?i)(^|[\\/\s"])vite(?:\.js)?([\\/\s"]|$)|node_modules[\\/].*vite'
-    return $usesProjectDirectory -and $isViteProcess
+    return @($json | ConvertFrom-Json)[0]
 }
 
-function Stop-LegacyProjectFrontend {
-    param([int]$Port)
-
-    $listenerProcesses = @(Get-FrontendListenerProcesses -Port $Port)
-    if ($listenerProcesses.Count -eq 0) {
-        return
-    }
-
-    $dockerFrontendRunning = docker ps `
-        --filter "name=^/job-helper-frontend$" `
-        --filter "status=running" `
-        --format "{{.Names}}"
-    if ($dockerFrontendRunning -contains "job-helper-frontend") {
-        return
-    }
-
-    $projectViteProcesses = @(
-        $listenerProcesses | Where-Object { Test-IsProjectFrontendProcess -ProcessInfo $_ }
+function Assert-ProjectImage {
+    param(
+        [Parameter(Mandatory)][string]$Image,
+        [Parameter(Mandatory)][string]$ExpectedSha,
+        [Parameter(Mandatory)][string]$ExpectedBuildId,
+        [Parameter(Mandatory)][string]$ExpectedImageId
     )
-    $unexpectedProcesses = @(
-        $listenerProcesses | Where-Object { -not (Test-IsProjectFrontendProcess -ProcessInfo $_) }
+    $metadata = Get-DockerImageMetadata -Image $Image
+    $revision = [string]$metadata.Config.Labels.'org.opencontainers.image.revision'
+    $buildId = [string]$metadata.Config.Labels.'io.job-helper.build-id'
+    if ($revision -ne $ExpectedSha -or $buildId -ne $ExpectedBuildId -or
+        [string]$metadata.Id -ne $ExpectedImageId) {
+        throw "Image '$Image' does not match release SHA/build ID. Re-run release-job-helper.ps1 after CI succeeds."
+    }
+}
+
+function Wait-HttpHealth {
+    param(
+        [Parameter(Mandatory)][string]$Name,
+        [Parameter(Mandatory)][string]$Uri,
+        [Parameter(Mandatory)][scriptblock]$IsHealthy,
+        [ValidateRange(1, 300)][int]$TimeoutSeconds
     )
-    if ($unexpectedProcesses.Count -gt 0) {
-        $processDetails = @(
-            $unexpectedProcesses | ForEach-Object {
-                "PID=$($_.ProcessId); Name=$($_.Name); Executable=$($_.ExecutablePath)"
-            }
-        ) -join [Environment]::NewLine
-        throw "Port $Port is occupied by a process outside Job Helper. Refusing to stop it.$([Environment]::NewLine)$processDetails"
-    }
-
-    foreach ($projectViteProcess in $projectViteProcesses) {
-        Write-Host "Stopping legacy Job Helper Vite process PID=$($projectViteProcess.ProcessId)..."
-        Stop-Process -Id $projectViteProcess.ProcessId -Force
+    $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+    $response = $null
+    do {
+        Start-Sleep -Milliseconds 750
+        try { $response = Invoke-RestMethod -Uri $Uri -TimeoutSec 5 }
+        catch { $response = $null }
+    } while (-not (& $IsHealthy $response) -and [DateTime]::UtcNow -lt $deadline)
+    if (-not (& $IsHealthy $response)) {
+        throw "Timed out waiting for $Name at $Uri. Run status-job-helper.ps1 for diagnosis."
     }
 }
 
-if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
-    throw "Docker Desktop is not installed. Install and start Docker Desktop first."
+if (-not (Test-Path -LiteralPath $envPath -PathType Leaf)) { throw ".env is missing." }
+if (-not (Test-Path -LiteralPath $composeFile -PathType Leaf)) { throw "docker-compose.local.yml is missing." }
+if (-not (Test-Path -LiteralPath $ReleaseReceiptPath -PathType Leaf)) {
+    throw "Release receipt '$ReleaseReceiptPath' is missing. Run release-job-helper.ps1 first."
+}
+if (-not (Test-Path -LiteralPath $runtimePath -PathType Leaf)) {
+    throw "The published userscript runtime is missing. Run release-job-helper.ps1 first."
+}
+if (-not (Get-Command docker -ErrorAction SilentlyContinue)) { throw "Docker Desktop is not installed." }
+$null = & docker info --format '{{.ServerVersion}}' 2>$null
+if ($LASTEXITCODE -ne 0) { throw "Docker Desktop is not running." }
+Assert-RequiredEnvironment
+
+$receipt = Get-Content -Raw -LiteralPath $ReleaseReceiptPath | ConvertFrom-Json
+if ($receipt.schemaVersion -ne 1 -or $receipt.releaseSha -notmatch '^[a-f0-9]{40}$' -or
+    $receipt.buildId -notmatch '^[a-z0-9][a-z0-9._-]{2,79}$' -or
+    $receipt.runtimeSha256 -notmatch '^[a-f0-9]{64}$' -or
+    $receipt.frontendImageId -notmatch '^sha256:[a-f0-9]{64}$' -or
+    $receipt.mysqlImageId -notmatch '^sha256:[a-f0-9]{64}$' -or
+    $receipt.backendImageId -notmatch '^sha256:[a-f0-9]{64}$' -or
+    $receipt.agentImageId -notmatch '^sha256:[a-f0-9]{64}$') {
+    throw "Release receipt is invalid."
+}
+if ($receipt.frontendImage -ne "nginx:1.27-alpine" -or $receipt.mysqlImage -ne "mysql:8.0") {
+    throw "Release receipt contains unsupported infrastructure images."
+}
+Assert-JobHelperReceiptChannel -Receipt $receipt
+if ($receipt.channel -eq "release" -and $receipt.workingTreeDirty) {
+    throw "A formal release receipt cannot describe a dirty working tree."
+}
+if ($receipt.workingTreeDirty -and $receipt.diffHash -notmatch '^[a-f0-9]{64}$') {
+    throw "Dirty release receipt is missing its diff identity."
 }
 
-docker info *> $null
-if ($LASTEXITCODE -ne 0) {
-    throw "Docker Desktop is installed but not running. Start Docker Desktop, wait until it is ready, then run this script again."
+$localRuntimeSha = (Get-FileHash -LiteralPath $runtimePath -Algorithm SHA256).Hash.ToLowerInvariant()
+if ($localRuntimeSha -ne $receipt.runtimeSha256) {
+    throw "Published runtime on disk does not match the release receipt."
+}
+$runtimeText = [IO.File]::ReadAllText($runtimePath)
+if (-not $runtimeText.Contains([string]$receipt.buildId)) {
+    throw "Published runtime does not contain the expected build ID."
 }
 
-$pnpmCommand = Get-Command pnpm.cmd -ErrorAction SilentlyContinue
-if (-not $pnpmCommand) {
-    throw "pnpm.cmd was not found. Install pnpm before starting Job Helper."
+# All four images must already exist. Project images must also carry the exact
+# source/build labels recorded by release-job-helper.ps1.
+$frontendMetadata = Get-DockerImageMetadata -Image $receipt.frontendImage
+$mysqlMetadata = Get-DockerImageMetadata -Image $receipt.mysqlImage
+Assert-JobHelperImageIdentity -Name "Frontend" `
+    -ExpectedImageId $receipt.frontendImageId -ActualImageId ([string]$frontendMetadata.Id)
+Assert-JobHelperImageIdentity -Name "MySQL" `
+    -ExpectedImageId $receipt.mysqlImageId -ActualImageId ([string]$mysqlMetadata.Id)
+Assert-ProjectImage -Image $receipt.backendImage -ExpectedSha $receipt.releaseSha `
+    -ExpectedBuildId $receipt.buildId -ExpectedImageId $receipt.backendImageId
+Assert-ProjectImage -Image $receipt.agentImage -ExpectedSha $receipt.releaseSha `
+    -ExpectedBuildId $receipt.buildId -ExpectedImageId $receipt.agentImageId
+
+$listeners = @(Get-NetTCPConnection -State Listen -LocalPort 5173 -ErrorAction SilentlyContinue)
+$dockerFrontend = & docker ps --filter "name=^/job-helper-frontend$" --filter "status=running" --format "{{.Names}}"
+if ($listeners.Count -gt 0 -and $dockerFrontend -notcontains "job-helper-frontend") {
+    throw "Port 5173 is occupied outside Job Helper. Resolve the conflict, then retry."
 }
 
-Write-Host "Testing and staging the latest local userscript runtime..."
-Push-Location -LiteralPath $frontendDirectory
+$previousFrontendImage = $env:JOB_HELPER_FRONTEND_IMAGE
+$previousMysqlImage = $env:JOB_HELPER_MYSQL_IMAGE
+$previousBackendImage = $env:JOB_HELPER_BACKEND_IMAGE
+$previousAgentImage = $env:JOB_HELPER_AGENT_IMAGE
 try {
-    Write-Host "Running frontend regression tests..."
-    & $pnpmCommand.Source run test
+    $env:JOB_HELPER_FRONTEND_IMAGE = [string]$receipt.frontendImage
+    $env:JOB_HELPER_MYSQL_IMAGE = [string]$receipt.mysqlImage
+    $env:JOB_HELPER_BACKEND_IMAGE = [string]$receipt.backendImage
+    $env:JOB_HELPER_AGENT_IMAGE = [string]$receipt.agentImage
+    Write-Host "Starting verified build $($receipt.buildId) without builds or pulls..."
+    & docker compose --env-file $envPath -f $composeFile up -d --no-build --pull never
     if ($LASTEXITCODE -ne 0) {
-        throw "Frontend tests failed with exit code $LASTEXITCODE. Startup was aborted."
-    }
-
-    & $pnpmCommand.Source run build:local:bundle
-    if ($LASTEXITCODE -ne 0) {
-        throw "Frontend bundle build failed with exit code $LASTEXITCODE. Startup was aborted before any served runtime was changed."
-    }
-
-    & node scripts/sync-local-runtime.mjs --validate-only
-    if ($LASTEXITCODE -ne 0) {
-        throw "Frontend runtime contract validation failed with exit code $LASTEXITCODE. Startup was aborted before any served runtime was changed."
+        throw "Docker Compose startup failed with exit code $LASTEXITCODE."
     }
 }
 finally {
-    Pop-Location
+    $env:JOB_HELPER_FRONTEND_IMAGE = $previousFrontendImage
+    $env:JOB_HELPER_MYSQL_IMAGE = $previousMysqlImage
+    $env:JOB_HELPER_BACKEND_IMAGE = $previousBackendImage
+    $env:JOB_HELPER_AGENT_IMAGE = $previousAgentImage
 }
 
-Write-Host "Running backend regression tests in an isolated Maven container..."
-& docker run --rm `
-    --mount "type=bind,source=$backendDirectory,target=/workspace" `
-    --mount "type=volume,source=job-helper-maven-cache,target=/root/.m2" `
-    --workdir /workspace `
-    maven:3.9.9-eclipse-temurin-17 `
-    mvn --batch-mode --no-transfer-progress test
-if ($LASTEXITCODE -ne 0) {
-    throw "Backend tests failed with exit code $LASTEXITCODE. Startup was aborted."
+Wait-HttpHealth -Name "frontend" -Uri "http://127.0.0.1:5173/healthz" -TimeoutSeconds 45 `
+    -IsHealthy { param($value) $null -ne $value -and ([string]$value).Trim() -eq "ok" }
+$servedBytes = Get-HttpBytes -Uri "http://127.0.0.1:5173/ai-job-hunting-runtime.js"
+$servedSha = Get-BytesSha256 -Bytes $servedBytes
+if ($servedSha -ne $receipt.runtimeSha256 -or
+    -not [Text.Encoding]::UTF8.GetString($servedBytes).Contains([string]$receipt.buildId)) {
+    throw "The runtime served on port 5173 does not match the release SHA/build ID receipt."
 }
+Wait-HttpHealth -Name "Java backend" -Uri "http://127.0.0.1:9100/actuator/health" -TimeoutSeconds 90 `
+    -IsHealthy { param($value) $null -ne $value -and $value.status -eq "UP" }
+Wait-HttpHealth -Name "Python Agent" -Uri "http://127.0.0.1:9101/health/ready" -TimeoutSeconds 45 `
+    -IsHealthy { param($value) $null -ne $value -and $value.status -eq "ready" }
 
-# The userscript runtime is now served by a restartable Docker container. Clean up
-# the old Vite listener only when it can be proven to belong to this workspace.
-Stop-LegacyProjectFrontend -Port 5173
-if (Test-Path -LiteralPath (Join-Path $PSScriptRoot ".job-helper-frontend.pid")) {
-    Remove-Item -LiteralPath (Join-Path $PSScriptRoot ".job-helper-frontend.pid") -Force
-}
-
-docker compose --env-file .env -f docker-compose.local.yml up -d --build
-if ($LASTEXITCODE -ne 0) {
-    throw "Docker Compose failed with exit code $LASTEXITCODE."
-}
-
-$frontendStartDeadline = [DateTime]::UtcNow.AddSeconds(45)
-do {
-    Start-Sleep -Milliseconds 500
-    try {
-        $frontendResponse = Invoke-WebRequest `
-            -Uri "http://127.0.0.1:5173/healthz" `
-            -UseBasicParsing `
-            -TimeoutSec 3
-    }
-    catch {
-        $frontendResponse = $null
-    }
-} while (($null -eq $frontendResponse -or $frontendResponse.StatusCode -ne 200) -and
-         [DateTime]::UtcNow -lt $frontendStartDeadline)
-
-if ($null -eq $frontendResponse -or $frontendResponse.StatusCode -ne 200) {
-    throw "Timed out waiting for the Docker frontend health endpoint on port 5173."
-}
-
-$backendStartDeadline = [DateTime]::UtcNow.AddSeconds(90)
-do {
-    Start-Sleep -Milliseconds 750
-    try {
-        $backendHealth = Invoke-RestMethod `
-            -Uri "http://127.0.0.1:9100/actuator/health" `
-            -TimeoutSec 5
-    }
-    catch {
-        $backendHealth = $null
-    }
-} while (($null -eq $backendHealth -or $backendHealth.status -ne "UP") -and
-         [DateTime]::UtcNow -lt $backendStartDeadline)
-
-if ($null -eq $backendHealth -or $backendHealth.status -ne "UP") {
-    throw "Timed out waiting for the backend health endpoint on port 9100."
-}
-
-# Publish the already validated frontend only after the new backend is healthy.
-# sync-local-runtime uses atomic renames, so Chrome never reads a half-written bundle.
-Push-Location -LiteralPath $frontendDirectory
-try {
-    & node scripts/sync-local-runtime.mjs
-    if ($LASTEXITCODE -ne 0) {
-        throw "Publishing the validated frontend runtime failed with exit code $LASTEXITCODE."
-    }
+Write-Host "Job Helper is ready: channel=$($receipt.channel) sha=$($receipt.releaseSha) build=$($receipt.buildId) runtime_sha256=$servedSha"
+Write-Host "Java API:     http://127.0.0.1:9100/"
+Write-Host "Python Agent: http://127.0.0.1:9101/ (read-only)"
+Write-Host "Frontend:     http://127.0.0.1:5173/"
 }
 finally {
-    Pop-Location
+    Exit-JobHelperOperationLock -Mutex $operationLock
 }
-
-try {
-    $runtimeHead = Invoke-WebRequest `
-        -Uri "http://127.0.0.1:5173/ai-job-hunting-runtime.js" `
-        -Method Head `
-        -UseBasicParsing `
-        -TimeoutSec 5
-}
-catch {
-    throw "Frontend health endpoint is available, but the published userscript runtime cannot be read."
-}
-$runtimeContentLength = [long]($runtimeHead.Headers.'Content-Length' | Select-Object -First 1)
-if ($runtimeHead.StatusCode -ne 200 -or $runtimeContentLength -lt 100000) {
-    throw "The published userscript runtime response is unexpectedly small or invalid."
-}
-
-Write-Host ""
-Write-Host "Job Helper is ready. Frontend, runtime, database dependency, and backend health checks passed."
-Write-Host "API:         http://127.0.0.1:9100/"
-Write-Host "SmartConfig: http://127.0.0.1:6768/"
-Write-Host "Frontend:    http://127.0.0.1:5173/"
-Write-Host "Userscript:  $PSScriptRoot\ai-job-hunting-local.user.js"
-Write-Host ""
-Write-Host "Use http://127.0.0.1:9100/ in the userscript server configuration."
