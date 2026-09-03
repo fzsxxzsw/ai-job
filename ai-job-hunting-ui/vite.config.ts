@@ -18,7 +18,7 @@ let matchUrlList: string[] = [
 export default defineConfig(({mode}) => {
     const isProduction = mode === 'production';
     const isLocalBuild = mode === 'personal' || mode === 'development';
-    const runtimeVersion = isLocalBuild ? '0.0.61-local' : '0.0.25-beta';
+    const runtimeVersion = isLocalBuild ? '0.0.62-local' : '0.0.27-beta';
     const buildId = process.env.JOB_HELPER_BUILD_ID
         || new Date().toISOString().replace(/[-:.]/g, '').replace('T', '-').slice(0, 17) + 'Z';
 

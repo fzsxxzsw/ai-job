@@ -3,6 +3,7 @@ import {ElMessage} from "./utils/tools";
 import {BizCodeEnum} from "./types";
 import {ProductStore} from "./stores";
 import {DEFAULT_SERVER_URL, ServerStore} from "./stores/server";
+import {shouldShowGlobalErrorToast} from "./requestFeedback";
 
 
 /**
@@ -54,6 +55,7 @@ function handlerErrorCode(result: any) {
  */
 request.interceptors.response.use((resp: any) => {
         const serverStore = ServerStore()
+        const showErrorToast = shouldShowGlobalErrorToast(resp?.config)
         serverStore.setStatus('online')
 
         // http的响应状态码会进入这里
@@ -69,10 +71,12 @@ request.interceptors.response.use((resp: any) => {
         if (result.code === 401) {
             let authorization = localStorage.getItem('Authorization');
             if (authorization) {
-                ElMessage({
-                    type: "error",
-                    message: "登录过期，请刷新页面重试"
-                });
+                if (showErrorToast) {
+                    ElMessage({
+                        type: "error",
+                        message: "登录过期，请刷新页面重试"
+                    });
+                }
                 return;
             }
             return Promise.reject(result.message)
@@ -80,10 +84,12 @@ request.interceptors.response.use((resp: any) => {
 
         if (!result.code || result.code === 500 || result.code >= 5000) {
             // 代码执行下来，说明code不为200，或者result有问题【使用弹窗提示,可能为空白】
-            ElMessage({
-                type: "error",
-                message: result.message ? result.message : '系统异常'
-            });
+            if (showErrorToast) {
+                ElMessage({
+                    type: "error",
+                    message: result.message ? result.message : '系统异常'
+                });
+            }
             handlerErrorCode(result);
         }
         // 使请求不进入正常的响应处理函数
@@ -97,17 +103,20 @@ request.interceptors.response.use((resp: any) => {
      */
     error => {
         const serverStore = ServerStore()
+        const showErrorToast = shouldShowGlobalErrorToast(error?.config)
 
         // 到达前端axios设置的超时时间
         if (error.code === 'ECONNABORTED') {
             serverStore.setStatus('offline', '请求超时')
             // 弹窗提示
-            ElMessage({
-                message: '网络超时',
-                type: 'error',
-                grouping: true,
-                duration: 2000
-            })
+            if (showErrorToast) {
+                ElMessage({
+                    message: '网络超时',
+                    type: 'error',
+                    grouping: true,
+                    duration: 2000
+                })
+            }
             // 使请求不进入正常的响应处理函数
             return Promise.reject("time out")
         }
@@ -115,12 +124,14 @@ request.interceptors.response.use((resp: any) => {
         if (error.code === 'ERR_NETWORK') {
             serverStore.setStatus('offline', '无法访问服务器')
             // 弹窗提示
-            ElMessage({
-                message: '系统异常,请稍后重试',
-                type: 'error',
-                grouping: true,
-                duration: 2000
-            })
+            if (showErrorToast) {
+                ElMessage({
+                    message: '系统异常,请稍后重试',
+                    type: 'error',
+                    grouping: true,
+                    duration: 2000
+                })
+            }
             // 使请求不进入正常的响应处理函数
             return Promise.reject(() => {
             })
@@ -136,12 +147,14 @@ request.interceptors.response.use((resp: any) => {
         }
 
         // 弹窗提示，3秒
-        ElMessage({
-            message: error.message,
-            type: 'error',
-            grouping: true,
-            duration: 3000
-        })
+        if (showErrorToast) {
+            ElMessage({
+                message: error.message,
+                type: 'error',
+                grouping: true,
+                duration: 3000
+            })
+        }
 
         // 使请求不进入正常的响应处理函数
         return Promise.reject(error)

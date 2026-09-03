@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AI工作猎手-本地个人版
 // @namespace    https://github.com/yangfeng20
-// @version      0.0.61-local
+// @version      0.0.62-local
 // @author       maple.
 // @description  AI工作猎手本地启动器：从本机加载自包含运行代码，不依赖公共CDN。
 // @license      Apache License 2.0
@@ -33,7 +33,7 @@
     const loaderKey = '__AI_JOB_HELPER_LOCAL_LOADER_V1__';
     const runtimeStatusKey = '__AI_JOB_HELPER_RUNTIME_STATUS__';
     const instanceLockKey = '__AI_JOB_HELPER_ACTIVE_INSTANCE_V1__';
-    const loaderVersion = GM_info?.script?.version || '0.0.61-local';
+    const loaderVersion = GM_info?.script?.version || '0.0.62-local';
     const previousState = pageWindow[loaderKey];
     const previousLock = pageWindow[instanceLockKey];
     const previousRuntime = pageWindow[runtimeStatusKey];

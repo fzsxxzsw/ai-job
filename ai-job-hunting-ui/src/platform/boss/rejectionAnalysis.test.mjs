@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import {
+    APPLICATION_SNAPSHOT_REQUEST_CONFIG,
     appendRejectionMessage,
     buildRejectionAnalyzePayload,
     clearRejectionMessageBuffers,
@@ -156,6 +157,11 @@ test('older visible history cannot displace the newest buffered messages', () =>
         'new-2',
         'new-3',
     ])
+})
+
+test('snapshot persistence stays non-blocking when the optional backend route is unavailable', () => {
+    assert.equal(APPLICATION_SNAPSHOT_REQUEST_CONFIG.timeout, 5000)
+    assert.equal(APPLICATION_SNAPSHOT_REQUEST_CONFIG.suppressGlobalErrorToast, true)
 })
 
 test('snapshot save retries transient failures and resolves the idempotent success', async () => {

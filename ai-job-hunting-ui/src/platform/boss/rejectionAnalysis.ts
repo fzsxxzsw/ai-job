@@ -351,9 +351,14 @@ async function apiRequest() {
     return (await import('../../axios')).default
 }
 
+export const APPLICATION_SNAPSHOT_REQUEST_CONFIG = {
+    timeout: 5000,
+    suppressGlobalErrorToast: true,
+} as const
+
 export async function saveApplicationSnapshot(payload: ApplicationSnapshotPayload): Promise<ApplicationSnapshotVO> {
     const request = await apiRequest()
-    const response = await request.post('/api/job/ai/applications/snapshot', payload, {timeout: 5000})
+    const response = await request.post('/api/job/ai/applications/snapshot', payload, APPLICATION_SNAPSHOT_REQUEST_CONFIG)
     return response.data.data as ApplicationSnapshotVO
 }
 
