@@ -13,8 +13,10 @@ $requiredWorkflows = @(Get-JobHelperRequiredWorkflows)
 
 function Get-GitHubRepositoryFromRemote {
     param([Parameter(Mandatory)][string]$RemoteName)
-    $remoteUrl = (& git remote get-url $RemoteName 2>$null | Select-Object -First 1)
-    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($remoteUrl)) {
+    $remoteUrls = @(& git remote get-url $RemoteName 2>$null)
+    $remoteExitCode = $LASTEXITCODE
+    $remoteUrl = $remoteUrls | Select-Object -First 1
+    if ($remoteExitCode -ne 0 -or [string]::IsNullOrWhiteSpace($remoteUrl)) {
         throw "Git remote '$RemoteName' is unavailable."
     }
     if ($remoteUrl -notmatch 'github\.com[/:](?<repository>[^\s]+)$') {

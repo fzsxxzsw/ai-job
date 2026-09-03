@@ -75,6 +75,13 @@ $repositoryRoot = Split-Path -Parent $PSScriptRoot
 $startScript = Get-Content -Raw -LiteralPath (Join-Path $repositoryRoot "start-job-helper.ps1")
 $releaseScript = Get-Content -Raw -LiteralPath (Join-Path $repositoryRoot "release-job-helper.ps1")
 $composeScript = Get-Content -Raw -LiteralPath (Join-Path $repositoryRoot "docker-compose.local.yml")
+$remoteProbePattern = '\$remoteUrls\s*=\s*@\(& git remote get-url \$RemoteName 2>\$null\)\s*\r?\n\s*\$remoteExitCode\s*=\s*\$LASTEXITCODE\s*\r?\n\s*\$remoteUrl\s*=\s*\$remoteUrls\s*\|\s*Select-Object -First 1'
+if ($releaseScript -notmatch $remoteProbePattern) {
+    throw "Release must capture git remote exit status before selecting the first URL."
+}
+if ($releaseScript -match '& git remote get-url \$RemoteName 2>\$null \| Select-Object') {
+    throw "Release must not read LASTEXITCODE after piping git remote output."
+}
 $expectedFrontendHealthLine = 'test: ["CMD-SHELL", "tmp=$$(mktemp) || exit 1; trap ''rm -f \"$$tmp\"'' EXIT; wget -qO \"$$tmp\" http://127.0.0.1/healthz || exit 1; hex=$$(od -An -tx1 \"$$tmp\" | tr -d '' \\n''); case \"$$hex\" in 6f6b|6f6b0a|6f6b0d0a) exit 0 ;; *) exit 1 ;; esac"]'
 if (-not $composeScript.Contains($expectedFrontendHealthLine)) {
     throw "Frontend healthcheck must use the exact byte whitelist and cleanup-safe temporary-file probe."
