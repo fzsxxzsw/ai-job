@@ -1,17 +1,16 @@
 package com.maple.ai.job.hunting.service.ai.impl;
 
-import cn.hutool.json.JSONArray;
-import cn.hutool.json.JSONObject;
+import cn.hutool.core.util.IdUtil;
 import com.maple.ai.job.hunting.config.ai.KimiAIConfig;
 import com.maple.ai.job.hunting.consts.AIPromptStrConstant;
 import com.maple.ai.job.hunting.emums.AiFileResolveResultTypeEnum;
+import com.maple.ai.job.hunting.frame.exp.ApplicationException;
 import com.maple.ai.job.hunting.model.AiFileResolveResult;
-import com.maple.ai.job.hunting.service.ai.helper.MoonshotAiUtils;
 import jakarta.annotation.Resource;
-import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
-import org.apache.commons.io.IOUtils;
-import org.apache.commons.lang3.concurrent.BasicThreadFactory;
+import org.apache.commons.lang3.StringUtils;
+import org.apache.pdfbox.pdmodel.PDDocument;
+import org.apache.pdfbox.text.PDFTextStripper;
 import org.springframework.ai.chat.ChatResponse;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.SystemMessage;
@@ -20,11 +19,10 @@ import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.openai.OpenAiChatClient;
 import org.springframework.stereotype.Service;
 
+import java.io.IOException;
 import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.concurrent.ScheduledThreadPoolExecutor;
-import java.util.concurrent.TimeUnit;
 
 /**
  * @author maple
@@ -39,9 +37,6 @@ public class KimiAIService extends OpenAIService {
     @Resource
     private KimiAIConfig.KimiAIChatClient kimiAIChatClient;
 
-    @Resource
-    private MoonshotAiUtils moonshotAiUtils;
-
     @Override
     protected OpenAiChatClient getClient() {
         return kimiAIChatClient;
@@ -49,43 +44,35 @@ public class KimiAIService extends OpenAIService {
 
     @Override
     public void init() {
-        // 避免重复执行父类的init
-        //super.init();
-
-        // 定时清理kimi文件(限制1000个文件)
-        ScheduledThreadPoolExecutor executor = new ScheduledThreadPoolExecutor(1, new BasicThreadFactory.Builder().namingPattern("kimi-file-clear-%d").build());
-        executor.scheduleAtFixedRate(this::clearFile, 0, 30, TimeUnit.MINUTES);
+        // 简历 PDF 在本机解析，不再上传到 Moonshot，也不需要云端文件清理任务。
+        log.info("Kimi file service initialized with local PDF parsing");
     }
 
-    public void clearFile() {
-        try {
-            JSONArray fileList = moonshotAiUtils.getFileList();
-            if (fileList.size() < 500) {
-                log.info("kimi 文件数量小于500 不需要清理");
-                return;
-            }
-
-            fileList.stream().limit(10).map(item -> ((JSONObject) item).getStr("id")).forEach(fileId -> {
-                JSONObject deleted = moonshotAiUtils.deleteFile(fileId);
-                log.info("kimi 清理文件 id:{} result:{}", fileId, deleted);
-            });
-        } catch (Exception e) {
-            log.error("执行 kimi 文件清理任务失败: {}", e.getMessage());
-        }
-    }
-
-    @SneakyThrows
     @Override
     public AiFileResolveResult readFile(InputStream inputStream, String ask) {
-        JSONObject uploadResult = moonshotAiUtils.uploadFile(IOUtils.toByteArray(inputStream));
-        JSONObject fileContentResult = moonshotAiUtils.getFileContent(uploadResult.getStr("id"));
+        String content = extractPdfText(inputStream);
         return AiFileResolveResult.builder()
-                .fileId(uploadResult.getStr("id"))
+                .fileId("local-" + IdUtil.fastUUID())
                 .resolveResultType(AiFileResolveResultTypeEnum.UNRESOLVED)
-                .originalFileContent(fileContentResult.getStr("content"))
+                .originalFileContent(content)
                 .resolveResult(null)
                 .extra(null)
                 .build();
+    }
+
+    static String extractPdfText(InputStream inputStream) {
+        try (PDDocument document = PDDocument.load(inputStream)) {
+            String content = new PDFTextStripper().getText(document);
+            if (StringUtils.isBlank(content)) {
+                throw new ApplicationException("未能从 PDF 提取文本，请确认简历不是纯图片扫描件");
+            }
+            return content;
+        } catch (ApplicationException e) {
+            throw e;
+        } catch (IOException | RuntimeException e) {
+            log.warn("本地解析 PDF 简历失败: {}", e.getMessage());
+            throw new ApplicationException("解析 PDF 简历失败，请重新下载简历后重试");
+        }
     }
 
     /**
