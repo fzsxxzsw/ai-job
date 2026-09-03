@@ -72,9 +72,15 @@ Assert-Equal -Actual $emptyState.delays.Count -Expected 0 -Name "empty successfu
 Assert-Equal -Actual $emptyOutput.Count -Expected 0 -Name "empty successful probe output"
 
 $repositoryRoot = Split-Path -Parent $PSScriptRoot
+$buildScript = Get-Content -Raw -LiteralPath (Join-Path $repositoryRoot "build-job-helper.ps1")
 $startScript = Get-Content -Raw -LiteralPath (Join-Path $repositoryRoot "start-job-helper.ps1")
 $releaseScript = Get-Content -Raw -LiteralPath (Join-Path $repositoryRoot "release-job-helper.ps1")
 $composeScript = Get-Content -Raw -LiteralPath (Join-Path $repositoryRoot "docker-compose.local.yml")
+$imageProbePattern = '\$ErrorActionPreference\s*=\s*"Continue"\s*\r?\n\s*\$null\s*=\s*& docker image inspect \$immutableImage 2>\$null\s*\r?\n\s*\$imageExists\s*=\s*\$LASTEXITCODE -eq 0'
+if ($buildScript -notmatch $imageProbePattern -or $buildScript -notmatch 'if \(\$imageExists\)') {
+    throw "Build must treat a missing immutable Docker tag as a normal probe result on Windows PowerShell."
+}
+
 $remoteProbePattern = '\$remoteUrls\s*=\s*@\(& git remote get-url \$RemoteName 2>\$null\)\s*\r?\n\s*\$remoteExitCode\s*=\s*\$LASTEXITCODE\s*\r?\n\s*\$remoteUrl\s*=\s*\$remoteUrls\s*\|\s*Select-Object -First 1'
 if ($releaseScript -notmatch $remoteProbePattern) {
     throw "Release must capture git remote exit status before selecting the first URL."

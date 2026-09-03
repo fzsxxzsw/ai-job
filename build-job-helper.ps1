@@ -62,11 +62,20 @@ else { $BuildId }
 $backendImage = "job-helper-backend:$imageTag"
 $agentImage = "job-helper-agent:$imageTag"
 foreach ($immutableImage in @($backendImage, $agentImage)) {
-    $null = & docker image inspect $immutableImage 2>$null
-    if ($LASTEXITCODE -eq 0) {
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+        # A missing immutable tag is the expected path. Windows PowerShell can
+        # promote native stderr to a terminating error while the global mode is Stop.
+        $ErrorActionPreference = "Continue"
+        $null = & docker image inspect $immutableImage 2>$null
+        $imageExists = $LASTEXITCODE -eq 0
+    }
+    finally { $ErrorActionPreference = $previousErrorActionPreference }
+    if ($imageExists) {
         throw "Immutable candidate image tag '$immutableImage' already exists; choose a new BuildId."
     }
 }
+
 
 $previousBuildId = $env:JOB_HELPER_BUILD_ID
 $previousBuildSha = $env:JOB_HELPER_BUILD_SHA
