@@ -5,6 +5,8 @@ import com.alibaba.fastjson.JSONObject;
 import com.maple.ai.job.hunting.common.ai.AIConfigHelper;
 import com.maple.ai.job.hunting.common.ai.CompletionPathOpenAiApi;
 import com.maple.ai.job.hunting.consts.AIPromptStrConstant;
+import com.maple.ai.job.hunting.frame.exp.ApplicationException;
+import org.springframework.core.env.Environment;
 import com.maple.smart.config.core.annotation.JsonValue;
 import com.maple.smart.config.core.listener.ConfigListener;
 import com.maple.smart.config.core.model.ConfigEntity;
@@ -53,6 +55,9 @@ public class OpenAIPoolConfig {
         @Resource
         private ConfigRepository configRepository;
 
+        @Resource
+        private Environment environment;
+
         @JsonValue("${openai.pool.config.list:[]}")
         private List<JSONObject> openaiPoolConfigList;
 
@@ -67,6 +72,7 @@ public class OpenAIPoolConfig {
 
         @PostConstruct
         public void init() {
+            openaiPoolConfigList = effectiveConfigurations();
             if (CollectionUtils.isEmpty(openaiPoolConfigList) && !Boolean.TRUE.equals(autoConfigPool)) {
                 return;
             }
@@ -87,7 +93,7 @@ public class OpenAIPoolConfig {
                 }
                 this.openaiPoolConfigList = openaiPoolConfigList;
             }
-            log.info("openai pool init:{}", JSONUtil.toJsonStr(openaiPoolConfigList));
+            log.info("openai pool init: {} configured entries", openaiPoolConfigList.size());
             refresh();
         }
 
@@ -102,10 +108,31 @@ public class OpenAIPoolConfig {
             return jsonObject;
         }
 
+        private List<JSONObject> effectiveConfigurations() {
+            if (environment != null && environment.getProperty("app.personal-mode", Boolean.class, false)) {
+                // Smart Config's JSON placeholder resolver ignores process environment variables.
+                // Read local secrets through Spring Environment instead; never log the values.
+                JSONObject local = new JSONObject();
+                local.put("name", "openai-pool");
+                local.put("api-key", environment.getProperty("AI_API_KEY", ""));
+                local.put("base-url", environment.getProperty("AI_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"));
+                local.put("completions-path", environment.getProperty("AI_COMPLETIONS_PATH", "/chat/completions"));
+                local.put("chat.options.model", environment.getProperty("AI_MODEL", "qwen3-vl-32b-thinking"));
+                local.put("chat.options.timeout", environment.getProperty("AI_TIMEOUT_SECONDS", Integer.class, 15));
+                JSONObject extra = new JSONObject();
+                extra.put("enable_thinking", true);
+                extra.put("thinking_budget", environment.getProperty("AI_THINKING_BUDGET", Integer.class, 256));
+                local.put("extraBody", extra);
+                return List.of(local);
+            }
+            return openaiPoolConfigList == null ? Collections.emptyList() : openaiPoolConfigList;
+        }
+
         private void refresh() {
+            List<JSONObject> configurations = effectiveConfigurations();
             firstClient.compareAndSet(firstClient.get(), null);
             Set<String> oldPoolNameSet = new HashSet<>(poolMap.keySet());
-            for (JSONObject jsonObject : openaiPoolConfigList) {
+            for (JSONObject jsonObject : configurations) {
                 String name = jsonObject.getString("name");
                 String apiKey = jsonObject.getString("api-key");
                 String baseUrl = jsonObject.getString("base-url");
@@ -129,6 +156,11 @@ public class OpenAIPoolConfig {
                 if (Boolean.TRUE.equals(proxy)) {
                     client = new OpenAIPoolClient(new CompletionPathOpenAiApi(baseUrl, apiKey, completionsPath,
                             aiConfigHelper.buildProxyRestClient()), OpenAiChatOptions.builder().withModel(model).build());
+                } else if (jsonObject.getInteger("chat.options.timeout") != null) {
+                    int timeout = Math.max(1, Math.min(120, jsonObject.getInteger("chat.options.timeout")));
+                    client = new OpenAIPoolClient(new CompletionPathOpenAiApi(baseUrl, apiKey, completionsPath,
+                            AIConfigHelper.buildRestClient(timeout), extraBody),
+                            OpenAiChatOptions.builder().withModel(model).build());
                 } else {
                     client = new OpenAIPoolClient(new CompletionPathOpenAiApi(baseUrl, apiKey, completionsPath, extraBody),
                             OpenAiChatOptions.builder().withModel(model).build());
@@ -147,11 +179,13 @@ public class OpenAIPoolConfig {
 
         @Nonnull
         public OpenAIPoolClient getClient() {
-            if (firstClient.get() != null) {
-                return firstClient.get();
-            }
+            OpenAIPoolClient preferred = firstClient.get();
+            if (preferred != null) return preferred;
             List<OpenAIPoolClient> list = poolMap.values().stream().toList();
-            return list.get(poolIndex.getAndIncrement() % list.size());
+            if (list.isEmpty()) {
+                throw new ApplicationException("未配置可用模型，请检查本地 AI_API_KEY、AI_BASE_URL 和 AI_MODEL");
+            }
+            return list.get(Math.floorMod(poolIndex.getAndIncrement(), list.size()));
         }
 
         @Nullable
