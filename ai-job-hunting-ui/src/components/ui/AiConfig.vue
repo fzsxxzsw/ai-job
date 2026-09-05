@@ -285,6 +285,21 @@ const fetchAllProviderDetails = async () => {
 // 存储最后一次从接口获取的配置数据
 const lastFetchedConfig = ref<AiConfig | null>(null)
 
+const toAiConfigMirror = (config: Partial<AiConfig>) => {
+    const {apiKey: _apiKey, ...safeConfig} = config
+    return safeConfig
+}
+
+// The backend remains the source of truth for API keys. MAIN-world compatibility
+// storage is deliberately limited to non-secret fallback fields.
+const updateAiConfigMirror = (config: Partial<AiConfig>) => {
+    const mirrorKey = serverStore.getMirrorKey('ai_config')
+    const globalMirrorKey = serverStore.getGlobalMirrorKey('ai_config')
+    const safeConfig = toAiConfigMirror(config)
+    TampermonkeyApi.GmSetValue(mirrorKey, safeConfig)
+    TampermonkeyApi.GmSetValue(globalMirrorKey, safeConfig)
+}
+
 // 比较当前表单数据和最后一次获取的配置数据
 const compareWithLastConfig = () => {
     if (!lastFetchedConfig.value) return false
@@ -338,10 +353,7 @@ const fetchConfig = async () => {
             form.value = {...form.value, ...config}
             
             // 成功拉取，更新镜像
-            const mirrorKey = serverStore.getMirrorKey('ai_config')
-            const globalMirrorKey = serverStore.getGlobalMirrorKey('ai_config')
-            TampermonkeyApi.GmSetValue(mirrorKey, config)
-            TampermonkeyApi.GmSetValue(globalMirrorKey, config)
+            updateAiConfigMirror(config)
             
             // 保存获取到的配置
             lastFetchedConfig.value = {...config}
@@ -359,7 +371,7 @@ const fetchConfig = async () => {
         }
         
         if (mirrorData) {
-            form.value = {...form.value, ...mirrorData}
+            form.value = {...form.value, ...toAiConfigMirror(mirrorData)}
             handleProviderChange(mirrorData.provider, true)
             ElNotification({
                 title: '使用本地配置',
@@ -394,14 +406,6 @@ watch(() => ({
         form.value.testPassed = 1
     }
 }, {deep: true})
-// 更新本地配置镜像
-const updateAiConfigMirror = (config: any) => {
-    const mirrorKey = serverStore.getMirrorKey('ai_config')
-    const globalMirrorKey = serverStore.getGlobalMirrorKey('ai_config')
-    TampermonkeyApi.GmSetValue(mirrorKey, config)
-    TampermonkeyApi.GmSetValue(globalMirrorKey, config)
-}
-
 // Handle save configuration
 const handleSave = async () => {
     if (!formRef.value) return

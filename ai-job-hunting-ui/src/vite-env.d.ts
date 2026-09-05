@@ -1,6 +1,4 @@
 /// <reference types="vite/client" />
-/// <reference types="vite-plugin-monkey/client" />
-//// <reference types="vite-plugin-monkey/global" />
 
 declare const __AI_JOB_HELPER_RUNTIME_VERSION__: string
 declare const __AI_JOB_HELPER_BUILD_ID__: string

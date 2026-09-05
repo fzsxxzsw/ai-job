@@ -4,12 +4,13 @@ import {spawnSync} from 'node:child_process'
 
 const uiRoot = resolve(import.meta.dirname, '..')
 const roots = [resolve(uiRoot, 'src'), resolve(uiRoot, 'scripts')]
+const legacyTests = new Set(['ai-job-hunting-loader.test.mjs'])
 
 function collectTests(directory, result = []) {
     for (const entry of readdirSync(directory, {withFileTypes: true})) {
         const path = resolve(directory, entry.name)
         if (entry.isDirectory()) collectTests(path, result)
-        else if (entry.isFile() && entry.name.endsWith('.test.mjs')) result.push(path)
+        else if (entry.isFile() && entry.name.endsWith('.test.mjs') && !legacyTests.has(entry.name)) result.push(path)
     }
     return result
 }

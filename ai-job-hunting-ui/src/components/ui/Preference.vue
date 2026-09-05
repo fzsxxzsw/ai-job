@@ -4,7 +4,7 @@
         :model="userStore.user"
         :rules="rules as FormRules<RuleForm>"
         label-position="right"
-        label-width="auto"
+        label-width="108px"
         class="form-preference"
         size="large"
         status-icon>
@@ -16,8 +16,8 @@
                 <br/>
             </div>
             <el-text class="mx-1 top-title" type="warning">账号信息</el-text>
-            <div style="display: flex;margin-top: 10px">
-                <el-form-item label="手机号" prop="phone" style="margin-left: -6px;">
+            <div class="preference-grid preference-account-row">
+                <el-form-item label="手机号" prop="phone">
                     <el-input v-model="userStore.user.phone"/>
                 </el-form-item>
 
@@ -27,8 +27,8 @@
             </div>
 
             <el-text class="mx-1 top-title" type="warning">投递设置</el-text>
-            <div style="display: flex;margin-top: 10px">
-                <el-form-item prop="companyInclude" style="margin-left: -40px;">
+            <div class="preference-grid">
+                <el-form-item prop="companyInclude">
                     <template #label>
                         <el-checkbox v-model="userStore.user.preference.cniE" label="" size="large"/>
                         公司名包含
@@ -65,8 +65,8 @@
                 </el-form-item>
             </div>
 
-            <div style="display: flex">
-                <el-form-item label="工作名包含" style="margin-left: -40px;" prop="jobNameInclude">
+            <div class="preference-grid preference-grid-wide">
+                <el-form-item label="工作名包含" prop="jobNameInclude">
                     <template #label>
                         岗位名规则
                     </template>
@@ -114,11 +114,11 @@
                 </el-form-item>
             </div>
 
-            <div style="display: flex">
-                <el-form-item label="工作内容包含" style="margin-left: -40px;" prop="jobContentInclude">
+            <div class="preference-grid">
+                <el-form-item label="工作内容包含" prop="jobContentInclude">
                     <template #label>
                         <el-checkbox v-model="userStore.user.preference.jciE" label="" size="large"/>
-                        &nbsp;&nbsp;&nbsp;&nbsp;内容包含
+                        内容包含
                     </template>
                     <el-select v-model="userStore.user.preference.jci"
                                multiple
@@ -159,9 +159,9 @@
             </div>
 
             <!--            <div class="form-bottom">-->
-            <div style="display: flex">
-                <div style="display: flex;height: 40px">
-                    <span style="line-height: 40px; margin-right: 8px; white-space: nowrap">薪资硬范围</span>
+            <div class="preference-grid">
+                <div class="salary-preference-control">
+                    <span>薪资硬范围</span>
                     <el-input class="input-opt"
                               v-model="userStore.user.preference.sr"
                               style="width: 324px"
@@ -257,7 +257,6 @@
                 <el-input type="textarea" v-model="userStore.user.preference.af"
                           placeholder="选填：例如不接受外包、长期出差或频繁夜班"/>
             </el-form-item>
-
             <el-form-item label="首次沟通消息" prop="jobContentExclude">
                 <el-select v-model="userStore.user.preference.greetingDeliveryMode" style="width: 100%; margin-bottom: 8px">
                     <el-option label="平台默认招呼（纯规则投递）" value="platform-default"/>
@@ -299,22 +298,22 @@
                 </div>
             </el-form-item>
 
-            <div style="display: flex;margin-bottom: 10px;">
+            <div class="delivery-preference-row">
                 <el-checkbox v-model="userStore.user.preference.fhE" label="" size="large">过滤猎头</el-checkbox>
                 <el-checkbox v-model="userStore.user.preference.polE" label="" size="large">仅投递boss在线岗位
                 </el-checkbox>
-                &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
-                <p class="time-interval">投递间隔</p>
-                <el-input-number v-model="userStore.user.preference.pi"
-                                 :min="SAFE_MIN_PUSH_INTERVAL_SECONDS" :max="600"
-                                  size="small"></el-input-number>
-                <p class="time-interval">秒</p>
-                &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
-                <p class="time-interval">翻页间隔</p>
-                <el-input-number v-model="userStore.user.preference.npi"
-                                 :min="SAFE_MIN_NEXT_PAGE_INTERVAL_SECONDS" :max="900"
-                                  size="small"></el-input-number>
-                <p class="time-interval">秒</p>
+                <div class="interval-control">
+                    <span>投递间隔</span>
+                    <el-input-number v-model="userStore.user.preference.pi"
+                                     :min="SAFE_MIN_PUSH_INTERVAL_SECONDS" :max="600" size="small"/>
+                    <span>秒</span>
+                </div>
+                <div class="interval-control">
+                    <span>翻页间隔</span>
+                    <el-input-number v-model="userStore.user.preference.npi"
+                                     :min="SAFE_MIN_NEXT_PAGE_INTERVAL_SECONDS" :max="900" size="small"/>
+                    <span>秒</span>
+                </div>
             </div>
 
             <el-alert
@@ -708,10 +707,61 @@ preferenceDefaultValueHandler()
     width: 80px;
 }
 
-.time-interval{
-    margin-top: 10px;
-    margin-right: 1px;
-    margin-left: 1px;
+.preference-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0 24px;
+    align-items: start;
+    margin: 10px 0;
+}
+
+.preference-grid-wide {
+    grid-template-columns: minmax(0, 1.45fr) minmax(0, 1fr);
+}
+
+.preference-grid :deep(.el-form-item) {
+    min-width: 0;
+    margin-bottom: 12px;
+}
+
+.preference-grid :deep(.el-form-item__content) {
+    min-width: 0;
+}
+
+.preference-account-row :deep(.el-input) {
+    width: 100% !important;
+}
+
+.preference-grid :deep(.el-form-item__label) {
+    white-space: nowrap;
+}
+
+.salary-preference-control {
+    display: flex;
+    min-width: 0;
+    align-items: center;
+    gap: 8px;
+    min-height: 40px;
+}
+
+.salary-preference-control .input-opt {
+    flex: 1;
+    min-width: 0;
+}
+
+.delivery-preference-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px 20px;
+    margin-bottom: 10px;
+}
+
+.interval-control {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    white-space: nowrap;
 }
 
 .safety-interval-tip {
@@ -755,6 +805,17 @@ preferenceDefaultValueHandler()
 .resume-match-tip {
     width: 100%;
     margin: -12px 0 8px 96px;
+}
+
+@media (max-width: 960px) {
+    .preference-grid,
+    .preference-grid-wide {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    .salary-preference-control {
+        flex-wrap: wrap;
+    }
 }
 
 

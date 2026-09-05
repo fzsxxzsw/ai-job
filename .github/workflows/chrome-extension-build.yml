@@ -1,0 +1,46 @@
+name: Chrome extension build
+
+on:
+  push:
+    branches: [master, 'codex/**']
+  pull_request:
+    paths:
+      - 'ai-job-hunting-ui/**'
+      - '.github/workflows/chrome-extension-build.yml'
+      - '.gitattributes'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test-and-package:
+    runs-on: ubuntu-latest
+    env:
+      JOB_HELPER_BUILD_ID: chrome-${{ github.sha }}
+    defaults:
+      run:
+        working-directory: ai-job-hunting-ui
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: ai-job-hunting-ui/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - name: Test, type-check, package and validate Chrome MV3
+        run: pnpm run build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: job-helper-chrome-mv3
+          path: ai-job-hunting-ui/.output/chrome-mv3/
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: job-helper-chrome-zip
+          path: ai-job-hunting-ui/.output/job-helper-*-chrome.zip
+          if-no-files-found: error

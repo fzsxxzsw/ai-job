@@ -1,0 +1,7 @@
+/ai-job-hunting-ui/proto/** text eol=lf
+/ai-job-hunting-ui/src/webSocket/generated/** text eol=lf
+/ai-job-hunting-ui/fixtures/** text eol=lf
+/ai-job-hunting-ui/scripts/*.mjs text eol=lf
+/ai-job-hunting-ui/package.json text eol=lf
+/ai-job-hunting-ui/pnpm-lock.yaml text eol=lf
+/ai-job-hunting-ui/pnpm-workspace.yaml text eol=lf

@@ -5,4 +5,6 @@ allowBuilds:
   esbuild: true
   javascript-obfuscator: true
   protobufjs: true
+  # Node 24 does not need this legacy Node <0.12 polyfill's native build.
+  spawn-sync: false
   vue-demi: true

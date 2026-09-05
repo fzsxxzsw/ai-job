@@ -21,8 +21,38 @@ const logRecorder = new LogRecorder();
 const USER_CONFIG_CACHE_TTL_MS = 15_000;
 let activeUserLoad: Promise<void> | null = null;
 
+/**
+ * 老版脚本把用户配置放在页面 localStorage；WXT 的隔离存储无法直接继承它。
+ * 只在服务器尚未保存偏好时回填，且不自动写回服务器，避免无意覆盖新设置。
+ */
+function readLegacyUserPreference(): Partial<PreferenceConfig> | null {
+    try {
+        const raw = localStorage.getItem("ai-job-user")
+        if (!raw) return null
+        const legacyUser = JSON.parse(raw)
+        const preference = legacyUser?.preference
+        return preference && typeof preference === "object" && Object.keys(preference).length > 0
+            ? preference as Partial<PreferenceConfig>
+            : null
+    } catch (_) {
+        // 历史数据损坏时继续使用服务器配置，不阻断助手启动。
+        return null
+    }
+}
+
 function applyUserConfig(userStore: ReturnType<typeof UserStore>, user: any) {
-    userStore.user = user
+    const serverUser = user && typeof user === "object" ? user : {}
+    const serverPreference = serverUser.preference
+    const legacyPreference = readLegacyUserPreference()
+    const useLegacyPreference = (!serverPreference || Object.keys(serverPreference).length === 0)
+        && legacyPreference !== null
+
+    userStore.user = {
+        ...serverUser,
+        preference: useLegacyPreference
+            ? {...legacyPreference, ...serverPreference}
+            : serverPreference,
+    }
     if (!userStore?.user) {
         throw new Error("用户偏好配置为空")
     }
@@ -35,6 +65,9 @@ function applyUserConfig(userStore: ReturnType<typeof UserStore>, user: any) {
         SAFE_MIN_NEXT_PAGE_INTERVAL_SECONDS,
         Number(userStore.user.preference.npi) || SAFE_DEFAULT_NEXT_PAGE_INTERVAL_SECONDS,
     )
+    if (useLegacyPreference) {
+        logRecorder.info("已从旧版页面本地数据恢复偏好；请在偏好设置页确认后手动保存")
+    }
 }
 
 export function userRemoteLoad(forceRefresh = false): Promise<void> {

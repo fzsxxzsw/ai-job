@@ -51,3 +51,6 @@ components.d.ts
 /.job-helper-releases/
 
 /test
+
+/ai-job-hunting-ui/.output/
+/ai-job-hunting-ui/.wxt/

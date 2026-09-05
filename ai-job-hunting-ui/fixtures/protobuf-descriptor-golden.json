@@ -1,0 +1,1543 @@
+{
+  "generator": "committed protobuf descriptor golden (explicit updates only)",
+  "protobufjsVersion": "7.2.6",
+  "schema": {
+    "options": {
+      "java_package": "cn.techwolf.boss.chat",
+      "java_outer_classname": "ChatProtocol"
+    },
+    "nested": {
+      "TechwolfUser": {
+        "fields": {
+          "uid": {
+            "rule": "required",
+            "type": "int64",
+            "id": 1
+          },
+          "name": {
+            "type": "string",
+            "id": 2
+          },
+          "avatar": {
+            "type": "string",
+            "id": 3
+          },
+          "company": {
+            "type": "string",
+            "id": 4
+          },
+          "headImg": {
+            "type": "int32",
+            "id": 5
+          },
+          "certification": {
+            "type": "int32",
+            "id": 6
+          },
+          "source": {
+            "type": "int32",
+            "id": 7
+          }
+        }
+      },
+      "TechwolfSound": {
+        "fields": {
+          "sid": {
+            "type": "int64",
+            "id": 1
+          },
+          "url": {
+            "type": "string",
+            "id": 2
+          },
+          "duration": {
+            "type": "int32",
+            "id": 3
+          },
+          "templateId": {
+            "type": "int32",
+            "id": 4
+          }
+        }
+      },
+      "TechwolfVideo": {
+        "fields": {
+          "type": {
+            "rule": "required",
+            "type": "int32",
+            "id": 1
+          },
+          "status": {
+            "rule": "required",
+            "type": "int32",
+            "id": 2
+          },
+          "duration": {
+            "type": "int32",
+            "id": 3
+          },
+          "text": {
+            "type": "string",
+            "id": 4
+          }
+        }
+      },
+      "TechwolfInterview": {
+        "fields": {
+          "condition": {
+            "rule": "required",
+            "type": "int32",
+            "id": 1
+          },
+          "text": {
+            "rule": "required",
+            "type": "string",
+            "id": 2
+          },
+          "url": {
+            "type": "string",
+            "id": 3
+          },
+          "extend": {
+            "type": "string",
+            "id": 4
+          }
+        }
+      },
+      "TechwolfImageInfo": {
+        "fields": {
+          "url": {
+            "rule": "required",
+            "type": "string",
+            "id": 1
+          },
+          "width": {
+            "rule": "required",
+            "type": "int32",
+            "id": 2
+          },
+          "height": {
+            "rule": "required",
+            "type": "int32",
+            "id": 3
+          }
+        }
+      },
+      "TechwolfImage": {
+        "fields": {
+          "iid": {
+            "type": "int64",
+            "id": 1
+          },
+          "tinyImage": {
+            "type": "TechwolfImageInfo",
+            "id": 2
+          },
+          "originImage": {
+            "type": "TechwolfImageInfo",
+            "id": 3
+          }
+        }
+      },
+      "TechwolfAction": {
+        "fields": {
+          "aid": {
+            "rule": "required",
+            "type": "int32",
+            "id": 1
+          },
+          "extend": {
+            "type": "string",
+            "id": 2
+          }
+        }
+      },
+      "TechwolfArticle": {
+        "fields": {
+          "title": {
+            "rule": "required",
+            "type": "string",
+            "id": 1
+          },
+          "description": {
+            "rule": "required",
+            "type": "string",
+            "id": 2
+          },
+          "picUrl": {
+            "rule": "required",
+            "type": "string",
+            "id": 3
+          },
+          "url": {
+            "rule": "required",
+            "type": "string",
+            "id": 4
+          },
+          "templateId": {
+            "type": "int32",
+            "id": 5
+          },
+          "bottomText": {
+            "type": "string",
+            "id": 6
+          },
+          "timeout": {
+            "type": "int64",
+            "id": 7
+          },
+          "statisticParameters": {
+            "type": "string",
+            "id": 8
+          },
+          "highlightParts": {
+            "rule": "repeated",
+            "type": "TechwolfSlice",
+            "id": 9,
+            "options": {
+              "packed": false
+            }
+          },
+          "dimParts": {
+            "rule": "repeated",
+            "type": "TechwolfSlice",
+            "id": 10,
+            "options": {
+              "packed": false
+            }
+          },
+          "subTitle": {
+            "type": "string",
+            "id": 11
+          },
+          "extend": {
+            "type": "string",
+            "id": 12
+          }
+        }
+      },
+      "TechwolfNotify": {
+        "fields": {
+          "text": {
+            "rule": "required",
+            "type": "string",
+            "id": 1
+          },
+          "url": {
+            "type": "string",
+            "id": 2
+          },
+          "title": {
+            "type": "string",
+            "id": 3
+          }
+        }
+      },
+      "TechwolfButton": {
+        "fields": {
+          "text": {
+            "rule": "required",
+            "type": "string",
+            "id": 1
+          },
+          "url": {
+            "type": "string",
+            "id": 2
+          },
+          "templateId": {
+            "type": "int32",
+            "id": 3
+          }
+        }
+      },
+      "TechwolfDialog": {
+        "fields": {
+          "text": {
+            "rule": "required",
+            "type": "string",
+            "id": 1
+          },
+          "buttons": {
+            "rule": "repeated",
+            "type": "TechwolfButton",
+            "id": 2,
+            "options": {
+              "packed": false
+            }
+          },
+          "operated": {
+            "rule": "required",
+            "type": "bool",
+            "id": 3
+          },
+          "clickMore": {
+            "type": "bool",
+            "id": 4
+          },
+          "type": {
+            "type": "int32",
+            "id": 5
+          },
+          "backgroundUrl": {
+            "type": "string",
+            "id": 6
+          },
+          "timeout": {
+            "type": "int64",
+            "id": 7
+          },
+          "statisticParameters": {
+            "type": "string",
+            "id": 8
+          },
+          "title": {
+            "type": "string",
+            "id": 9
+          },
+          "url": {
+            "type": "string",
+            "id": 10
+          },
+          "selectedIndex": {
+            "type": "int32",
+            "id": 11
+          },
+          "extend": {
+            "type": "string",
+            "id": 12
+          },
+          "content": {
+            "type": "string",
+            "id": 13
+          }
+        }
+      },
+      "TechwolfJobDesc": {
+        "fields": {
+          "title": {
+            "rule": "required",
+            "type": "string",
+            "id": 1
+          },
+          "company": {
+            "rule": "required",
+            "type": "string",
+            "id": 2
+          },
+          "salary": {
+            "rule": "required",
+            "type": "string",
+            "id": 3
+          },
+          "url": {
+            "rule": "required",
+            "type": "string",
+            "id": 4
+          },
+          "jobId": {
+            "rule": "required",
+            "type": "int64",
+            "id": 5
+          },
+          "positionCategory": {
+            "type": "string",
+            "id": 6
+          },
+          "experience": {
+            "type": "string",
+            "id": 7
+          },
+          "education": {
+            "type": "string",
+            "id": 8
+          },
+          "city": {
+            "type": "string",
+            "id": 9
+          },
+          "bossTitle": {
+            "type": "string",
+            "id": 10
+          },
+          "boss": {
+            "type": "TechwolfUser",
+            "id": 11
+          },
+          "lid": {
+            "type": "string",
+            "id": 12
+          },
+          "stage": {
+            "type": "string",
+            "id": 13
+          },
+          "bottomText": {
+            "type": "string",
+            "id": 14
+          },
+          "jobLabel": {
+            "type": "string",
+            "id": 15
+          },
+          "iconFlag": {
+            "type": "int32",
+            "id": 16
+          },
+          "content": {
+            "type": "string",
+            "id": 17
+          },
+          "labels": {
+            "rule": "repeated",
+            "type": "string",
+            "id": 18
+          },
+          "expectId": {
+            "type": "int64",
+            "id": 19
+          },
+          "expectPosition": {
+            "type": "string",
+            "id": 20
+          },
+          "expectSalary": {
+            "type": "string",
+            "id": 21
+          },
+          "partTimeDesc": {
+            "type": "string",
+            "id": 22
+          },
+          "geek": {
+            "type": "TechwolfUser",
+            "id": 23
+          },
+          "latlon": {
+            "type": "string",
+            "id": 24
+          },
+          "distance": {
+            "type": "string",
+            "id": 25
+          }
+        }
+      },
+      "TechwolfResume": {
+        "fields": {
+          "user": {
+            "rule": "required",
+            "type": "TechwolfUser",
+            "id": 1
+          },
+          "description": {
+            "type": "string",
+            "id": 2
+          },
+          "city": {
+            "type": "string",
+            "id": 3
+          },
+          "position": {
+            "type": "string",
+            "id": 4
+          },
+          "keywords": {
+            "rule": "repeated",
+            "type": "string",
+            "id": 5
+          },
+          "expectId": {
+            "type": "int64",
+            "id": 6
+          },
+          "lid": {
+            "type": "string",
+            "id": 7
+          },
+          "gender": {
+            "type": "int32",
+            "id": 8
+          },
+          "salary": {
+            "type": "string",
+            "id": 9
+          },
+          "workYear": {
+            "type": "string",
+            "id": 10
+          },
+          "content1": {
+            "type": "string",
+            "id": 11
+          },
+          "content2": {
+            "type": "string",
+            "id": 12
+          },
+          "education": {
+            "type": "string",
+            "id": 13
+          },
+          "age": {
+            "type": "string",
+            "id": 14
+          },
+          "labels": {
+            "rule": "repeated",
+            "type": "string",
+            "id": 15
+          },
+          "experiences": {
+            "rule": "repeated",
+            "type": "UserExperience",
+            "id": 16,
+            "options": {
+              "packed": false
+            }
+          },
+          "positionCategory": {
+            "type": "string",
+            "id": 17
+          },
+          "jobSalary": {
+            "type": "string",
+            "id": 18
+          },
+          "bottomText": {
+            "type": "string",
+            "id": 19
+          },
+          "applyStatus": {
+            "type": "string",
+            "id": 20
+          },
+          "jobId": {
+            "type": "int64",
+            "id": 21
+          },
+          "content3": {
+            "type": "string",
+            "id": 22
+          },
+          "securityId": {
+            "type": "string",
+            "id": 23
+          },
+          "boss": {
+            "type": "TechwolfUser",
+            "id": 24
+          },
+          "brandName": {
+            "type": "string",
+            "id": 25
+          }
+        }
+      },
+      "TechwolfHyperLink": {
+        "fields": {
+          "text": {
+            "rule": "required",
+            "type": "string",
+            "id": 1
+          },
+          "url": {
+            "rule": "required",
+            "type": "string",
+            "id": 2
+          },
+          "hyperLinkType": {
+            "rule": "required",
+            "type": "int32",
+            "id": 3
+          },
+          "extraJson": {
+            "type": "string",
+            "id": 4
+          }
+        }
+      },
+      "TechwolfMessageBody": {
+        "fields": {
+          "type": {
+            "rule": "required",
+            "type": "int32",
+            "id": 1
+          },
+          "templateId": {
+            "rule": "required",
+            "type": "int32",
+            "id": 2
+          },
+          "headTitle": {
+            "type": "string",
+            "id": 11
+          },
+          "text": {
+            "type": "string",
+            "id": 3
+          },
+          "sound": {
+            "type": "TechwolfSound",
+            "id": 4
+          },
+          "image": {
+            "type": "TechwolfImage",
+            "id": 5
+          },
+          "action": {
+            "type": "TechwolfAction",
+            "id": 6
+          },
+          "articles": {
+            "rule": "repeated",
+            "type": "TechwolfArticle",
+            "id": 7
+          },
+          "notify": {
+            "type": "TechwolfNotify",
+            "id": 8
+          },
+          "dialog": {
+            "type": "TechwolfDialog",
+            "id": 9
+          },
+          "jobDesc": {
+            "type": "TechwolfJobDesc",
+            "id": 10
+          },
+          "resume": {
+            "type": "TechwolfResume",
+            "id": 12
+          },
+          "redEnvelope": {
+            "type": "TechwolfRedEnvelope",
+            "id": 13
+          },
+          "orderDetail": {
+            "type": "TechwolfOrderDetail",
+            "id": 14
+          },
+          "hyperLink": {
+            "type": "TechwolfHyperLink",
+            "id": 15
+          },
+          "video": {
+            "type": "TechwolfVideo",
+            "id": 16
+          },
+          "interview": {
+            "type": "TechwolfInterview",
+            "id": 17
+          },
+          "jobShare": {
+            "type": "TechwolfJobShare",
+            "id": 18
+          },
+          "resumeShare": {
+            "type": "TechwolfResumeShare",
+            "id": 19
+          },
+          "atInfo": {
+            "type": "AtInfo",
+            "id": 20
+          },
+          "sticker": {
+            "type": "TechwolfSticker",
+            "id": 21
+          },
+          "chatShare": {
+            "type": "TechwolfChatShare",
+            "id": 22
+          },
+          "interviewShare": {
+            "type": "TechwolfInterviewShare",
+            "id": 23
+          },
+          "listCard": {
+            "type": "TechwolfListCard",
+            "id": 24
+          },
+          "starRate": {
+            "type": "TechwolfStarRate",
+            "id": 25
+          },
+          "frame": {
+            "type": "TechwolfFrame",
+            "id": 26
+          },
+          "multiImage": {
+            "type": "TechwolfMultiImage",
+            "id": 27
+          },
+          "extend": {
+            "type": "string",
+            "id": 28
+          }
+        }
+      },
+      "TechwolfMessage": {
+        "fields": {
+          "from": {
+            "rule": "required",
+            "type": "TechwolfUser",
+            "id": 1
+          },
+          "to": {
+            "rule": "required",
+            "type": "TechwolfUser",
+            "id": 2
+          },
+          "type": {
+            "rule": "required",
+            "type": "int32",
+            "id": 3
+          },
+          "mid": {
+            "type": "int64",
+            "id": 4
+          },
+          "time": {
+            "type": "int64",
+            "id": 5
+          },
+          "body": {
+            "rule": "required",
+            "type": "TechwolfMessageBody",
+            "id": 6
+          },
+          "offline": {
+            "type": "bool",
+            "id": 7
+          },
+          "received": {
+            "type": "bool",
+            "id": 8
+          },
+          "pushText": {
+            "type": "string",
+            "id": 9
+          },
+          "taskId": {
+            "type": "int64",
+            "id": 10
+          },
+          "cmid": {
+            "type": "int64",
+            "id": 11
+          },
+          "status": {
+            "type": "int32",
+            "id": 12
+          },
+          "uncount": {
+            "type": "int32",
+            "id": 13
+          },
+          "pushSound": {
+            "type": "int32",
+            "id": 14
+          },
+          "flag": {
+            "type": "int32",
+            "id": 15
+          },
+          "encryptedBody": {
+            "type": "bytes",
+            "id": 16
+          },
+          "bizId": {
+            "type": "string",
+            "id": 17
+          },
+          "bizType": {
+            "type": "int32",
+            "id": 18
+          },
+          "securityId": {
+            "type": "string",
+            "id": 19
+          }
+        }
+      },
+      "TechwolfClientInfo": {
+        "fields": {
+          "version": {
+            "type": "string",
+            "id": 1
+          },
+          "system": {
+            "type": "string",
+            "id": 2
+          },
+          "systemVersion": {
+            "type": "string",
+            "id": 3
+          },
+          "model": {
+            "type": "string",
+            "id": 4
+          },
+          "uniqid": {
+            "type": "string",
+            "id": 5
+          },
+          "network": {
+            "type": "string",
+            "id": 6
+          },
+          "appid": {
+            "type": "int32",
+            "id": 7
+          },
+          "platform": {
+            "type": "string",
+            "id": 8
+          },
+          "channel": {
+            "type": "string",
+            "id": 9
+          },
+          "ssid": {
+            "type": "string",
+            "id": 10
+          },
+          "bssid": {
+            "type": "string",
+            "id": 11
+          },
+          "longitude": {
+            "type": "double",
+            "id": 12
+          },
+          "latitude": {
+            "type": "double",
+            "id": 13
+          }
+        }
+      },
+      "TechwolfClientTime": {
+        "fields": {
+          "startTime": {
+            "type": "int64",
+            "id": 1
+          },
+          "resumeTime": {
+            "type": "int64",
+            "id": 2
+          }
+        }
+      },
+      "TechwolfPresence": {
+        "fields": {
+          "type": {
+            "rule": "required",
+            "type": "int32",
+            "id": 1
+          },
+          "uid": {
+            "rule": "required",
+            "type": "int32",
+            "id": 2
+          },
+          "clientInfo": {
+            "type": "TechwolfClientInfo",
+            "id": 3
+          },
+          "clientTime": {
+            "type": "TechwolfClientTime",
+            "id": 4
+          },
+          "lastMessageId": {
+            "type": "int64",
+            "id": 5
+          },
+          "lastGroupMessageId": {
+            "type": "int64",
+            "id": 6
+          },
+          "userId": {
+            "type": "int64",
+            "id": 7
+          }
+        }
+      },
+      "TechwolfKVEntry": {
+        "fields": {
+          "key": {
+            "rule": "required",
+            "type": "string",
+            "id": 1
+          },
+          "value": {
+            "rule": "required",
+            "type": "string",
+            "id": 2
+          }
+        }
+      },
+      "TechwolfIq": {
+        "fields": {
+          "qid": {
+            "rule": "required",
+            "type": "int64",
+            "id": 1
+          },
+          "query": {
+            "rule": "required",
+            "type": "string",
+            "id": 2
+          },
+          "params": {
+            "rule": "repeated",
+            "type": "TechwolfKVEntry",
+            "id": 3,
+            "options": {
+              "packed": false
+            }
+          }
+        }
+      },
+      "TechwolfIqResponse": {
+        "fields": {
+          "qid": {
+            "rule": "required",
+            "type": "int64",
+            "id": 1
+          },
+          "query": {
+            "rule": "required",
+            "type": "string",
+            "id": 2
+          },
+          "results": {
+            "rule": "repeated",
+            "type": "TechwolfKVEntry",
+            "id": 3,
+            "options": {
+              "packed": false
+            }
+          }
+        }
+      },
+      "TechwolfMessageSync": {
+        "fields": {
+          "clientMid": {
+            "rule": "required",
+            "type": "int64",
+            "id": 1
+          },
+          "serverMid": {
+            "rule": "required",
+            "type": "int64",
+            "id": 2
+          }
+        }
+      },
+      "TechwolfMessageRead": {
+        "fields": {
+          "userId": {
+            "rule": "required",
+            "type": "int64",
+            "id": 1
+          },
+          "messageId": {
+            "rule": "required",
+            "type": "int64",
+            "id": 2
+          },
+          "readTime": {
+            "rule": "required",
+            "type": "int64",
+            "id": 3
+          },
+          "sync": {
+            "type": "bool",
+            "id": 4,
+            "options": {
+              "default": false
+            }
+          },
+          "userSource": {
+            "type": "int32",
+            "id": 5
+          }
+        }
+      },
+      "TechwolfChatProtocol": {
+        "fields": {
+          "type": {
+            "rule": "required",
+            "type": "int32",
+            "id": 1
+          },
+          "version": {
+            "type": "string",
+            "id": 2
+          },
+          "messages": {
+            "rule": "repeated",
+            "type": "TechwolfMessage",
+            "id": 3
+          },
+          "presence": {
+            "type": "TechwolfPresence",
+            "id": 4
+          },
+          "iq": {
+            "type": "TechwolfIq",
+            "id": 5
+          },
+          "iqResponse": {
+            "type": "TechwolfIqResponse",
+            "id": 6
+          },
+          "messageSync": {
+            "rule": "repeated",
+            "type": "TechwolfMessageSync",
+            "id": 7
+          },
+          "messageRead": {
+            "rule": "repeated",
+            "type": "TechwolfMessageRead",
+            "id": 8
+          },
+          "dataSync": {
+            "type": "TechwolfDataSync",
+            "id": 9
+          },
+          "domain": {
+            "type": "int32",
+            "id": 10
+          }
+        }
+      },
+      "TechwolfRedEnvelope": {
+        "fields": {
+          "redId": {
+            "rule": "required",
+            "type": "int64",
+            "id": 1
+          },
+          "redText": {
+            "rule": "required",
+            "type": "string",
+            "id": 2
+          },
+          "redTitle": {
+            "rule": "required",
+            "type": "string",
+            "id": 3
+          },
+          "clickUrl": {
+            "rule": "required",
+            "type": "string",
+            "id": 4
+          }
+        }
+      },
+      "TechwolfOrderDetail": {
+        "fields": {
+          "title": {
+            "rule": "required",
+            "type": "string",
+            "id": 1
+          },
+          "subTitle": {
+            "rule": "required",
+            "type": "string",
+            "id": 2
+          },
+          "url": {
+            "type": "string",
+            "id": 3
+          },
+          "orderDetailEntryList": {
+            "rule": "repeated",
+            "type": "TechwolfOrderDetailEntry",
+            "id": 4,
+            "options": {
+              "packed": false
+            }
+          }
+        }
+      },
+      "TechwolfOrderDetailItem": {
+        "fields": {
+          "name": {
+            "rule": "required",
+            "type": "string",
+            "id": 1
+          },
+          "templateId": {
+            "rule": "required",
+            "type": "int32",
+            "id": 2
+          }
+        }
+      },
+      "TechwolfOrderDetailEntry": {
+        "fields": {
+          "key": {
+            "rule": "required",
+            "type": "TechwolfOrderDetailItem",
+            "id": 1
+          },
+          "value": {
+            "rule": "required",
+            "type": "TechwolfOrderDetailItem",
+            "id": 2
+          }
+        }
+      },
+      "TechwolfUserSync": {
+        "fields": {
+          "uid": {
+            "rule": "required",
+            "type": "int64",
+            "id": 1
+          },
+          "identity": {
+            "rule": "required",
+            "type": "int32",
+            "id": 2
+          },
+          "extraJson": {
+            "type": "string",
+            "id": 3
+          },
+          "userSource": {
+            "type": "int32",
+            "id": 4
+          }
+        }
+      },
+      "TechwolfDataSync": {
+        "fields": {
+          "type": {
+            "rule": "required",
+            "type": "int32",
+            "id": 1
+          },
+          "userSync": {
+            "type": "TechwolfUserSync",
+            "id": 2
+          },
+          "groupSync": {
+            "type": "TechwolfGroupSync",
+            "id": 3
+          }
+        }
+      },
+      "TechwolfSlice": {
+        "fields": {
+          "startIndex": {
+            "rule": "required",
+            "type": "int32",
+            "id": 1
+          },
+          "endIndex": {
+            "rule": "required",
+            "type": "int32",
+            "id": 2
+          }
+        }
+      },
+      "UserExperience": {
+        "fields": {
+          "organization": {
+            "rule": "required",
+            "type": "string",
+            "id": 1
+          },
+          "occupation": {
+            "rule": "required",
+            "type": "string",
+            "id": 2
+          },
+          "startDate": {
+            "type": "string",
+            "id": 3
+          },
+          "endDate": {
+            "type": "string",
+            "id": 4
+          },
+          "type": {
+            "rule": "required",
+            "type": "int32",
+            "id": 5
+          }
+        }
+      },
+      "TechwolfJobShare": {
+        "fields": {
+          "user": {
+            "rule": "required",
+            "type": "TechwolfUser",
+            "id": 1
+          },
+          "jobId": {
+            "rule": "required",
+            "type": "int64",
+            "id": 2
+          },
+          "position": {
+            "rule": "required",
+            "type": "string",
+            "id": 3
+          },
+          "salary": {
+            "rule": "required",
+            "type": "string",
+            "id": 4
+          },
+          "location": {
+            "type": "string",
+            "id": 5
+          },
+          "company": {
+            "rule": "required",
+            "type": "string",
+            "id": 6
+          },
+          "stage": {
+            "type": "string",
+            "id": 7
+          },
+          "experience": {
+            "type": "string",
+            "id": 8
+          },
+          "education": {
+            "type": "string",
+            "id": 9
+          },
+          "url": {
+            "type": "string",
+            "id": 10
+          },
+          "lid": {
+            "type": "string",
+            "id": 11
+          },
+          "price": {
+            "type": "string",
+            "id": 12
+          },
+          "description": {
+            "type": "string",
+            "id": 13
+          }
+        }
+      },
+      "TechwolfResumeShare": {
+        "fields": {
+          "user": {
+            "rule": "required",
+            "type": "TechwolfUser",
+            "id": 1
+          },
+          "expectId": {
+            "rule": "required",
+            "type": "int64",
+            "id": 2
+          },
+          "position": {
+            "rule": "required",
+            "type": "string",
+            "id": 3
+          },
+          "salary": {
+            "rule": "required",
+            "type": "string",
+            "id": 4
+          },
+          "location": {
+            "type": "string",
+            "id": 5
+          },
+          "applyStatus": {
+            "type": "string",
+            "id": 6
+          },
+          "age": {
+            "type": "string",
+            "id": 7
+          },
+          "experience": {
+            "type": "string",
+            "id": 8
+          },
+          "education": {
+            "type": "string",
+            "id": 9
+          },
+          "url": {
+            "type": "string",
+            "id": 10
+          },
+          "lid": {
+            "type": "string",
+            "id": 11
+          },
+          "gender": {
+            "type": "int32",
+            "id": 12
+          },
+          "blurred": {
+            "type": "bool",
+            "id": 13
+          },
+          "source": {
+            "type": "int32",
+            "id": 14
+          }
+        }
+      },
+      "AtInfo": {
+        "fields": {
+          "flag": {
+            "rule": "required",
+            "type": "int32",
+            "id": 1
+          },
+          "uids": {
+            "rule": "repeated",
+            "type": "int64",
+            "id": 2,
+            "options": {
+              "packed": false
+            }
+          }
+        }
+      },
+      "TechwolfGroupSync": {
+        "fields": {
+          "gid": {
+            "rule": "required",
+            "type": "int64",
+            "id": 1
+          },
+          "version": {
+            "type": "int32",
+            "id": 2
+          },
+          "encGid": {
+            "type": "string",
+            "id": 3
+          }
+        }
+      },
+      "TechwolfSticker": {
+        "fields": {
+          "sid": {
+            "rule": "required",
+            "type": "int64",
+            "id": 1
+          },
+          "packId": {
+            "type": "int64",
+            "id": 2
+          },
+          "image": {
+            "type": "TechwolfImage",
+            "id": 3
+          },
+          "format": {
+            "type": "string",
+            "id": 4
+          },
+          "name": {
+            "type": "string",
+            "id": 5
+          }
+        }
+      },
+      "TechwolfChatShare": {
+        "fields": {
+          "shareId": {
+            "rule": "required",
+            "type": "int64",
+            "id": 1
+          },
+          "title": {
+            "rule": "required",
+            "type": "string",
+            "id": 2
+          },
+          "records": {
+            "rule": "repeated",
+            "type": "string",
+            "id": 3
+          },
+          "bottomText": {
+            "type": "string",
+            "id": 4
+          },
+          "url": {
+            "type": "string",
+            "id": 5
+          },
+          "from": {
+            "rule": "required",
+            "type": "TechwolfUser",
+            "id": 6
+          },
+          "to": {
+            "rule": "required",
+            "type": "TechwolfUser",
+            "id": 7
+          },
+          "user": {
+            "rule": "required",
+            "type": "TechwolfUser",
+            "id": 8
+          }
+        }
+      },
+      "TechwolfInterviewShare": {
+        "fields": {
+          "interviewId": {
+            "rule": "required",
+            "type": "int64",
+            "id": 1
+          },
+          "user": {
+            "rule": "required",
+            "type": "TechwolfUser",
+            "id": 2
+          },
+          "title": {
+            "rule": "required",
+            "type": "string",
+            "id": 3
+          },
+          "bottomText": {
+            "rule": "required",
+            "type": "string",
+            "id": 4
+          },
+          "url": {
+            "type": "string",
+            "id": 5
+          },
+          "interviewTime": {
+            "type": "string",
+            "id": 6
+          },
+          "interviewAddress": {
+            "type": "string",
+            "id": 7
+          },
+          "jobName": {
+            "type": "string",
+            "id": 8
+          }
+        }
+      },
+      "TechwolfListItem": {
+        "fields": {
+          "title": {
+            "type": "string",
+            "id": 1
+          },
+          "icon": {
+            "type": "int32",
+            "id": 2
+          }
+        }
+      },
+      "TechwolfListCard": {
+        "fields": {
+          "title": {
+            "type": "string",
+            "id": 1
+          },
+          "items": {
+            "rule": "repeated",
+            "type": "TechwolfListItem",
+            "id": 2,
+            "options": {
+              "packed": false
+            }
+          },
+          "pageSize": {
+            "type": "int32",
+            "id": 3
+          }
+        }
+      },
+      "TechwolfStar": {
+        "fields": {
+          "starId": {
+            "rule": "required",
+            "type": "int64",
+            "id": 1
+          },
+          "starDesc": {
+            "type": "string",
+            "id": 2
+          },
+          "options": {
+            "rule": "repeated",
+            "type": "TechwolfListItem",
+            "id": 3,
+            "options": {
+              "packed": false
+            }
+          }
+        }
+      },
+      "TechwolfStarRate": {
+        "fields": {
+          "title": {
+            "type": "string",
+            "id": 1
+          },
+          "stars": {
+            "rule": "repeated",
+            "type": "TechwolfStar",
+            "id": 2,
+            "options": {
+              "packed": false
+            }
+          },
+          "rateStatus": {
+            "rule": "required",
+            "type": "int32",
+            "id": 3
+          },
+          "rateStar": {
+            "type": "TechwolfStar",
+            "id": 4
+          },
+          "submitButton": {
+            "type": "TechwolfButton",
+            "id": 5
+          }
+        }
+      },
+      "TechwolfFrame": {
+        "fields": {
+          "href": {
+            "rule": "required",
+            "type": "string",
+            "id": 1
+          }
+        }
+      },
+      "TechwolfMultiImage": {
+        "fields": {
+          "images": {
+            "rule": "repeated",
+            "type": "TechwolfImageInfo",
+            "id": 1,
+            "options": {
+              "packed": false
+            }
+          }
+        }
+      }
+    }
+  }
+}

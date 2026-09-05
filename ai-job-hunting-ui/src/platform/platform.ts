@@ -1481,7 +1481,7 @@ class BossPlatform extends AbsPlatform {
             throw new NotMatchException(jobTitle, jobDetailExt.address || jobDetail.businessDistrict, '不满足通勤位置要求')
         }
 
-        // 默认用本地规则完成简历-JD评分；只有用户填写附加自然语言条件时才调用 AI。
+        // 默认用本地规则完成简历-JD评分；不调用任何外部 AI 或付费接口。
         // 通勤、双休、五险一金等硬规则已在此前独立执行，评分不会覆盖。
         const snapshotJobBaseInfo = JSON.stringify(this.unpackBaseInfo(jobDetail))
         const snapshotJobExtInfo = JSON.stringify(this.unpackExtInfo(jobDetailExt))
@@ -1493,15 +1493,13 @@ class BossPlatform extends AbsPlatform {
             matchedKeywords: jobTitleDecision.matchedKeywords,
         }
         const resumeMatchEnabled = userStore.user.preference.resumeMatchE
-        const aiFilterPrompt = userStore.user.preference.afE ? (userStore.user.preference.af || '').trim() : ''
-        if (resumeMatchEnabled || aiFilterPrompt) {
+        if (resumeMatchEnabled) {
             const jobBaseInfo = snapshotJobBaseInfo
             const jobExtInfo = snapshotJobExtInfo
             const minMatchScore = userStore.user.preference.resumeMatchMinScore
             const cacheKey = this.buildAiFilterCacheKey([
                 'local-rules-v2',
                 String(userStore.user.resumeId || ''),
-                aiFilterPrompt,
                 String(resumeMatchEnabled),
                 String(minMatchScore),
                 jobBaseInfo,
@@ -1516,7 +1514,7 @@ class BossPlatform extends AbsPlatform {
             } else {
                 try {
                     const filterResp = await AiPower.filter(
-                        aiFilterPrompt,
+                        '',
                         jobBaseInfo,
                         jobExtInfo,
                         resumeMatchEnabled,

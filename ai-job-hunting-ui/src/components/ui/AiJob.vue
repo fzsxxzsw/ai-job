@@ -24,7 +24,7 @@
             </div>
             <div class="server-mode-tip">
                 <el-tag :type="serverStore.isOnline ? 'success' : 'warning'" effect="dark">
-                    {{ serverStore.isOnline ? '服务器已连接' : '服务器离线：AI 功能不可用' }}
+                    {{ serverStore.isOnline ? '服务器已连接' : '服务器离线：无法同步偏好' }}
                 </el-tag>
             </div>
         </div>
@@ -117,7 +117,7 @@
     </el-card>
 
     <div class="action-toolbar">
-        <el-tooltip effect="dark" content="从 BOSS 附件简历更新 AI 回复所需的简历信息" placement="bottom">
+        <el-tooltip effect="dark" content="从 BOSS 附件简历更新本地岗位匹配所需的信息" placement="bottom">
             <el-button :icon="Upload as any" type="primary" @click="handlerImport"
                        :disabled="!serverStore.isOnline" :loading="importResumeLoading">
                 导入简历
@@ -424,7 +424,7 @@ const runtimeScriptVersion = [
 // 创建日志记录器实例
 const logRecorder = new LogRecorder();
 const latestPushRecords = ref<{ level: string; message: string; timestamp: string }[]>([]);
-let recordsUpdateTimer: number | null = null;
+let recordsUpdateTimer: ReturnType<typeof setInterval> | null = null;
 
 // 已经购买产品
 const buyProductList = ref([])
@@ -1080,10 +1080,10 @@ onUnmounted(() => {
 }
 
 .server-config-container {
-    display: flex;
+    display: grid;
+    grid-template-columns: auto minmax(360px, 1fr) auto;
     align-items: center;
-    gap: 20px;
-    flex-wrap: wrap;
+    gap: 16px;
 }
 
 .server-status {
@@ -1091,8 +1091,8 @@ onUnmounted(() => {
 }
 
 .server-input {
-    flex: 1;
-    min-width: 450px;
+    min-width: 0;
+    width: 100%;
 }
 
 :deep(.custom-server-input .el-input-group__prepend) {
@@ -1137,7 +1137,17 @@ onUnmounted(() => {
 }
 
 .server-mode-tip {
-    margin-left: auto;
+    justify-self: end;
+}
+
+@media (max-width: 900px) {
+    .server-config-container {
+        grid-template-columns: 1fr;
+    }
+
+    .server-mode-tip {
+        justify-self: start;
+    }
 }
 
 .operation-status-card {

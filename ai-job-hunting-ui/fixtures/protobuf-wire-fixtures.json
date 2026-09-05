@@ -1,0 +1,82 @@
+{
+  "generator": "committed protobuf wire golden (explicit updates only)",
+  "protobufjsVersion": "7.2.6",
+  "longVersion": "5.2.3",
+  "cases": [
+    {
+      "name": "outbound-message",
+      "value": {
+        "messages": [
+          {
+            "from": {
+              "uid": "9223372036854775806",
+              "source": 0
+            },
+            "to": {
+              "uid": "9007199254740993",
+              "name": "招聘者",
+              "source": 0
+            },
+            "type": 1,
+            "mid": "7500000000000001",
+            "time": "1760000000000",
+            "body": {
+              "type": 1,
+              "templateId": 1,
+              "text": "你好，静态 protobuf",
+              "image": {}
+            },
+            "cmid": "7500000000000001"
+          }
+        ],
+        "type": 1
+      },
+      "expectedHex": "08011a630a0c08feffffffffffffff7f380012160881808080808080101209e68b9be88198e8808538001801208180c39edda6a90d288080b3c19c333220080110011a18e4bda0e5a5bdefbc8ce99d99e680812070726f746f6275662a00588180c39edda6a90d"
+    },
+    {
+      "name": "message-read",
+      "value": {
+        "messageRead": [
+          {
+            "userId": "9223372036854775806",
+            "messageId": "9007199254740993",
+            "readTime": 1760000000000,
+            "userSource": 0
+          }
+        ],
+        "type": 6
+      },
+      "expectedHex": "0806421c08feffffffffffffff7f108180808080808010188080b3c19c332800"
+    },
+    {
+      "name": "inbound-message",
+      "value": {
+        "messages": [
+          {
+            "from": {
+              "uid": "9223372036854775806",
+              "name": "招聘者",
+              "source": 0
+            },
+            "to": {
+              "uid": "9007199254740993",
+              "name": "求职者",
+              "source": 0
+            },
+            "type": 1,
+            "mid": "9223372036854775805",
+            "time": "1760000000000",
+            "body": {
+              "type": 1,
+              "templateId": 1,
+              "text": "入站消息"
+            },
+            "cmid": "7500000000000002"
+          }
+        ],
+        "type": 1
+      },
+      "expectedHex": "08011a610a1708feffffffffffffff7f1209e68b9be88198e88085380012160881808080808080101209e6b182e8818ce880853800180120fdffffffffffffff7f288080b3c19c333212080110011a0ce585a5e7ab99e6b688e681af588280c39edda6a90d"
+    }
+  ]
+}
