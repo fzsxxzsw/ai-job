@@ -3,6 +3,7 @@ package com.maple.ai.job.hunting.service.biz;
 import cn.hutool.core.bean.BeanUtil;
 import com.alibaba.fastjson.JSON;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.maple.ai.job.hunting.config.AppBizConfig;
 import com.maple.ai.job.hunting.emums.ProductEnum;
 import com.maple.ai.job.hunting.emums.ProductTypeEnum;
 import com.maple.ai.job.hunting.mapper.UserProductMapper;
@@ -27,6 +28,9 @@ public class ProductService {
 
     @Resource
     private UserProductMapper userProductMapper;
+
+    @Resource
+    private AppBizConfig appBizConfig;
 
     public List<ProductVO> getUserProductList(Long userId) {
 
@@ -73,6 +77,13 @@ public class ProductService {
 
 
     Set<Integer> queryUserValidAllProductType(Long userId) {
+        if (userId == null || userId <= 0) return Collections.emptySet();
+        if (appBizConfig.isPersonalMode()) {
+            // Effective local capabilities, not fabricated purchases or trial records.
+            return Arrays.stream(ProductTypeEnum.values()).map(ProductTypeEnum::getCode)
+                    .filter(code -> code != null && code > 0 && code < 100)
+                    .collect(java.util.stream.Collectors.toUnmodifiableSet());
+        }
         return userProductMapper.queryUserValidAllProductType(userId);
     }
 
@@ -84,7 +95,7 @@ public class ProductService {
      * @return boolean
      */
     public boolean hasProductAbility(Long userId, Integer productType) {
-        return userProductMapper.queryUserValidAllProductType(userId).contains(productType);
+        return queryUserValidAllProductType(userId).contains(productType);
     }
 
     /**
@@ -96,6 +107,6 @@ public class ProductService {
      */
     public boolean hasProductAbilityAll(Long userId, ProductTypeEnum ... productType) {
         List<Integer> list = Arrays.stream(productType).map(ProductTypeEnum::getCode).toList();
-        return userProductMapper.queryUserValidAllProductType(userId).containsAll(list);
+        return userId != null && userId > 0 && queryUserValidAllProductType(userId).containsAll(list);
     }
 }

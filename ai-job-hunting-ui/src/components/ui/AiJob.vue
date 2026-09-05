@@ -130,7 +130,8 @@
             </el-button>
         </el-tooltip>
 
-        <el-button type="warning" :icon="Collection as any" color="#626aef"
+        <el-tag v-if="IS_PERSONAL_MODE" type="success" effect="plain">个人自用版 · 无需购买坐席</el-tag>
+        <el-button v-if="!IS_PERSONAL_MODE" type="warning" :icon="Collection as any" color="#626aef"
                    @click.stop="handlerAISeatClick" :disabled="!serverStore.isOnline">产品列表</el-button>
         <el-tooltip effect="dark" content="服务器在线且消息通道连接时，AI 会处理招聘方发来的消息" placement="bottom">
             <el-button :icon="Service as any" color="#626aef" :disabled="!serverStore.isOnline">
@@ -173,7 +174,7 @@
         </el-button>
     </div>
 
-    <el-dialog v-model="aiSeatBuyVisible" :show-close="false" width="800">
+    <el-dialog v-if="!IS_PERSONAL_MODE" v-model="aiSeatBuyVisible" :show-close="false" width="800">
         <template #header="{ close, titleId, titleClass }">
             <div class="my-header">
                 <el-text size="large" style="font-size: 20px" type="info">产品列表</el-text>
@@ -287,6 +288,7 @@
 
 <script setup lang="ts">
 import axiosOriginal, {AxiosInstance} from "axios";
+import {IS_PERSONAL_MODE} from "../../deploymentMode";
 import {CircleCloseFilled, PriceTag, Promotion, Service, Shop, Upload, Wallet, Collection, RefreshRight} from '../icons';
 import {computed, h, inject, ref, Ref, onMounted, onUnmounted} from "vue";
 import {PushStatus} from "../../enums";
@@ -844,6 +846,7 @@ const handleClearRiskStop = async () => {
 }
 
 const handlerAISeatClick = async () => {
+    if (IS_PERSONAL_MODE) return
     //  显示弹窗
     aiSeatBuyVisible.value = true
 
@@ -868,6 +871,7 @@ const queryBuyProductList = async () => {
 }
 
 const showOrderGroup = async () => {
+    if (IS_PERSONAL_MODE) return
     if (!loginInterceptor()) {
         return;
     }
@@ -903,6 +907,7 @@ const showOrderGroup = async () => {
 }
 
 const waitUsePay = () => {
+    if (IS_PERSONAL_MODE) return
     // 建立sse连接，用于服务端通知前端订单支付成功
     const sseClient = new SSEClient(axios.defaults.baseURL + 'api/sse/connect');
     sseClient.addOnMsgCallback((event: any) => {
@@ -953,7 +958,7 @@ setTimeout(() => {
 }, 1500)
 
 const handlerAISeatStatusChange = async (val: boolean) => {
-    if (firstAiSeatStatus.value == null) {
+    if (!IS_PERSONAL_MODE && firstAiSeatStatus.value == null) {
         return;
     }
 
@@ -964,6 +969,7 @@ const handlerAISeatStatusChange = async (val: boolean) => {
     return axios.post("/api/user/save/preference", {
         aiSeatStatus: val ? 1 : 0
     }).then(resp => {
+        firstAiSeatStatus.value = userStore.user.aiSeatStatus
         if (val && resp.data.message && resp.data.message !== "成功") {
             ElNotification({
                 message: resp.data.message,
@@ -972,7 +978,7 @@ const handlerAISeatStatusChange = async (val: boolean) => {
             });
         }
     }).catch(_ => {
-        userStore.user.aiSeatStatus = firstAiSeatStatus.value
+        userStore.user.aiSeatStatus = firstAiSeatStatus.value ?? false
     })
 }
 const handlerAISeatSwitchClick = async () => {

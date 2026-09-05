@@ -77,6 +77,14 @@ public class ProductFilter implements Filter {
         }
 
         Long userId = HeaderContext.getHeader().getUserId();
+        if (appBizConfig.isPersonalMode()) {
+            // LoginFilter still runs first. Only this installation's commercial quota is disabled.
+            if (userId == null || userId <= 0) {
+                throw new ApplicationException(BizCodeEnum.NOT_LOGIN);
+            }
+            filterChain.doFilter(request, response);
+            return;
+        }
         Set<Integer> productPowerList = userProductMapper.queryUserValidAllProductType(userId);
 
         // 检查是否满足任一权限组

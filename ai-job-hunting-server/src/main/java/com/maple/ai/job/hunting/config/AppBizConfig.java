@@ -18,6 +18,10 @@ import java.util.Map;
 @Configuration
 public class AppBizConfig {
 
+    /** Explicit local opt-in; never changes login or administrator checks. */
+    @Value("${app.personal-mode:false}")
+    private boolean personalMode;
+
     @Value("${proxy_host:127.0.0.1}")
     private String proxyHost;
 

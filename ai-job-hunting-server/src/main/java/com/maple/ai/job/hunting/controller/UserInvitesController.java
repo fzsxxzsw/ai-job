@@ -19,6 +19,8 @@ import java.util.List;
  * Description:
  */
 
+@org.springframework.boot.autoconfigure.condition.ConditionalOnProperty(
+        name = "app.personal-mode", havingValue = "false", matchIfMissing = true)
 @RestController
 @RequestMapping("/api/user/invites")
 public class UserInvitesController {

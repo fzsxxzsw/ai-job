@@ -149,10 +149,13 @@ public class UserService {
         userInfoVO.setPreference(JSONUtil.parseObj(userInfoDO.getPreference()));
         Optional.ofNullable(userResumeDO).ifPresent(resumeDO -> userInfoVO.setResumeId(resumeDO.getResumeId()));
 
+        if (appBizConfig.isPersonalMode() && userInfoDO.getAiSeatStatus() == null) {
+            userInfoVO.setAiSeatStatus(false);
+        }
         //购买过ai坐席，查询是否过期
         if (Objects.nonNull(userInfoDO.getAiSeatStatus())) {
             boolean openAiSeat = AiSeatStatusEnum.OPEN.getCode().equals(userInfoDO.getAiSeatStatus());
-            if (openAiSeat) {
+            if (openAiSeat && !appBizConfig.isPersonalMode()) {
                 // 开启了ai坐席，但是不存在有效期内的AI坐席产品
                 Set<Integer> userProductSet = productService.queryUserValidAllProductType(userId);
                 boolean existAiSeat = userProductSet.contains(ProductTypeEnum.AI_SEAT.getCode());
@@ -182,7 +185,8 @@ public class UserService {
         }
 
         // 如果尝试开启AI坐席，则判断是否有在有效期内的AI坐席产品
-        if (Objects.equals(userInfoVO.getAiSeatStatus(), AiSeatStatusEnum.OPEN.getBool())) {
+        if (!appBizConfig.isPersonalMode()
+                && Objects.equals(userInfoVO.getAiSeatStatus(), AiSeatStatusEnum.OPEN.getBool())) {
             Set<Integer> productTypeSet = productService.queryUserValidAllProductType(userId);
             Integer productType = ProductTypeEnum.AI_SEAT.getCode();
             String userIdAndProductTypeKey = userId + "-" + productType;
@@ -200,7 +204,9 @@ public class UserService {
                 HeaderContext.getHeader().setRespMsg("AI坐席试用已开启");
             }
         }
-        condition.set(UserInfoDO::getAiSeatStatus, userInfoVO.getAiSeatStatus());
+        if (userInfoVO.getAiSeatStatus() != null) {
+            condition.set(UserInfoDO::getAiSeatStatus, userInfoVO.getAiSeatStatus());
+        }
         // 必须要填入实体对象，mybatisPlus才能自动填充（set的字段还是按照condition中set的字段来更新，不用担心实体对象为空更新进去）
         userInfoMapper.update(new UserInfoDO(), condition);
     }

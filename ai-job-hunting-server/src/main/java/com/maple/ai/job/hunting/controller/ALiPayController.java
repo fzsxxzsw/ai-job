@@ -25,6 +25,8 @@ import java.util.Map;
  * @since 2022/12/22 14:37
  * desc AliPay当面付
  */
+@org.springframework.boot.autoconfigure.condition.ConditionalOnProperty(
+        name = "app.personal-mode", havingValue = "false", matchIfMissing = true)
 @RestController
 @RequestMapping("/api/pay")
 public class ALiPayController {

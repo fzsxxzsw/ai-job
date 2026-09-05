@@ -1,4 +1,5 @@
 import axios from "axios";
+import {IS_PERSONAL_MODE} from "./deploymentMode";
 import {ElMessage} from "./utils/tools";
 import {BizCodeEnum} from "./types";
 import {ProductStore} from "./stores";
@@ -44,7 +45,7 @@ function handlerErrorCode(result: any) {
     if (!result || result?.code < 5000) {
         return;
     }
-    if (result.code === BizCodeEnum.PRODUCT_NOT_AUTHORIZED) {
+    if (!IS_PERSONAL_MODE && result.code === BizCodeEnum.PRODUCT_NOT_AUTHORIZED) {
         const productStore = ProductStore()
         productStore.setShowProduct(true)
     }

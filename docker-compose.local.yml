@@ -61,6 +61,7 @@ services:
       MYSQL_PASSWORD: ${MYSQL_PASSWORD}
       SMART_PASSWORD: ${SMART_PASSWORD}
       KIMI_API_KEY: ${KIMI_API_KEY:-}
+      JOB_HELPER_PERSONAL_MODE: ${JOB_HELPER_PERSONAL_MODE:-true}
       AI_API_KEY: ${AI_API_KEY:-}
       AI_BASE_URL: ${AI_BASE_URL:-https://dashscope.aliyuncs.com/compatible-mode/v1}
       AI_COMPLETIONS_PATH: ${AI_COMPLETIONS_PATH:-/chat/completions}

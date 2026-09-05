@@ -1,11 +1,14 @@
 <template>
     <div class="markdown-container">
-        <MarkdownComponent />
+        <PersonalDocument v-if="IS_PERSONAL_MODE" />
+        <MarkdownComponent v-else />
     </div>
 </template>
 
 <script setup lang="ts">
-import MarkdownComponent  from '../../assets/UseDocument.md';
+import MarkdownComponent from '../../assets/UseDocument.md';
+import PersonalDocument from '../../assets/PersonalUse.md';
+import {IS_PERSONAL_MODE} from '../../deploymentMode';
 
 
 </script>
