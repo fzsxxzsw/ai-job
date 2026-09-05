@@ -39,8 +39,10 @@ jobs:
           name: job-helper-chrome-mv3
           path: ai-job-hunting-ui/.output/chrome-mv3/
           if-no-files-found: error
+          include-hidden-files: true
       - uses: actions/upload-artifact@v4
         with:
           name: job-helper-chrome-zip
           path: ai-job-hunting-ui/.output/job-helper-*-chrome.zip
           if-no-files-found: error
+          include-hidden-files: true
