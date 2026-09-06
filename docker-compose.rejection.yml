@@ -1,0 +1,20 @@
+# Optional overlay for the committed Java + Python Agent composition.
+# Do not combine with the unfinished Python API migration composition.
+services:
+  backend:
+    environment:
+      REJECTION_GATEWAY_ENABLED: ${REJECTION_GATEWAY_ENABLED:-false}
+      REJECTION_GATEWAY_SECRET: ${REJECTION_GATEWAY_SECRET:-}
+      REJECTION_INTERNAL_URL: http://agent:9101
+  agent:
+    environment:
+      REJECTION_ENABLED: ${REJECTION_GATEWAY_ENABLED:-false}
+      REJECTION_GATEWAY_SECRET: ${REJECTION_GATEWAY_SECRET:-}
+      REJECTION_MODEL_TIMEOUT_SECONDS: ${REJECTION_MODEL_TIMEOUT_SECONDS:-10}
+      REJECTION_ALLOWED_MODEL_HOSTS: ${REJECTION_ALLOWED_MODEL_HOSTS:-}
+      AI_API_KEY: ${AI_API_KEY:-}
+      AI_BASE_URL: ${AI_BASE_URL:-https://dashscope.aliyuncs.com/compatible-mode/v1}
+      AI_MODEL: ${AI_MODEL:-qwen3-vl-32b-thinking}
+      AI_COMPLETIONS_PATH: ${AI_COMPLETIONS_PATH:-/chat/completions}
+      AI_THINKING_BUDGET: ${AI_THINKING_BUDGET:-256}
+      JOB_HELPER_BUILD_ID: ${JOB_HELPER_BUILD_ID:-unreleased}

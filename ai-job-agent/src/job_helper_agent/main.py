@@ -29,6 +29,7 @@ from job_helper_agent.models import (
 from job_helper_agent.recoverable_graph import build_recoverable_graph
 from job_helper_agent.repository import AgentRepository, RunConflict, RunNotFound
 from job_helper_agent.service import RecoverableAgentService
+from job_helper_agent.rejection.routes import router as rejection_router, rejection_runtime
 
 
 STRICT_CHECKPOINT_SERIALIZER = JsonPlusSerializer(
@@ -98,13 +99,21 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await checkpoint_connection.close()
 
 
+@asynccontextmanager
+async def combined_lifespan(app: FastAPI):
+    async with lifespan(app):
+        async with rejection_runtime(app):
+            yield
+
+
 def create_app(config: AgentConfig | None = None) -> FastAPI:
     application = FastAPI(
         title="Job Helper Agent",
         version="0.1.0",
-        lifespan=lifespan,
+        lifespan=combined_lifespan,
     )
     application.state.config_override = config
+    application.include_router(rejection_router)
 
     @application.get("/health/live")
     async def health_live() -> dict[str, str]:

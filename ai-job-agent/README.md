@@ -1,5 +1,10 @@
 # Job Helper Agent
 
+Optional manual rejection analysis is implemented in `job_helper_agent.rejection`, behind
+the authenticated Java gateway. It is off by default and does not create browser actions.
+See `../docs/rejection-gateway.md` for its separate compatibility migration and activation.
+The runtime/action boundaries below describe the LangGraph workflow, not report storage.
+
 The Python service keeps the Phase 1 read-only job decision API and adds a
 recoverable, human-approved action proposal workflow. It never executes a
 browser action. Approval can only create a `CONTACT_JOB` outbox row whose
