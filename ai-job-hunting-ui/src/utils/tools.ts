@@ -6,6 +6,7 @@ import {ElMessage as originalElMessage, MessageParams} from "element-plus";
 import {LogRecorder} from "../logging/record";
 import axiosOriginal from "axios";
 import {GM_xmlhttpRequest} from "$";
+import {feedbackOptions} from "../ui/feedback";
 
 const logRecorder = new LogRecorder();
 let loginIng = false;
@@ -32,6 +33,7 @@ export const silentlyLogin = async (bossUserId: string) => {
     }
 
     if (!token) {
+        loginIng = false;
         logRecorder.info("未登录Boss，静默登录结束")
         return Promise.reject(new Error("未登录Boss，静默登录失败"));
     }
@@ -70,27 +72,11 @@ export const isProdEnv = (): boolean => {
 }
 
 
-const wrapMessage = (options: any) => {
-    if (typeof options === 'string') {
-        return "[AI助理] " + options
-    }
-    if (options && options.message) {
-        options.message = "[AI助理] " + options.message
-    }
-    return options
-}
-
-export const ElMessage = ((options: any) => {
-    return originalElMessage(wrapMessage(options))
-}) as typeof originalElMessage
-
+export const ElMessage = ((options: any) => originalElMessage(feedbackOptions(options))) as typeof originalElMessage
 Object.assign(ElMessage, originalElMessage)
-
 const methods = ['success', 'warning', 'info', 'error'] as const
 methods.forEach(type => {
-    (ElMessage as any)[type] = (options: any) => {
-        return (originalElMessage as any)[type](wrapMessage(options))
-    }
+    (ElMessage as any)[type] = (options: any) => originalElMessage(feedbackOptions(options, type))
 })
 
 // ajax请求；不会跨域

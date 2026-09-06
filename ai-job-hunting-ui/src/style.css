@@ -1,0 +1,12 @@
+/* Only helper-owned feedback is styled; do not restyle the host site's widgets. */
+.job-helper-toast, .job-helper-notice {
+    max-width: calc(100vw - 32px);
+    box-sizing: border-box;
+    overflow-wrap: anywhere;
+}
+.job-helper-notice .el-notification__content {
+    white-space: pre-wrap;
+    max-height: min(420px, calc(100vh - 120px));
+    overflow: auto;
+    text-align: left;
+}

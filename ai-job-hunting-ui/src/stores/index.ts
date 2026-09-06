@@ -79,14 +79,21 @@ export const LoginStore = defineStore('LoginStore', () => {
 
     function loginSuccess() {
         login.value = true
+        loginFailStatus.value = false
     }
 
     function loginFail() {
+        login.value = false
         loginFailStatus.value = true
     }
 
+    function invalidate() {
+        login.value = false
+        loginFailStatus.value = false
+    }
+
     return {
-        login, loginSuccess, loginFailStatus, loginFail
+        login, loginSuccess, loginFailStatus, loginFail, invalidate
     };
 })
 

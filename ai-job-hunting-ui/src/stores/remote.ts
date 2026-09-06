@@ -70,13 +70,13 @@ function applyUserConfig(userStore: ReturnType<typeof UserStore>, user: any) {
     }
 }
 
-export function userRemoteLoad(forceRefresh = false): Promise<void> {
+export function userRemoteLoad(forceRefresh = false, requireFresh = false): Promise<void> {
     logRecorder.info("加载用户偏好配置")
     const userStore = UserStore()
     const loginStore = LoginStore();
     const serverStore = ServerStore();
 
-    if (loginStore.loginFailStatus){
+    if (loginStore.loginFailStatus && !forceRefresh){
         return Promise.resolve();
     }
 
@@ -94,7 +94,7 @@ export function userRemoteLoad(forceRefresh = false): Promise<void> {
     }
 
     if (activeUserLoad) {
-        return activeUserLoad
+        return requireFresh ? activeUserLoad.then(() => userRemoteLoad(forceRefresh, requireFresh)) : activeUserLoad
     }
 
     // 先尝试静默登录
@@ -133,6 +133,7 @@ export function userRemoteLoad(forceRefresh = false): Promise<void> {
             loginStore.loginFail()
             logRecorder.error("加载配置失败：无服务器数据且无本地镜像")
         }
+        if (requireFresh) throw error instanceof Error ? error : new Error("配置同步失败，已保留原有设置")
     })
 .finally(() => {
         if (!userStore.user.preference) {

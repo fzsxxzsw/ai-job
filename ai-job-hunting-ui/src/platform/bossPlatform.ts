@@ -1,4 +1,5 @@
 import axiosOriginal from "axios";
+import {replyNoticeText, UI_FEEDBACK_Z_INDEX} from "../ui/feedback";
 import {Message, MessageRead, TechwolfChatProtocol} from "../webSocket/protobuf";
 import {MessageCache, Tools} from "./utils";
 import {UserStore} from '../stores'
@@ -887,13 +888,7 @@ export class BossOption {
     }
 
     public buildNoticeHtml(fromName: string, fromAvatar: string, question: string, answer: string) {
-        return BossOption.template
-            .replace(/{{user_name}}/g, fromName)
-            .replace(/{{user_avatar}}/g, fromAvatar)
-            .replace(/{{user_question}}/g, question)
-            .replace(/{{assistant_name}}/g, 'AI助手')
-            .replace(/{{assistant_answer}}/g, answer)
-            .replace(/{{assistant_avatar}}/g, BossOption.aiIconWebpBase64)
+        return replyNoticeText(fromName, question, answer)
     }
 
     /**
@@ -1157,7 +1152,9 @@ export class BossOption {
                 title: 'AI坐席回复已获服务器确认',
                 showClose: false,
                 duration: 2000,
-                dangerouslyUseHTMLString: true,
+                dangerouslyUseHTMLString: false,
+                customClass: "job-helper-notice",
+                zIndex: UI_FEEDBACK_Z_INDEX,
                 message: html,
             })
         }

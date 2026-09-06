@@ -1,101 +1,61 @@
-import { ref, computed } from 'vue'
-import { defineStore } from 'pinia'
-import { TampermonkeyApi } from "../platform/utils"
+import {ref, computed, onScopeDispose} from 'vue'
+import {defineStore} from 'pinia'
+import {TampermonkeyApi} from '../platform/utils'
+import {createHealthMonitor, DEFAULT_SERVER_URL, normalizeServerUrl, type HealthState} from '../runtime/serverHealth'
+export {DEFAULT_SERVER_URL} from '../runtime/serverHealth'
 
 const SERVER_URL_KEY = 'custom_server_url'
-export const DEFAULT_SERVER_URL = 'http://127.0.0.1:9100/'
-
-function normalizeServerUrl(url: string) {
-    const parsed = new URL(url.trim())
-    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-        throw new Error('服务器地址仅支持 http 或 https')
-    }
-    parsed.hash = ''
-    parsed.search = ''
-    return parsed.toString()
-}
 
 export const ServerStore = defineStore('server', () => {
-    // 从 GM_getValue 获取保存的地址，如果没有则使用默认地址
-    const baseUrl = ref(TampermonkeyApi.GmGetValue(SERVER_URL_KEY, DEFAULT_SERVER_URL))
-    const status = ref<'online' | 'offline' | 'checking'>('checking')
+    let initialUrl = DEFAULT_SERVER_URL
+    try { initialUrl = normalizeServerUrl(TampermonkeyApi.GmGetValue(SERVER_URL_KEY, DEFAULT_SERVER_URL)) } catch (_) {}
+    const baseUrl = ref(initialUrl)
+    const generation = ref(0)
+    const status = ref<HealthState['status']>('checking')
+    const isChecking = ref(false)
     const lastError = ref('')
-
-    // 计算属性：当前是否为在线模式
+    const lastCheckedAt = ref(0)
     const isOnline = computed(() => status.value === 'online')
-
-    /**
-     * 更新服务器地址并持久化
-     */
+    const monitor = createHealthMonitor({
+        getUrl: () => baseUrl.value,
+        canPoll: () => document.visibilityState !== 'hidden',
+        onChange: state => {
+            status.value = state.status; isChecking.value = state.isChecking
+            lastError.value = state.lastError; lastCheckedAt.value = state.lastCheckedAt
+        },
+    })
     function setBaseUrl(url: string) {
-        const normalizedUrl = normalizeServerUrl(url)
-        baseUrl.value = normalizedUrl
-        TampermonkeyApi.GmSetValue(SERVER_URL_KEY, normalizedUrl)
-        status.value = 'checking'
-    }
-
-    /**
-     * 重置为默认服务器地址
-     */
-    function resetBaseUrl() {
-        setBaseUrl(DEFAULT_SERVER_URL)
-    }
-
-    /**
-     * 设置当前状态
-     */
-    function setStatus(newStatus: 'online' | 'offline' | 'checking', error: string = '') {
-        status.value = newStatus
-        lastError.value = error
-    }
-
-    /**
-     * 获取基于当前服务器地址的本地镜像 Key
-     */
-    function getMirrorKey(type: string) {
-        const safeUrl = baseUrl.value.replace(/[^a-zA-Z0-9]/g, '_')
-        return `mirror_${type}_${safeUrl}`
-    }
-
-    /**
-     * 获取全局镜像 Key（不绑定特定服务器）
-     */
-    function getGlobalMirrorKey(type: string) {
-        return `mirror_${type}_global_latest`
-    }
-
-    /**
-     * 测试连接状态
-     */
-    async function checkConnection() {
-        status.value = 'checking'
-        try {
-            const response = await fetch(`${baseUrl.value}actuator/health`, {
-                method: 'GET',
-                cache: 'no-store'
-            })
-            if (response.ok) {
-                status.value = 'online'
-            } else {
-                status.value = 'offline'
-                lastError.value = `HTTP ${response.status}`
-            }
-        } catch (e) {
-            status.value = 'offline'
-            lastError.value = '网络连接失败'
+        const normalized = normalizeServerUrl(url)
+        if (normalized !== baseUrl.value) {
+            baseUrl.value = normalized
+            generation.value++
+            monitor.invalidate()
         }
+        TampermonkeyApi.GmSetValue(SERVER_URL_KEY, normalized)
     }
-
-    return {
-        baseUrl,
-        status,
-        lastError,
-        isOnline,
-        setBaseUrl,
-        resetBaseUrl,
-        setStatus,
-        getMirrorKey,
-        getGlobalMirrorKey,
-        checkConnection
+    function resetBaseUrl() { setBaseUrl(DEFAULT_SERVER_URL) }
+    function getMirrorKey(type: string) {
+        return `mirror_${type}_${baseUrl.value.replace(/[^a-zA-Z0-9]/g, '_')}`
     }
+    function getGlobalMirrorKey(type: string) { return `mirror_${type}_global_latest` }
+    function checkConnection(foreground = true) { return monitor.check(foreground) }
+    let monitoring = false
+    const onVisible = () => { if (document.visibilityState !== 'hidden') void checkConnection(false) }
+    function startMonitoring() {
+        if (monitoring) return
+        monitoring = true
+        document.addEventListener('visibilitychange', onVisible)
+        window.addEventListener('online', onVisible)
+        monitor.start()
+    }
+    function stopMonitoring() {
+        monitoring = false
+        document.removeEventListener('visibilitychange', onVisible)
+        window.removeEventListener('online', onVisible)
+        monitor.stop()
+    }
+    onScopeDispose(stopMonitoring)
+    return {baseUrl, generation, status, lastError, lastCheckedAt, isChecking, isOnline,
+        setBaseUrl, resetBaseUrl, getMirrorKey, getGlobalMirrorKey,
+        checkConnection, startMonitoring, stopMonitoring}
 })

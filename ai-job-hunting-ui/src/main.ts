@@ -87,11 +87,12 @@ async function bootstrap() {
 
     // 初始化服务器检查
     const serverStore = ServerStore(pinia)
-    serverStore.checkConnection()
+    serverStore.startMonitoring()
 
     // 使用本地化语言包(主要是运行记录中时间筛选组件显示中文)
     app.use(ElementPlus, {
         locale: zhCn,
+        zIndex: 10040,
     })
 
     // 创建平台
@@ -113,6 +114,7 @@ async function bootstrap() {
     let placementIsProvisional = false
 
     cleanupFailedRuntime = () => {
+        serverStore.stopMonitoring()
         if (placementRetryTimer != null) window.clearTimeout(placementRetryTimer)
         try {
             if (mounted) app.unmount()

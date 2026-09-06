@@ -3,18 +3,17 @@
     <el-card class="server-config-card" shadow="hover">
         <div class="server-config-container">
             <div class="server-status">
-                <el-badge :value="serverStore.isOnline ? '在线' : '离线'" :type="serverStore.isOnline ? 'success' : 'danger'">
-                    <el-text size="large" strong>服务器状态</el-text>
-                </el-badge>
+                <el-text size="large" strong>服务器状态</el-text>
+                <el-tag :type="serverPresentation.type" size="small">{{ serverPresentation.label }}</el-tag>
             </div>
             <div class="server-input">
-                <el-input v-model="tempServerUrl" placeholder="请输入服务器地址" class="custom-server-input">
+                <el-input v-model="tempServerUrl" :disabled="connectionActionBusy" placeholder="请输入服务器地址" class="custom-server-input" aria-label="服务器地址">
                     <template #prepend>服务器地址</template>
                     <template #append>
                         <el-button-group class="btn-group">
-                            <el-button @click="handleUpdateServer" class="test-btn">连接测试</el-button>
+                            <el-button @click="handleUpdateServer" :loading="connectionActionBusy" class="test-btn">连接测试</el-button>
                             <el-tooltip content="重置为默认地址" placement="top">
-                                <el-button @click="handleResetServer" class="reset-btn">
+                                <el-button @click="handleResetServer" :disabled="connectionActionBusy" class="reset-btn" aria-label="重置为默认地址">
                                     <el-icon><RefreshRight /></el-icon>
                                 </el-button>
                             </el-tooltip>
@@ -23,8 +22,8 @@
                 </el-input>
             </div>
             <div class="server-mode-tip">
-                <el-tag :type="serverStore.isOnline ? 'success' : 'warning'" effect="dark">
-                    {{ serverStore.isOnline ? '服务器已连接' : '服务器离线：无法同步偏好' }}
+                <el-tag :type="serverPresentation.type" effect="dark" :title="serverStore.lastError">
+                    {{ serverPresentation.detail }}
                 </el-tag>
             </div>
         </div>
@@ -289,6 +288,7 @@
 <script setup lang="ts">
 import axiosOriginal, {AxiosInstance} from "axios";
 import {IS_PERSONAL_MODE} from "../../deploymentMode";
+import {connectionPresentation, normalizeServerUrl} from "../../runtime/serverHealth";
 import {CircleCloseFilled, PriceTag, Promotion, Service, Shop, Upload, Wallet, Collection, RefreshRight} from '../icons';
 import {computed, h, inject, ref, Ref, onMounted, onUnmounted} from "vue";
 import {PushStatus} from "../../enums";
@@ -324,76 +324,48 @@ const axios = inject('$axios') as AxiosInstance
 const serverStore = ServerStore();
 const tempServerUrl = ref(serverStore.baseUrl);
 
+const connectionActionBusy = ref(false)
+const serverPresentation = computed(() => connectionPresentation(serverStore.status))
+
 const handleUpdateServer = async () => {
+    if (connectionActionBusy.value) return
+    connectionActionBusy.value = true
     try {
-        serverStore.setBaseUrl(tempServerUrl.value);
-        tempServerUrl.value = serverStore.baseUrl;
+        const next = normalizeServerUrl(tempServerUrl.value)
+        if (next !== serverStore.baseUrl && (PushRunStore().isActive || UserStore().user.aiSeatStatus)) {
+            throw new Error('请先停止投递并关闭 AI 回复，再切换服务器地址')
+        }
+        const changed = next !== serverStore.baseUrl
+        serverStore.setBaseUrl(next)
+        tempServerUrl.value = next
+        if (changed) {
+            LoginStore().invalidate()
+            localStorage.removeItem('Authorization')
+        }
+        if (!await serverStore.checkConnection()) {
+            ElMessage.error(serverStore.lastError || '连接失败，请确认 Docker 和本地服务已启动')
+            return
+        }
+        // Explicit user action: renew local login and load config in place. Never reload the page.
+        LoginStore().invalidate()
+        try {
+            await userRemoteLoad(true, true)
+            ElMessage.success('服务器已连接，配置已同步；未刷新页面或开启自动任务')
+        } catch (error) {
+            ElMessage.warning('服务器已连接，但配置同步失败：' + (error instanceof Error ? error.message : '请检查登录状态'))
+        }
     } catch (error) {
-        ElMessage.error(error instanceof Error ? error.message : '服务器地址格式不正确');
-        return;
+        ElMessage.error(error instanceof Error ? error.message : '服务器地址格式不正确')
+    } finally {
+        connectionActionBusy.value = false
     }
-    await serverStore.checkConnection();
-    if (serverStore.isOnline) {
-        // 连接成功后，立即尝试加载/同步配置
-        userRemoteLoad(true);
-
-        const countdown = ref(3);
-        let timer: any = null;
-
-        const notifyInstance = ElNotification({
-            title: '连接成功',
-            type: 'success',
-            duration: 0, // 不自动关闭
-            message: h(() => h('div', null, [
-                h('p', null, '已成功连接到服务器，正在同步配置...'),
-                h('p', {style: 'color: #E6A23C; margin-top: 5px; font-weight: bold;'}, `页面将在 ${countdown.value} 秒后自动刷新以同步登录状态`),
-                h('div', {style: 'margin-top: 10px; text-align: right;'}, [
-                    h('button', {
-                        class: 'el-button el-button--small el-button--warning',
-                        onClick: () => {
-                            if (timer) {
-                                clearInterval(timer);
-                                timer = null;
-                                notifyInstance.close();
-                                ElMessage.info('已取消自动刷新，请手动刷新以同步登录');
-                            }
-                        }
-                    }, '取消刷新')
-                ])
-            ])) as any
-        });
-
-        timer = setInterval(() => {
-            countdown.value--;
-            if (countdown.value <= 0) {
-                clearInterval(timer);
-                window.location.reload();
-            }
-        }, 1000);
-    } else {
-        ElNotification({
-            title: '连接失败',
-            message: serverStore.lastError || '无法访问服务器',
-            type: 'error',
-            duration: 3000
-        });
-    }
-};
+}
 
 const handleResetServer = async () => {
-    if (typeof serverStore.resetBaseUrl === 'function') {
-        serverStore.resetBaseUrl();
-        tempServerUrl.value = serverStore.baseUrl;
-        ElMessage.success('已重置为默认服务器地址');
-        await handleUpdateServer();
-    } else {
-        // 容错处理
-        serverStore.setBaseUrl(DEFAULT_SERVER_URL);
-        tempServerUrl.value = DEFAULT_SERVER_URL;
-        ElMessage.success('已重置为默认服务器地址');
-        await handleUpdateServer();
-    }
-};
+    if (connectionActionBusy.value) return
+    tempServerUrl.value = DEFAULT_SERVER_URL
+    await handleUpdateServer()
+}
 
 const pushRunStore = PushRunStore()
 const pushStatus = computed(() => pushRunStore.isActive ? PushStatus.PUSHING
@@ -1079,6 +1051,7 @@ onUnmounted(() => {
 
 <style scoped>
 .server-config-card {
+    container-type: inline-size;
     margin-bottom: 20px;
     background: rgba(255, 255, 255, 0.8);
     backdrop-filter: blur(10px);
@@ -1087,13 +1060,17 @@ onUnmounted(() => {
 
 .server-config-container {
     display: grid;
-    grid-template-columns: auto minmax(360px, 1fr) auto;
+    grid-template-columns: auto minmax(0, 1fr) auto;
     align-items: center;
     gap: 16px;
 }
 
 .server-status {
-    min-width: 120px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    white-space: nowrap;
 }
 
 .server-input {
@@ -1142,11 +1119,59 @@ onUnmounted(() => {
     min-width: 40px;
 }
 
+
+/* BOSS may define .el-input-group as inline-table. Keep this one widget independent. */
+#ai-job .server-config-card :deep(.custom-server-input.el-input-group) {
+    display: flex !important;
+    width: 100% !important;
+    min-width: 0;
+    table-layout: auto;
+}
+#ai-job .server-config-card :deep(.custom-server-input > .el-input__wrapper) {
+    display: flex !important;
+    flex: 1 1 0% !important;
+    width: 0 !important;
+    min-width: 0 !important;
+    box-sizing: border-box;
+}
+#ai-job .server-config-card :deep(.custom-server-input .el-input__inner) {
+    display: block !important;
+    width: 100% !important;
+    min-width: 0 !important;
+    height: 32px;
+    line-height: 32px;
+    box-sizing: border-box;
+    padding: 0;
+}
+#ai-job .server-config-card :deep(.custom-server-input > .el-input-group__prepend) {
+    display: inline-flex !important;
+    flex: 0 0 auto;
+    width: auto;
+    padding: 0 12px;
+}
+#ai-job .server-config-card :deep(.custom-server-input > .el-input-group__append) {
+    display: inline-flex !important;
+    flex: 0 0 136px;
+    width: 136px;
+    box-sizing: border-box;
+}
+#ai-job .server-config-card :deep(.custom-server-input .btn-group) { display: flex !important; }
+#ai-job .server-config-card :deep(.custom-server-input .el-button) {
+    color: var(--el-text-color-regular);
+    min-height: 34px;
+    white-space: nowrap;
+}
+
 .server-mode-tip {
     justify-self: end;
 }
 
-@media (max-width: 900px) {
+@container (max-width: 900px) {
+    .server-config-container { grid-template-columns: 1fr; }
+    .server-mode-tip { justify-self: start; }
+}
+
+@media (max-width: 1100px) {
     .server-config-container {
         grid-template-columns: 1fr;
     }
@@ -1254,7 +1279,7 @@ onUnmounted(() => {
     position: fixed;
     right: 80px;
     bottom: 80px;
-    z-index: 9999;
+    z-index: 10010;
     background: rgba(255, 255, 255, 0.95);
     padding: 8px;
     border-radius: 8px;

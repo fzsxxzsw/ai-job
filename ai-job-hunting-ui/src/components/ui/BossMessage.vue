@@ -745,19 +745,22 @@ const handlerClick = () => {
     position: fixed;
     right: 24px;
     bottom: 24px;
-    width: 480px;
+    width: min(480px, calc(100vw - 48px));
+    box-sizing: border-box;
+    max-height: calc(100vh - 96px);
+    overflow: auto;
     padding: 16px;
     background: #ffffff;
     box-shadow: 0 6px 16px rgba(0,0,0,0.15);
     border-radius: 8px;
-    z-index: 9999;
+    z-index: 10010;
 }
 
 .rejection-analysis-card {
     position: fixed;
     top: 72px;
     right: 24px;
-    z-index: 2147483000;
+    z-index: 10020;
     width: min(440px, calc(100vw - 32px));
     max-height: calc(100vh - 96px);
     overflow: auto;
