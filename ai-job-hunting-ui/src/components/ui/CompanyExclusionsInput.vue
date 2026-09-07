@@ -1,7 +1,7 @@
 <template>
     <div class="company-exclusions-input">
         <div class="company-keyword-entry">
-            <el-input v-model="draft" placeholder="输入公司关键词后按 Enter" aria-label="公司排除关键词"
+            <el-input v-model="draft" :placeholder="placeholder || '输入公司关键词后按 Enter'" :aria-label="inputLabel || '公司排除关键词'"
                       @keydown="onKeydown" @compositionstart="composing = true" @compositionend="composing = false"/>
             <el-button :disabled="!draft.trim() || composing" @click="addKeyword">添加</el-button>
         </div>
@@ -15,7 +15,7 @@
 <script setup lang="ts">
 import {ref} from 'vue'
 
-const props = defineProps<{modelValue: string[], protectedKeywords?: string[]}>()
+const props = defineProps<{modelValue: string[], protectedKeywords?: string[], placeholder?: string, inputLabel?: string}>()
 const emit = defineEmits<{(event: 'update:modelValue', values: string[]): void}>()
 const draft = ref('')
 const composing = ref(false)

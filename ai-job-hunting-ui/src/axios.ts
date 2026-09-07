@@ -13,6 +13,10 @@ const request = axios.create({timeout: 10000, headers: {'Content-Type': 'applica
 const mayShowError = createToastGate()
 
 request.interceptors.request.use(req => {
+    const scopeGuard = (req as any).jobHelperScopeGuard
+    if (typeof scopeGuard === 'function' && !scopeGuard()) {
+        throw new axios.CanceledError('连接或登录状态已变化，已取消旧操作')
+    }
     req.timeout = modelRequestTimeout(req.url, req.timeout)
     try {
         const store = ServerStore()

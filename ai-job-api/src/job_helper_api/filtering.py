@@ -12,7 +12,8 @@ from typing import Any
 
 from .config import Settings
 from .contracts import FilterInput, FilterOutput
-from .database import Database
+from .database import Database, loads
+from .employment_exclusions import match_employment_exclusion
 from .errors import ApiError
 from .model import ModelClient, effective_config, structured_object
 from .prompts import FILTER
@@ -174,6 +175,19 @@ def academic_mismatch(payload: FilterInput, education: str) -> str | None:
 async def filter_job(
     db: Database, model: ModelClient, settings: Settings, uid: int, payload: FilterInput
 ) -> dict[str, Any]:
+    user = await db.user(uid)
+    pref = loads((user or {}).get("preference"), {})
+    if reason := match_employment_exclusion(
+        pref if isinstance(pref, dict) else {},
+        parse_object(payload.jobBaseInfo),
+        parse_object(payload.jobExtInfo),
+    ):
+        return {
+            "decisionStatus": "REJECT",
+            "filter": True,
+            "engine": "LOCAL_EXCLUSIONS",
+            "reason": f"命中 JD／对话排除词：{reason}",
+        }
     resume_text = ""
     if payload.resumeMatchEnabled:
         resume = await db.resume(uid)

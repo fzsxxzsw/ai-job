@@ -115,6 +115,9 @@ export type PreferenceConfig = {
      * 过滤猎头开关
      */
     fhE: boolean,
+    /** 可编辑的岗位资料 / JD / 对话排除词；缺失的旧配置不自动启用。 */
+    employmentExcludeE?: boolean,
+    employmentExcludeKeywords?: string[],
     /**
      * 仅投递在线boss
      */

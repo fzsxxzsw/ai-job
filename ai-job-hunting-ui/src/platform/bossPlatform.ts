@@ -8,6 +8,7 @@ import logger from "../logging";
 import {LogRecorder} from "../logging/record";
 import {BossOperationTypeEnum, JobSeekerClonedAnswerTypeEnum} from "../stores/types";
 import {AiPower} from "./aiPower";
+import {checkConversationExclusion} from './employmentExclusions';
 import {ElMessage} from "../utils/tools";
 import {ElNotification} from "element-plus";
 import {GM_getValue, GM_setValue} from "$";
@@ -533,6 +534,16 @@ export class BossOption {
         if (hasServerAcknowledgement(entry)) {
             return false
         }
+        const exclusion = checkConversationExclusion(localStorage, String(entry.bossId),
+            userStore.user.preference, entry.jobTitle, BossOption.bossUserInfoMap.get(entry.bossId))
+        if (exclusion) {
+            this.removeAiReplyFromQueue(entry.key)
+            recordDeliveryAudit({key: entry.key, kind: 'ai-reply', status: 'blocked',
+                jobTitle: entry.jobTitle, content: entry.content, bossId: entry.bossId,
+                conversationKey: entry.conversationKey, clientMid: entry.clientMid})
+            BossOption.logRecorder.warn(`【排除词】${entry.jobTitle}：${exclusion}，已取消待发送回复`)
+            return false
+        }
         BossOption.aiReplySendingKeys.add(entry.key)
         try {
             if (!Tools.window.AIJobHelperChatBridge?.isReady?.()) {
@@ -985,6 +996,12 @@ export class BossOption {
                 return;
             }
 
+            const exclusion = checkConversationExclusion(localStorage, String(bossId),
+                userStore.user.preference, bossUserInfo, text)
+            if (exclusion) {
+                BossOption.logRecorder.warn(`【排除词】${bossUserInfo.jobTitle}：${exclusion}，停止自动处理`)
+                return
+            }
             if (!this.preHandlerMsgByBodyType(msgObj, bossUserInfo, text)) {
                 BossOption.messageCache.markMessageAsProcessed(bossId, inboundMessageId)
                 return;
@@ -1019,6 +1036,12 @@ export class BossOption {
 
             // 停止交互
             if (answerTypeList.includes(JobSeekerClonedAnswerTypeEnum.STOP)) {
+                if (data?.exclusionReason) {
+                    checkConversationExclusion(localStorage, String(bossId), userStore.user.preference,
+                        data.exclusionReason === '平台猎头标记' ? {goldHunter: 1} : data.exclusionReason)
+                    BossOption.logRecorder.warn(`【排除词】${bossUserInfo.jobTitle}：${data.exclusionReason}，停止自动处理`)
+                    return
+                }
                 logging.info("【处理Boss消息-忽略】停止交互")
                 BossOption.messageCache.markMessageAsProcessed(bossId, inboundMessageId)
                 return;
@@ -1033,6 +1056,9 @@ export class BossOption {
                 return;
             }
 
+            // A preference edited while the model was running wins over its draft/actions.
+            if (checkConversationExclusion(localStorage, String(bossId),
+                userStore.user.preference, bossUserInfo, text)) return
             let replyAcknowledged = false
             let replyForInbound: PendingAiReply | undefined
             // 文本回复
@@ -1311,6 +1337,7 @@ export class BossOption {
                 brandName: friend.brandName,
                 positionTitle: friend.title,
                 recruiterName: friend.name,
+                goldHunter: friend.goldHunter ?? friend.bossInfo?.goldHunter,
             } as BossUserInfo;
         });
     }

@@ -90,9 +90,10 @@
 </template>
 
 <script setup lang="ts">
-import {computed, onMounted, ref} from 'vue'
+import {computed, onBeforeUnmount, onMounted, ref, watch} from 'vue'
 import axios from '../../axios'
 import {ElMessage} from '../../utils/tools'
+import {ServerStore} from '../../stores/server'
 
 type ModelRow = {id: string; enabled: boolean; tasks: string[]; priority: number; thinking: string; freeOnlyConfirmed: boolean}
 type Info = {id: string; category: string; supportedTasks: string[]; note: string}
@@ -113,18 +114,53 @@ const stats = (id: string) => data.value?.models.find(m => m.id === id)
 const info = (id: string): Info => stats(id) || data.value?.catalog.find(m => m.id === id) || {id, category: '待确认', supportedTasks: [], note: '先导入额度以确认模型能力'}
 const readyCount = computed(() => data.value?.models.filter(m => m.status === 'ready').length || 0)
 const visibleModels = computed(() => draft.value.models.filter(m => m.id.toLowerCase().includes(search.value.toLowerCase()) && (statusFilter.value === 'all' || (statusFilter.value === 'ready' ? stats(m.id)?.status === 'ready' : stats(m.id)?.status !== 'ready'))))
-function apply(value: RoutingData) {data.value = value; draft.value = JSON.parse(JSON.stringify(value.config))}
+const serverStore = ServerStore()
+let mounted = true, operationRevision = 0, dataScope = ''
+let activeController: AbortController | null = null
+const currentScope = () => JSON.stringify([serverStore.baseUrl, serverStore.generation, localStorage.getItem('Authorization')])
+function clearScope() {
+  operationRevision++; activeController?.abort(); activeController = null
+  data.value = null; dataScope = ''; busy.value = false; loading.value = false
+  testProgress.value = ''; importVisible.value = false; quotaVisible.value = false
+}
+watch(() => [serverStore.baseUrl, serverStore.generation], () => {
+  clearScope(); error.value = '连接已切换，请重新加载模型配置'
+}, {flush: 'sync'})
+onBeforeUnmount(() => {mounted = false; operationRevision++; activeController?.abort()})
+function beginOperation(requireLoaded = false) {
+  if (!mounted) return null
+  const scope = currentScope()
+  if (requireLoaded && dataScope !== scope) {
+    clearScope(); error.value = '连接或登录状态已变化，请重新加载模型配置'
+    return null
+  }
+  activeController?.abort()
+  const controller = activeController = new AbortController()
+  const revision = ++operationRevision
+  const current = () => mounted && revision === operationRevision && scope === currentScope()
+  return {scope, current, config: {signal: controller.signal, jobHelperScopeGuard: current}, finish: () => {
+    if (!mounted || revision !== operationRevision) return false
+    if (!current()) {
+      clearScope(); error.value = '连接或登录状态已变化，操作已停止，请重新加载'
+      return false
+    }
+    return true
+  }}
+}
+function apply(value: RoutingData, scope = currentScope()) {data.value = value; draft.value = JSON.parse(JSON.stringify(value.config)); dataScope = scope}
 async function load() {
+  const operation = beginOperation(); if (!operation) return
   loading.value = true; error.value = ''
-  try {apply((await axios.get('/api/user/ai/routing')).data.data)}
-  catch (e: any) {error.value = e.message || '无法加载模型配置'}
-  finally {loading.value = false}
+  try {const response = await axios.get('/api/user/ai/routing', operation.config); if (operation.current()) apply(response.data.data, operation.scope)}
+  catch (e: any) {if (operation.current()) error.value = e.message || '无法加载模型配置'}
+  finally {if (operation.finish()) loading.value = false}
 }
 async function save() {
+  const operation = beginOperation(true); if (!operation) return
   busy.value = true; error.value = ''
-  try {apply((await axios.post('/api/user/ai/routing', draft.value)).data.data); ElMessage({type: 'success', message: '模型配置已保存'})}
-  catch (e: any) {error.value = e.message}
-  finally {busy.value = false}
+  try {const response = await axios.post('/api/user/ai/routing', draft.value, operation.config); if (operation.current()) {apply(response.data.data, operation.scope); ElMessage({type: 'success', message: '模型配置已保存'})}}
+  catch (e: any) {if (operation.current()) error.value = e.message}
+  finally {if (operation.finish()) busy.value = false}
 }
 function addCatalog() {
   const ids = new Set(draft.value.models.map(m => m.id))
@@ -135,10 +171,11 @@ function openQuota(id: string) {
   quotaVisible.value = true
 }
 async function sendImport(payload: unknown) {
+  const operation = beginOperation(true); if (!operation) return
   busy.value = true; error.value = ''
-  try {apply((await axios.post('/api/user/ai/routing/quotas', payload)).data.data); importVisible.value = false; quotaVisible.value = false; ElMessage({type: 'success', message: '额度快照已导入'})}
-  catch (e: any) {error.value = e.message}
-  finally {busy.value = false}
+  try {const response = await axios.post('/api/user/ai/routing/quotas', payload, operation.config); if (operation.current()) {apply(response.data.data, operation.scope); importVisible.value = false; quotaVisible.value = false; ElMessage({type: 'success', message: '额度快照已导入'})}}
+  catch (e: any) {if (operation.current()) error.value = e.message}
+  finally {if (operation.finish()) busy.value = false}
 }
 async function importOne() {await sendImport({snapshots: [{...quota.value, observedAt: new Date().toISOString()}]})}
 async function importMany() {
@@ -146,23 +183,26 @@ async function importMany() {
   catch {error.value = '请输入有效的 JSON 额度快照'}
 }
 async function testOne(id: string) {
+  const operation = beginOperation(true); if (!operation) return
   busy.value = true; error.value = ''; testProgress.value = `正在测试 ${id}`
-  try {await axios.post('/api/user/ai/routing/test', {id}, {timeout: 130000}); testProgress.value = `${id} 测试通过`}
-  catch (e: any) {error.value = e.message; testProgress.value = `${id} 测试失败，原因已记录`}
-  finally {busy.value = false; await load()}
+  try {await axios.post('/api/user/ai/routing/test', {id}, {...operation.config, timeout: 130000}); if (operation.current()) testProgress.value = `${id} 测试通过`}
+  catch (e: any) {if (operation.current()) {error.value = e.message; testProgress.value = `${id} 测试失败，原因已记录`}}
+  finally {if (operation.finish()) {busy.value = false; await load()}}
 }
 async function testEnabled() {
+  const operation = beginOperation(true); if (!operation) return
   busy.value = true; error.value = ''
   const ids = data.value?.config.models.filter(m => m.enabled).map(m => m.id) || []
   let passed = 0
   try {
     for (let i = 0; i < ids.length; i++) {
+      if (!operation.current()) return
       testProgress.value = `正在测试 ${i + 1}/${ids.length}：${ids[i]}`
-      try {await axios.post('/api/user/ai/routing/test', {id: ids[i]}, {timeout: 130000}); passed++}
-      catch (e: any) {if (e.message?.includes('密钥') || e.message?.includes('权限') || e.message?.includes('登录')) {error.value = e.message; break}}
+      try {await axios.post('/api/user/ai/routing/test', {id: ids[i]}, {...operation.config, timeout: 130000}); if (!operation.current()) return; passed++}
+      catch (e: any) {if (!operation.current()) return; if (e.message?.includes('密钥') || e.message?.includes('权限') || e.message?.includes('登录')) {error.value = e.message; break}}
     }
-    testProgress.value = `测试结束：${passed}/${ids.length} 通过，详情见模型状态和调用记录`
-  } finally {busy.value = false; await load()}
+    if (operation.current()) testProgress.value = `测试结束：${passed}/${ids.length} 通过，详情见模型状态和调用记录`
+  } finally {if (operation.finish()) {busy.value = false; await load()}}
 }
 onMounted(load)
 </script>

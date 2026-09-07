@@ -5,6 +5,7 @@ from sqlalchemy import select
 
 from . import prompts
 from .database import dumps, loads, now_date, now_ms
+from .employment_exclusions import conversation_exclusion
 from .errors import ApiError
 from .model import effective_config
 
@@ -125,6 +126,10 @@ async def conversation_reply(db, model, settings, uid, payload, notifier=None):
     async with db.lock(uid, "conversation:" + key):
         if await is_stopped(db, uid, key):
             return reply(kind=3)
+        if exclusion := await conversation_exclusion(
+            db, uid, key, payload.question, payload.jobInfo
+        ):
+            return {**reply(kind=3), "exclusionReason": exclusion}
         previous = await db.one(select(requests).where(where))
         latest = await db.one(
             select(requests)
@@ -212,7 +217,12 @@ async def conversation_reply(db, model, settings, uid, payload, notifier=None):
             )
             result = shape_answer(answer, payload.question, pref)
             # A stop clicked during the model call wins over the generated draft.
-            if await is_stopped(db, uid, key):
+            exclusion = await conversation_exclusion(
+                db, uid, key, payload.question, payload.jobInfo
+            )
+            if exclusion:
+                result = {**reply(kind=3), "exclusionReason": exclusion}
+            elif await is_stopped(db, uid, key):
                 result = reply(kind=3)
             async with db.engine.begin() as c:
                 if result["answerTypeList"] != [3]:

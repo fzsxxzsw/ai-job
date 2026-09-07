@@ -89,5 +89,6 @@ interface BossUserInfo {
     brandName?: string,
     positionTitle?: string,
     recruiterName?: string,
+    goldHunter?: number | string | boolean,
 
 }

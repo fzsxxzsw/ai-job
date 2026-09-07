@@ -59,6 +59,18 @@
                 </el-form-item>
             </div>
 
+            <el-form-item label="JD／对话排除词">
+                <template #label>
+                    <el-checkbox v-model="userStore.user.preference.employmentExcludeE" aria-label="启用 JD／对话排除"/>
+                    JD／对话排除词
+                </template>
+                <CompanyExclusionsInput v-model="employmentExclusionWords" input-label="JD／对话排除关键词"
+                                        placeholder="输入关键词后按 Enter，例如：外包、劳务派遣"/>
+                <el-text class="preference-exclusion-help" type="info">
+                    检查公司、岗位名称、JD 和对方消息。命中后跳过岗位或停止该会话的自动回复、简历及联系方式操作。
+                    “非外包”“不是猎头”等明确否定不命中；可修改关键词或关闭此项，保存后生效。
+                </el-text>
+            </el-form-item>
             <div class="preference-grid preference-grid-wide">
                 <el-form-item label="工作名包含" prop="jobNameInclude">
                     <template #label>
@@ -395,6 +407,10 @@ const axios = inject('$axios') as AxiosInstance
 const platform = inject('$platform') as AbsPlatform;
 const userStore = UserStore();
 const serverStore = ServerStore();
+const employmentExclusionWords = computed<string[]>({
+    get: () => userStore.user.preference.employmentExcludeKeywords || [],
+    set: values => { userStore.user.preference.employmentExcludeKeywords = values },
+})
 const protectedCompanyKeywords = new Set(
     Tools.HARD_BLOCKED_COMPANY_KEYWORDS.map(keyword => keyword.trim()).filter(Boolean)
 )
