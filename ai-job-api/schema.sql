@@ -238,3 +238,170 @@ CREATE TABLE IF NOT EXISTS outcome_report (
 	PRIMARY KEY (id),
 	CONSTRAINT uq_outcome_report_case_revision UNIQUE (case_id, revision)
 );
+
+-- Durable graph jobs and exact browser action receipts.
+CREATE TABLE IF NOT EXISTS automation_action (
+	id VARCHAR(36) COLLATE utf8mb4_bin NOT NULL,
+	user_id BIGINT NOT NULL,
+	job_id VARCHAR(36) COLLATE utf8mb4_bin NOT NULL,
+	kind VARCHAR(24) NOT NULL,
+	sequence INTEGER NOT NULL,
+	status VARCHAR(24) NOT NULL,
+	payload_json LONGTEXT NOT NULL,
+	payload_hash VARCHAR(64) NOT NULL,
+	approval_status VARCHAR(24) NOT NULL,
+	approval_id VARCHAR(36) COLLATE utf8mb4_bin,
+	executor_id VARCHAR(128) COLLATE utf8mb4_bin,
+	lease_token VARCHAR(128) COLLATE utf8mb4_bin,
+	lease_until BIGINT,
+	authorization_revision BIGINT,
+	client_mid VARCHAR(128) COLLATE utf8mb4_bin,
+	server_mid VARCHAR(128) COLLATE utf8mb4_bin,
+	dispatch_token VARCHAR(128) COLLATE utf8mb4_bin,
+	last_error_code VARCHAR(64),
+	finalized INTEGER NOT NULL,
+	created_at BIGINT NOT NULL,
+	updated_at BIGINT NOT NULL,
+	PRIMARY KEY (id),
+	CONSTRAINT uq_automation_action_sequence UNIQUE (job_id, sequence),
+	CONSTRAINT uq_automation_action_client_mid UNIQUE (user_id, client_mid),
+	CONSTRAINT uq_automation_action_server_mid UNIQUE (user_id, server_mid)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS automation_action_event (
+	id VARCHAR(36) COLLATE utf8mb4_bin NOT NULL,
+	user_id BIGINT NOT NULL,
+	job_id VARCHAR(36) COLLATE utf8mb4_bin,
+	action_id VARCHAR(36) COLLATE utf8mb4_bin,
+	request_id VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
+	kind VARCHAR(24) NOT NULL,
+	payload_hash VARCHAR(64) NOT NULL,
+	payload_json LONGTEXT NOT NULL,
+	created_at BIGINT NOT NULL,
+	PRIMARY KEY (id),
+	CONSTRAINT uq_automation_event_request UNIQUE (user_id, request_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS automation_job (
+	id VARCHAR(36) COLLATE utf8mb4_bin NOT NULL,
+	user_id BIGINT NOT NULL,
+	business_key VARCHAR(64) COLLATE utf8mb4_bin NOT NULL,
+	kind VARCHAR(24) NOT NULL,
+	platform_account VARCHAR(255) COLLATE utf8mb4_bin NOT NULL,
+	conversation_key VARCHAR(255) COLLATE utf8mb4_bin,
+	encrypt_job_id VARCHAR(255) COLLATE utf8mb4_bin,
+	boss_id VARCHAR(255) COLLATE utf8mb4_bin,
+	revision BIGINT NOT NULL,
+	input_hash VARCHAR(64) NOT NULL,
+	input_json LONGTEXT NOT NULL,
+	context_json LONGTEXT NOT NULL,
+	status VARCHAR(32) NOT NULL,
+	phase VARCHAR(32) NOT NULL,
+	phase_history_json LONGTEXT NOT NULL,
+	available_at BIGINT NOT NULL,
+	lease_token VARCHAR(128) COLLATE utf8mb4_bin,
+	lease_until BIGINT,
+	attempts INTEGER NOT NULL,
+	compute_started INTEGER NOT NULL,
+	graph_finalized INTEGER NOT NULL DEFAULT 1,
+	artifact_id VARCHAR(36) COLLATE utf8mb4_bin,
+	artifact_json LONGTEXT,
+	validation_hash VARCHAR(64),
+	result_json LONGTEXT,
+	result_id VARCHAR(36) COLLATE utf8mb4_bin,
+	last_error_code VARCHAR(64),
+	created_at BIGINT NOT NULL,
+	updated_at BIGINT NOT NULL,
+	PRIMARY KEY (id),
+	CONSTRAINT uq_automation_job_business UNIQUE (user_id, business_key),
+	KEY ix_automation_job_claim (user_id, status, available_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Immutable career facts, resume drafts and approved strategy plans.
+CREATE TABLE IF NOT EXISTS career_application (
+	id VARCHAR(36) COLLATE utf8mb4_bin NOT NULL,
+	user_id BIGINT NOT NULL,
+	application_key VARCHAR(64) COLLATE utf8mb4_bin NOT NULL,
+	platform_account VARCHAR(255) COLLATE utf8mb4_bin NOT NULL,
+	encrypt_job_id VARCHAR(255) COLLATE utf8mb4_bin NOT NULL,
+	conversation_key VARCHAR(255) COLLATE utf8mb4_bin,
+	boss_id VARCHAR(255) COLLATE utf8mb4_bin,
+	cycle_key VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
+	job_id VARCHAR(36) COLLATE utf8mb4_bin,
+	prepared_resume_version_id VARCHAR(36) COLLATE utf8mb4_bin,
+	strategy_plan_id VARCHAR(36) COLLATE utf8mb4_bin,
+	contacted_at BIGINT,
+	data_json LONGTEXT NOT NULL,
+	legacy_snapshot_id BIGINT,
+	created_at BIGINT NOT NULL,
+	PRIMARY KEY (id),
+	CONSTRAINT uq_career_application_cycle UNIQUE (user_id, application_key),
+	KEY ix_career_application_cohort (user_id, contacted_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS career_application_event (
+	id VARCHAR(36) COLLATE utf8mb4_bin NOT NULL,
+	user_id BIGINT NOT NULL,
+	application_id VARCHAR(36) COLLATE utf8mb4_bin NOT NULL,
+	event_type VARCHAR(32) NOT NULL,
+	occurred_at BIGINT NOT NULL,
+	confirmation VARCHAR(24) NOT NULL,
+	evidence_json LONGTEXT NOT NULL,
+	supersedes_event_id VARCHAR(36) COLLATE utf8mb4_bin,
+	created_at BIGINT NOT NULL,
+	PRIMARY KEY (id),
+	KEY ix_career_event_timeline (application_id, occurred_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS career_resume_exposure (
+	id VARCHAR(36) COLLATE utf8mb4_bin NOT NULL,
+	user_id BIGINT NOT NULL,
+	application_id VARCHAR(36) COLLATE utf8mb4_bin NOT NULL,
+	event_id VARCHAR(36) COLLATE utf8mb4_bin,
+	resume_version_id VARCHAR(36) COLLATE utf8mb4_bin,
+	state VARCHAR(16) NOT NULL,
+	verification_kind VARCHAR(32) NOT NULL,
+	platform_resume_id VARCHAR(128) COLLATE utf8mb4_bin,
+	created_at BIGINT NOT NULL,
+	PRIMARY KEY (id),
+	CONSTRAINT uq_career_exposure_event UNIQUE (event_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS career_resume_proposal (
+	id VARCHAR(36) COLLATE utf8mb4_bin NOT NULL,
+	user_id BIGINT NOT NULL,
+	job_id VARCHAR(36) COLLATE utf8mb4_bin NOT NULL,
+	base_version_id VARCHAR(36) COLLATE utf8mb4_bin NOT NULL,
+	status VARCHAR(16) NOT NULL,
+	data_json LONGTEXT NOT NULL,
+	accepted_version_id VARCHAR(36) COLLATE utf8mb4_bin,
+	accept_hash VARCHAR(64),
+	created_at BIGINT NOT NULL,
+	PRIMARY KEY (id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS career_resume_version (
+	id VARCHAR(36) COLLATE utf8mb4_bin NOT NULL,
+	user_id BIGINT NOT NULL,
+	parent_id VARCHAR(36) COLLATE utf8mb4_bin,
+	source VARCHAR(24) NOT NULL,
+	content_hash VARCHAR(64) NOT NULL,
+	data_json LONGTEXT NOT NULL,
+	created_at BIGINT NOT NULL,
+	PRIMARY KEY (id),
+	KEY ix_career_resume_owner_hash (user_id, content_hash)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS career_strategy_plan (
+	id VARCHAR(36) COLLATE utf8mb4_bin NOT NULL,
+	user_id BIGINT NOT NULL,
+	job_id VARCHAR(36) COLLATE utf8mb4_bin NOT NULL,
+	status VARCHAR(16) NOT NULL,
+	data_json LONGTEXT NOT NULL,
+	preview_hash VARCHAR(64) NOT NULL,
+	base_preference_hash VARCHAR(64) NOT NULL,
+	approved_at BIGINT,
+	applied_at BIGINT,
+	created_at BIGINT NOT NULL,
+	PRIMARY KEY (id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

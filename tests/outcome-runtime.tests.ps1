@@ -19,11 +19,14 @@ try {
         $outcomeToken = 'fixture-dedicated-outcome-secret-at-least-32-characters'
         $lines = @('MYSQL_ROOT_PASSWORD=fixture-root', 'MYSQL_PASSWORD=fixture-database',
             'API_OWNER_USER_ID=3', "AGENT_INTERNAL_TOKEN=$existingToken")
-        if ($scenario -ne 'disabled') { $lines += 'API_OUTCOME_ENABLED=true' }
+        if ($scenario -ne 'disabled') {
+            $lines += @('API_OUTCOME_ENABLED=true', 'API_AUTOMATION_ENABLED=true', 'API_CAREER_ENABLED=true')
+        }
         if ($scenario -eq 'explicit-token') {
             $lines += @("API_OUTCOME_INTERNAL_TOKEN=$outcomeToken", 'API_OUTCOME_READ_WAIT_HOURS=25',
                 'API_OUTCOME_UNREAD_WAIT_HOURS=73', 'API_OUTCOME_LEASE_SECONDS=120',
-                'AGENT_OUTCOME_SCAN_SECONDS=2', 'AGENT_OUTCOME_JOB_TIMEOUT_SECONDS=300')
+                'AGENT_OUTCOME_SCAN_SECONDS=2', 'AGENT_OUTCOME_JOB_TIMEOUT_SECONDS=300',
+                'AGENT_AUTOMATION_SCAN_SECONDS=2', 'AGENT_AUTOMATION_JOB_TIMEOUT_SECONDS=200')
         }
         $lines | Set-Content -LiteralPath $fixtureEnv -Encoding ascii
         $raw = @(& docker compose --env-file $fixtureEnv -f $composePath config --format json)
@@ -35,6 +38,9 @@ try {
         $token = if ($scenario -eq 'explicit-token') { $outcomeToken } else { $existingToken }
         if ($backend.environment.API_OUTCOME_ENABLED -ne $enabled -or
             $agent.environment.AGENT_OUTCOMES_ENABLED -ne $enabled) { throw 'API/Agent outcome feature switches differ.' }
+        if ($backend.environment.API_AUTOMATION_ENABLED -ne $enabled -or
+            $agent.environment.AGENT_AUTOMATION_ENABLED -ne $enabled -or
+            $backend.environment.API_CAREER_ENABLED -ne $enabled) { throw 'Unified automation/career feature switches differ.' }
         if ($backend.environment.API_OUTCOME_INTERNAL_TOKEN -ne $token) { throw "API outcome credential mapping failed: $scenario" }
         if ($agent.environment.AGENT_OUTCOME_INTERNAL_TOKEN -ne $token) { throw "Agent outcome credential mapping failed: $scenario" }
         if ($agent.environment.AGENT_INTERNAL_TOKEN -ne $existingToken) { throw "Existing Agent credential changed: $scenario" }
@@ -50,6 +56,9 @@ try {
             $backend.environment.API_OUTCOME_LEASE_SECONDS -ne $lease -or
             $agent.environment.AGENT_OUTCOME_SCAN_SECONDS -ne $scan -or
             $agent.environment.AGENT_OUTCOME_JOB_TIMEOUT_SECONDS -ne '300') { throw 'Outcome timing policy configuration drifted.' }
+        $automationDeadline = if ($scenario -eq 'explicit-token') { '200' } else { '300' }
+        if ($agent.environment.AGENT_AUTOMATION_SCAN_SECONDS -ne $scan -or
+            $agent.environment.AGENT_AUTOMATION_JOB_TIMEOUT_SECONDS -ne $automationDeadline) { throw 'Unified automation timing configuration drifted.' }
         if ($backend.ports[0].host_ip -ne '127.0.0.1' -or $backend.ports[0].published -ne '9100' -or
             $agent.ports[0].host_ip -ne '127.0.0.1' -or $agent.ports[0].published -ne '9101') { throw 'Outcome wiring changed the existing loopback entry points.' }
         if ($agent.environment.AGENT_CHECKPOINT_PATH -ne '/app/data/langgraph-checkpoints.sqlite3' -or

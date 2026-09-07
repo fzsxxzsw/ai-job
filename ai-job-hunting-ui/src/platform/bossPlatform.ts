@@ -1,5 +1,12 @@
 import axiosOriginal from "axios";
-import {captureOutcomeContext, observeOutcomeContacts} from './boss/outcomeRuntime';
+import {captureOutcomeContext, observeOutcomeContacts, observeOutcomePeerAssociation} from './boss/outcomeRuntime';
+import {automationRequestId, type AutomationAction} from './unifiedAutomation';
+import {unifiedAutomationEnabled, submitAutomation, registerAutomationExecutor, holdUnifiedAutomation,
+    currentAutomationPolicy, browserAutomationReady, type BrowserAutomationContext} from './unifiedRuntime';
+import {captureAutomationScope, observeUnifiedContacts} from './unifiedRuntime';
+import {performUnifiedText, performUnifiedExchange, prepareUnifiedChat} from './unifiedBossActions';
+import {exactPlatformId, platformMessageTime} from './boss/outcomeCollector';
+import {advanceInboundWatermark, type InboundWatermark} from './inboundGeneration';
 import {replyNoticeText, UI_FEEDBACK_Z_INDEX} from "../ui/feedback";
 import {Message, MessageRead, TechwolfChatProtocol} from "../webSocket/protobuf";
 import {MessageCache, Tools} from "./utils";
@@ -71,6 +78,8 @@ type ConversationReplyState = {
 }
 
 export class BossOption {
+    private static latestLiveInbound = new Map<string, InboundWatermark>();
+    private static bossUserInfoScope = '';
 
     static bossUserInfoMap: Map<number, BossUserInfo> = new Map();
     static logRecorder: LogRecorder = new LogRecorder('recorder');
@@ -229,6 +238,38 @@ export class BossOption {
             userStore = UserStore()
         }
         this.startAiReplyRetryWorker()
+        registerAutomationExecutor('REPLY', {
+            ready: (context, action) => this.unifiedReplyReady(context, action),
+            run: async (context, _action, operation) => {
+                await runWithOptionalDeliveryLock((globalThis.navigator as any)?.locks, 'ai-reply-recipient',
+                    context.conversationKey || context.bossId || '', operation)
+            },
+            prepare: async (_context, action) => { if (action.kind === 'SEND_TEXT') await prepareUnifiedChat() },
+            perform: async (context, action, clientMid) => {
+                if (!this.unifiedReplyReady(context, action)) return {status: 'FAILED', serverMid: null, platformCode: null,
+                    occurredAt: Date.now(), errorCode: 'AUTHORIZATION_CHANGED', executionPhase: 'BEFORE_PLATFORM_CALL'}
+                const contact = context.contact!
+                return action.kind === 'SEND_TEXT' ? performUnifiedText(contact, action, clientMid) : performUnifiedExchange(contact, action)
+            },
+            completed: (context, job) => {
+                if (job.decision?.code === 'MISSING_MATERIALS') return
+                if (context.account !== String(Tools.window._PAGE?.uid || '') || !context.bossId || !context.inboundMessageId) return
+                this.finalizeInboundMessage(Number(context.bossId), context.inboundMessageId, context.inboundMessageMid, false)
+            },
+        })
+    }
+
+    private unifiedReplyReady(context: BrowserAutomationContext, action: AutomationAction): boolean {
+        const contact = context.contact
+        const latest = BossOption.latestLiveInbound.get(`${context.account}:${context.bossId}`)
+        if (latest && (latest.uncertain || latest.mid !== context.inboundMessageMid
+            || latest.conversationKey && latest.conversationKey !== context.conversationKey)) return false
+        if (!contact || !browserAutomationReady(context, action) || Tools.isHardBlockedCompany(contact.jobTitle)
+            || String(contact.encryptJobId) !== action.payload.encryptJobId || String(contact.bossId) !== action.payload.bossId
+            || makeConversationKey(contact.encryptBossId, contact.securityId) !== action.payload.conversationKey
+            || checkConversationExclusion(localStorage, String(contact.bossId), userStore.user.preference, contact, context.question || '')) return false
+        if (action.kind === 'SEND_RESUME' && !this.hasSameConversationTwoWayReply(contact)) return false
+        return ['SEND_TEXT', 'SEND_RESUME', 'ACCEPT_PHONE', 'ACCEPT_WECHAT', 'ACCEPT_RESUME'].includes(action.kind)
     }
 
     private readConversationReplyLedger(): Record<string, ConversationReplyState> {
@@ -446,6 +487,10 @@ export class BossOption {
     }
 
     private async deliverPendingAiReplyLocked(entry: PendingAiReply, html?: string): Promise<boolean> {
+        if (await unifiedAutomationEnabled()) {
+            holdUnifiedAutomation('旧回复队列等待回执核对，不会与 LangGraph 重复发送')
+            return false
+        }
         if (getBossRiskStop()) return false
         if (BossOption.aiReplySendingKeys.has(entry.key)) {
             return false
@@ -801,6 +846,7 @@ export class BossOption {
      * 针对boss发起的简历，联系方式，微信等需求，用于回复简历，联系方式，微信等
      */
     public async preReplyMsg(msgObj: TechwolfChatProtocol, bossUserInfo: BossUserInfo, text: string): Promise<any> {
+        if (await unifiedAutomationEnabled()) { holdUnifiedAutomation('联系方式与简历交换需在对应任务中逐项批准'); return }
         let type;
         if (text.includes("交换微信")) {
             type = 2
@@ -934,6 +980,16 @@ export class BossOption {
     }
 
     public handlerBossMessage(msgObj: TechwolfChatProtocol, bossId: number, text: string, recovered = false): Promise<void> {
+        const mid = exactPlatformId(msgObj.messages[0]?.mid)
+        if (!recovered && mid) {
+            const key = `${Tools.window._PAGE?.uid}:${bossId}`
+            const contact = BossOption.bossUserInfoScope === captureOutcomeContext() ? BossOption.bossUserInfoMap.get(bossId) : undefined
+            const conversationKey = contact ? makeConversationKey(contact.encryptBossId, contact.securityId) : null
+            const observed = advanceInboundWatermark(BossOption.latestLiveInbound.get(key), mid,
+                platformMessageTime(msgObj.messages[0]?.time, Date.now()), BossOption.messageCache.isMessageProcessed(bossId, mid), conversationKey)
+            if (observed.state) BossOption.latestLiveInbound.set(key, observed.state)
+            if (!observed.accept) return Promise.resolve()
+        }
         // One recruiter can emit several messages before the first AI request returns.
         // Keep that conversation ordered so context updates and outgoing replies cannot race.
         return BossOption.conversationMessageExecutor.run(String(bossId), () =>
@@ -975,7 +1031,13 @@ export class BossOption {
                 return;
             }
 
-            const bossUserInfo = await this.getBossUserInfoByBossId(bossId);
+            const lookupScope = captureOutcomeContext(), lookupAccount = exactPlatformId(Tools.window._PAGE?.uid)
+            const lookupMid = exactPlatformId(msgObj.messages[0]?.mid)
+            const stillCurrent = () => !recovered && !!lookupMid && lookupScope === captureOutcomeContext()
+                && BossOption.latestLiveInbound.get(`${lookupAccount}:${bossId}`)?.mid === lookupMid
+            const bossUserInfo = await this.getBossUserInfoByBossId(bossId, contact => {
+                observeOutcomePeerAssociation(contact, msgObj.messages[0], lookupAccount, lookupScope, stillCurrent)
+            });
             if (!bossUserInfo) {
                 const bodyType = msgObj.messages[0].body.type;
                 // 15 => 过滤活动通知
@@ -986,6 +1048,8 @@ export class BossOption {
                 BossOption.logRecorder.error("【处理Boss消息-失败】无法获取联系人信息", text)
                 return;
             }
+            const watermark = BossOption.latestLiveInbound.get(`${lookupAccount}:${bossId}`)
+            if (watermark?.mid === lookupMid) watermark.conversationKey = makeConversationKey(bossUserInfo.encryptBossId, bossUserInfo.securityId)
 
             // 潮一相关联系人永久禁用 AI 坐席：不请求 AI、不自动发消息、不执行发送简历等动作。
             if (Tools.isHardBlockedCompany(bossUserInfo.jobTitle)) {
@@ -1001,6 +1065,39 @@ export class BossOption {
                 userStore.user.preference, bossUserInfo, text)
             if (exclusion) {
                 BossOption.logRecorder.warn(`【排除词】${bossUserInfo.jobTitle}：${exclusion}，停止自动处理`)
+                return
+            }
+            if (await unifiedAutomationEnabled()) {
+                const raw = msgObj.messages[0]
+                const ownAccount = exactPlatformId(Tools.window._PAGE?.uid)
+                const exactMid = exactPlatformId(raw?.mid)
+                if (recovered || !exactMid || exactPlatformId(raw?.from?.uid) !== String(bossId)
+                    || exactPlatformId(raw?.to?.uid) !== ownAccount || String(bossUserInfo.bossId) !== String(bossId)
+                    || !bossUserInfo.encryptJobId || !bossUserInfo.encryptBossId || !bossUserInfo.securityId) {
+                    holdUnifiedAutomation('消息等待真实平台 MID 与明确联系人关联，尚未生成回复任务')
+                    return
+                }
+                const requestKinds = new Map<string, 'ACCEPT_PHONE' | 'ACCEPT_WECHAT' | 'ACCEPT_RESUME'>([
+                    ['交换微信', 'ACCEPT_WECHAT'], ['交换联系方式', 'ACCEPT_PHONE'],
+                    ['我想要一个您的电话号码，您是否同意', 'ACCEPT_PHONE'], ['我想要一份您的附件简历，您是否同意', 'ACCEPT_RESUME'],
+                ])
+                const exchangeKind = raw.body.type === 7 ? requestKinds.get(text) : undefined
+                // System cards do not authorize an inferred platform operation.
+                if (raw.body.type !== 1 && !exchangeKind) return
+                const conversationKey = makeConversationKey(bossUserInfo.encryptBossId, bossUserInfo.securityId)
+                const encryptJobId = String(bossUserInfo.encryptJobId)
+                const requestId = await automationRequestId(['reply', ownAccount, String(bossId), encryptJobId, exactMid])
+                this.markHrReply(bossUserInfo, exactMid)
+                await submitAutomation({requestId, kind: 'REPLY', platformAccount: ownAccount, conversationKey, encryptJobId, bossId: String(bossId),
+                    input: {inboundMessageId: exactMid, inboundSentAt: platformMessageTime(raw.time, Date.now()), question: text,
+                        jobKey: BossOption.buildJobKey(bossUserInfo), jobInfo: {jobTitle: bossUserInfo.jobTitle, brandName: bossUserInfo.brandName,
+                            positionTitle: bossUserInfo.positionTitle, recruiterName: bossUserInfo.recruiterName},
+                        platformResumeId: userStore.user.resumeId ? String(userStore.user.resumeId) : null,
+                        exchangeRequest: exchangeKind ? {kind: exchangeKind, requestMessageId: exactMid} : null}},
+                    {kind: 'REPLY', account: ownAccount, policy: currentAutomationPolicy(), encryptJobId, conversationKey,
+                        bossId: String(bossId), contact: {...bossUserInfo}, inboundMessageId: exactMid, inboundMessageMid: exactMid, question: text})
+                const accepted = BossOption.latestLiveInbound.get(`${ownAccount}:${bossId}`)
+                if (accepted?.mid === exactMid) accepted.submitted = true
                 return
             }
             if (!this.preHandlerMsgByBodyType(msgObj, bossUserInfo, text)) {
@@ -1131,6 +1228,7 @@ export class BossOption {
         clientMid: string,
         uncertain?: boolean,
     } | null> {
+        if (await unifiedAutomationEnabled()) { holdUnifiedAutomation('旧文本发送入口已等待统一任务登记'); return null }
         const bossUserInfo = await this.getBossUserInfoByBossId(bossId)
         if (!bossUserInfo) {
             BossOption.logRecorder.error("发送消息失败，联系人信息获取失败");
@@ -1189,6 +1287,7 @@ export class BossOption {
     }
 
     public async sendResumeFile(bossId: number): Promise<boolean> {
+        if (await unifiedAutomationEnabled()) { holdUnifiedAutomation('附件发送需在对应 LangGraph 动作中确认'); return false }
         if (getBossRiskStop()) return false
         let resumeId = userStore.user.resumeId;
         if (!resumeId) {
@@ -1282,7 +1381,9 @@ export class BossOption {
         })
     }
 
-    public async getBossUserInfoByBossId(bossId: number): Promise<BossUserInfo | undefined> {
+    public async getBossUserInfoByBossId(bossId: number, onFreshAssociation?: (contact: BossUserInfo) => void): Promise<BossUserInfo | undefined> {
+        const scope = captureOutcomeContext()
+        if (BossOption.bossUserInfoScope !== scope) { BossOption.bossUserInfoMap.clear(); BossOption.bossUserInfoScope = scope }
         // 先从缓存中获取
         let bossUserInfo = BossOption.bossUserInfoMap.get(bossId);
         if (bossUserInfo) {
@@ -1291,12 +1392,16 @@ export class BossOption {
 
         // 调用接口获取
         let bossUserInfoList = await BossOption.obtainBossUserInfo([bossId]);
-        if (bossUserInfoList.length === 0) {
+        if (scope !== captureOutcomeContext()) return undefined
+        const matches = bossUserInfoList.filter(contact => String(contact.bossId) === String(bossId)
+            && contact.encryptJobId && contact.encryptBossId && contact.securityId)
+        if (matches.length !== 1) {
             return undefined;
         }
         // 添加到缓存
-        BossOption.bossUserInfoMap.set(bossId, bossUserInfoList[0]);
-        return bossUserInfoList[0];
+        BossOption.bossUserInfoMap.set(bossId, matches[0]);
+        onFreshAssociation?.(matches[0])
+        return matches[0];
     }
 
     public static async obtainRecentContactBossId(): Promise<number[]> {
@@ -1323,6 +1428,7 @@ export class BossOption {
         let bossIdListStr = bossIdList.map((bossId: any) => bossId.toString()).join(',');
         const outcomeContext = captureOutcomeContext()
         const outcomePlatformAccount = Tools.window._PAGE?.uid
+        const automationScope = captureAutomationScope()
         let resp: any = await axiosOriginal.get("https://www.zhipin.com/wapi/zprelation/friend/getGeekFriendList.json?friendIds=" + bossIdListStr)
         const responseRisk = tripBossRiskCircuit(resp)
         if (responseRisk) return []
@@ -1331,6 +1437,7 @@ export class BossOption {
             return [];
         }
         observeOutcomeContacts(friendList, outcomePlatformAccount, outcomeContext)
+        observeUnifiedContacts(friendList, String(outcomePlatformAccount || ''), automationScope)
         return friendList.map((friend: any) => {
             return {
                 bossId: friend.uid,

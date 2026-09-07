@@ -210,6 +210,9 @@ class OutcomeStorage:
                 )
                 accepted.append(item.eventId)
                 cases[case["id"]] = case
+            from ..career.observations import record_observations
+
+            await record_observations(self, connection, uid, batch.observations)
         return dict(
             acceptedEventIds=accepted,
             duplicateEventIds=duplicates,

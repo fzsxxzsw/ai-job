@@ -111,3 +111,58 @@ deployment and acceptance happen before the corresponding Git commit/push.
 Daily `start-job-helper.ps1` never builds or migrates. Direct host development of
 outcomes must set `AGENT_OUTCOME_API_URL=http://127.0.0.1:9100` and the same
 internal token as the API; the Compose deployment supplies its backend alias.
+
+## Unified career automation
+
+`AGENT_AUTOMATION_ENABLED=true` starts three named LangGraph graphs:
+`unified_reply`, `unified_application`, and `unified_career_review`. Each runs
+gather → compute → validate → persist → durable execution/confirmation interrupt
+→ finalize. An approval that unlocks a sensitive action creates a second durable
+execution wait. API receipt facts determine COMPLETED, FAILED, or UNCERTAIN;
+the Agent does not send platform messages or execute browser actions.
+
+The worker uses `/internal/automation` on `AGENT_OUTCOME_API_URL`, authenticated
+by `AGENT_OUTCOME_INTERNAL_TOKEN` (or the existing `AGENT_INTERNAL_TOKEN`). It
+does not need direct MySQL access when legacy persistence is disabled. Defaults
+are a five-second scan and a 300-second job deadline, configured through
+`AGENT_AUTOMATION_SCAN_SECONDS` and `AGENT_AUTOMATION_JOB_TIMEOUT_SECONDS`.
+An independent heartbeat continues during model calls and lease renewal.
+Compose maps `API_AUTOMATION_ENABLED` to the Agent switch; `API_CAREER_ENABLED`
+separately enables career API features. Both default to false and require the
+explicit additive API schema migration before enabling.
+
+Checkpoints contain only job kind/ID, revision, input hash, artifact/result
+references, wait phase and status. Leases, credentials, messages, resumes,
+approval bodies and API clients stay in typed runtime context/API storage.
+Keep the SQLite volume durable and run one Agent process per checkpoint file.
+Restart resumes the interrupted node with a fresh lease. Missing checkpoints
+rebuild through idempotent API stages using saved artifacts/actions/receipts;
+DISPATCHING or UNKNOWN is never permission to send again.
+
+Business completion and graph persistence are acknowledged separately. After
+COMPLETED/FAILED, the API retains a terminal reconciliation lease until the
+Agent verifies a synchronously persisted graph END and posts `graph-complete`.
+An expired unacknowledged terminal job is claimed as `RECONCILE_TERMINAL` without
+changing its public business status. If its checkpoint is missing, the graph
+enters only its named finalize node, bypassing gather/compute/validation and
+action creation. Replaying the final ACK never runs the model again. The real
+subprocess crash cases are in `tests/test_automation_terminal_reconciliation.py`.
+
+`/health/ready` adds `automation` with graph names/version, worker state,
+heartbeat/claim/completion timestamps and a fixed error code. Completion time
+advances only after successful API finalization, not after saving or parking.
+Readiness requires a recent heartbeat and a successful claim scan; liveness
+remains independent. Synthetic protocol and SQLite recovery tests are in
+`tests/test_automation_{client,worker,lifecycle}.py`. They do not establish
+installed-browser acceptance or external platform read/terminal evidence.
+Career-review deletion uses a separate leased cleanup worker. It persists an
+`automation_checkpoint_tombstone` row containing only the thread ID, then calls
+the installed SQLite saver's `adelete_thread` on a dedicated connection and
+verifies that both checkpoint and pending-write rows are absent before the API
+ACK. SQLite INSERT/UPDATE triggers fence every writer, including other processes
+using the upstream saver, so an in-flight node cannot restore a deleted thread.
+Deletion/lease/ACK failures remain reclaimable; the API only reports DELETED
+after the cleanup ACK. `automation.cleanupWorkerRunning`,
+`lastCheckpointDeletedAt` and `cleanupLastErrorCode` expose cleanup progress.
+Local external backups retain their separately configured retention; this
+protocol removes live review checkpoints and does not erase backup copies.

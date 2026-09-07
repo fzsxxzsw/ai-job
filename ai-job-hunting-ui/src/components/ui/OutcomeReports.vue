@@ -1,8 +1,9 @@
 <template>
+    <AutomationTasks/>
     <section class="outcome-panel" aria-label="投递结果自动分析">
         <div class="outcome-heading">
             <strong>投递结果自动分析</strong>
-            <el-tag size="small" effect="plain">{{ state.scope ? '已订阅' : '等待连接' }}</el-tag>
+            <el-tag size="small" effect="plain">{{ outcomeSubscriptionLabel(automation.status, state.updatedAt, state.error || automation.error) }}</el-tag>
             <span v-if="state.pending">{{ state.pending }} 条观察待同步</span>
         </div>
         <p v-if="state.error" class="outcome-warning" role="status">{{ state.error }}</p>
@@ -62,12 +63,18 @@ import {ElMessageBox} from 'element-plus'
 import {ElMessage} from '../../utils/tools'
 import {getSelectedConversationIdentity} from '../../platform/deliveryAudit'
 import OutcomeEvidenceList from './OutcomeEvidenceList.vue'
+import AutomationTasks from './AutomationTasks.vue'
+import {subscribeUnifiedAutomation} from '../../platform/unifiedRuntime'
+import {outcomeSubscriptionLabel} from '../../platform/automationPresentation'
+import type {AutomationSnapshot} from '../../platform/unifiedAutomation'
 import {sendOutcomeFeedback, subscribeOutcomeReports, watchCurrentOutcomeConversation} from '../../platform/boss/outcomeRuntime'
 import {outcomeLivePresentation, outcomePhaseLabel, outcomeTaskLabel, outcomeReportNotice} from '../../extension/outcomesProtocol'
 import type {OutcomeCase, OutcomeReport, OutcomeStatus} from '../../extension/outcomesProtocol'
 
 const state = ref<OutcomeStatus & {unbound: number; discarded: number}>({scope: '', pending: 0, blocked: 0, expired: 0, error: '', items: [], updatedAt: 0, unbound: 0, discarded: 0})
 const busy = ref('')
+const automation = ref<AutomationSnapshot>({status: null, jobs: [], error: '', held: 0, updatedAt: 0})
+let disposeAutomation: (() => void) | undefined
 const requestIds = new Map<string, string>()
 let disposeReports: (() => void) | undefined
 let disposeConversation: (() => void) | undefined
@@ -107,10 +114,11 @@ async function feedback(item: OutcomeCase, action: 'CONFIRM' | 'CORRECT' | 'IGNO
     finally { busy.value = '' }
 }
 onMounted(() => {
+    disposeAutomation = subscribeUnifiedAutomation(value => { automation.value = value })
     disposeReports = subscribeOutcomeReports(value => { state.value = value })
     disposeConversation = watchCurrentOutcomeConversation()
 })
-onUnmounted(() => { disposeReports?.(); disposeConversation?.() })
+onUnmounted(() => { disposeReports?.(); disposeConversation?.(); disposeAutomation?.() })
 </script>
 
 <style scoped>

@@ -10,6 +10,15 @@ from fastapi import FastAPI, Header, HTTPException, Request, Response, status
 from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
+from job_helper_agent.automation_checkpoint import AutomationCheckpointer
+from job_helper_agent.automation_cleanup import AutomationCleanupWorker
+from job_helper_agent.automation_client import AutomationAPIClient
+from job_helper_agent.automation_graph import (
+    GRAPH_VERSION,
+    KINDS,
+    build_automation_graphs,
+)
+from job_helper_agent.automation_worker import AutomationWorker
 from job_helper_agent.config import AgentConfig, load_config
 from job_helper_agent.database import (
     create_engine_and_session,
@@ -67,7 +76,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.decision_graph = build_decision_graph()
     app.state.graph_ready = True
     app.state.persistence_ready = False
-    if not config.persistence_enabled and not config.outcomes_enabled:
+    if not (
+        config.persistence_enabled
+        or config.outcomes_enabled
+        or config.automation_enabled
+    ):
         try:
             yield
         finally:
@@ -79,9 +92,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     async with AsyncExitStack() as resources:
         checkpoint_connection = await aiosqlite.connect(str(checkpoint_path))
         resources.push_async_callback(checkpoint_connection.close)
-        saver = AsyncSqliteSaver(
-            checkpoint_connection, serde=STRICT_CHECKPOINT_SERIALIZER
+        saver_type = (
+            AutomationCheckpointer if config.automation_enabled else AsyncSqliteSaver
         )
+        saver = saver_type(checkpoint_connection, serde=STRICT_CHECKPOINT_SERIALIZER)
         await saver.setup()
         app.state.checkpointer = saver
         if config.persistence_enabled:
@@ -112,6 +126,32 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             app.state.outcome_worker = worker
             worker.start()
             resources.push_async_callback(worker.stop)
+        if config.automation_enabled:
+            automation_client = AutomationAPIClient(
+                config.outcome_api_url,
+                config.outcome_internal_token or config.internal_token,
+            )
+            resources.push_async_callback(automation_client.close)
+            graphs = build_automation_graphs(saver)
+            app.state.automation_graphs = graphs
+            worker = AutomationWorker(
+                automation_client,
+                graphs,
+                scan_seconds=config.automation_scan_seconds,
+                job_timeout_seconds=config.automation_job_timeout_seconds,
+            )
+            app.state.automation_worker = worker
+            worker.start()
+            resources.push_async_callback(worker.stop)
+            cleanup_worker = AutomationCleanupWorker(
+                automation_client,
+                saver,
+                scan_seconds=config.automation_scan_seconds,
+                timeout_seconds=config.automation_job_timeout_seconds,
+            )
+            app.state.automation_cleanup_worker = cleanup_worker
+            cleanup_worker.start()
+            resources.push_async_callback(cleanup_worker.stop)
         try:
             yield
         finally:
@@ -177,9 +217,52 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
                 else None,
                 "lastErrorCode": worker.last_error if worker else "WORKER_UNAVAILABLE",
             }
+        automation_ok = True
+        automation_status = None
+        if isinstance(config_value, AgentConfig) and config_value.automation_enabled:
+            worker = getattr(request.app.state, "automation_worker", None)
+            graphs = getattr(request.app.state, "automation_graphs", {})
+            automation_graph_ok = set(graphs) == set(KINDS)
+            automation_ok = automation_graph_ok and worker is not None and worker.ready
+            cleanup_worker = getattr(
+                request.app.state, "automation_cleanup_worker", None
+            )
+            cleanup_ok = cleanup_worker is not None and cleanup_worker.ready
+            automation_ok = automation_ok and cleanup_ok
+            checks["automationGraph"] = (
+                "compiled" if automation_graph_ok else "unavailable"
+            )
+            checks["automationWorker"] = "running" if automation_ok else "unavailable"
+            checks["automationCleanup"] = "running" if cleanup_ok else "unavailable"
+            automation_status = {
+                "enabled": True,
+                "graphVersion": GRAPH_VERSION,
+                "graphs": sorted(graphs),
+                "workerRunning": worker is not None and worker.running,
+                "lastSuccessfulClaimAt": worker.last_successful_claim_at
+                if worker
+                else None,
+                "lastHeartbeatAt": worker.last_heartbeat_at if worker else None,
+                "lastCompletedAt": worker.last_completed_at if worker else None,
+                "lastErrorCode": (worker.heartbeat_error or worker.last_error)
+                if worker
+                else "WORKER_UNAVAILABLE",
+                "cleanupWorkerRunning": cleanup_worker is not None
+                and cleanup_worker.running,
+                "lastCheckpointDeletedAt": cleanup_worker.last_deleted_at
+                if cleanup_worker
+                else None,
+                "cleanupLastErrorCode": cleanup_worker.last_error
+                if cleanup_worker
+                else "WORKER_UNAVAILABLE",
+            }
         readiness_status = (
             "ready"
-            if graph_ready and config_valid and persistence_ok and outcome_ok
+            if graph_ready
+            and config_valid
+            and persistence_ok
+            and outcome_ok
+            and automation_ok
             else "not_ready"
         )
         if readiness_status == "not_ready":
@@ -192,6 +275,8 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
         }
         if outcome_status is not None:
             result["outcomes"] = outcome_status
+        if automation_status is not None:
+            result["automation"] = automation_status
         return result
 
     @application.post(

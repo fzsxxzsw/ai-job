@@ -33,10 +33,13 @@ class AgentConfig(BaseModel):
     outcome_internal_token: SecretStr | None = None
     outcome_scan_seconds: float = Field(default=5, ge=1, le=60)
     outcome_job_timeout_seconds: float = Field(default=300, ge=150, le=600)
+    automation_enabled: bool = False
+    automation_scan_seconds: float = Field(default=5, ge=1, le=60)
+    automation_job_timeout_seconds: float = Field(default=300, ge=150, le=600)
 
     @model_validator(mode="after")
     def require_persistence_secrets(self) -> "AgentConfig":
-        if self.outcomes_enabled:
+        if self.outcomes_enabled or self.automation_enabled:
             validate_api_url(self.outcome_api_url)
             token = self.outcome_internal_token or self.internal_token
             if token is None or len(token.get_secret_value().strip()) < 32:
@@ -122,5 +125,11 @@ def load_config() -> AgentConfig:
         outcome_scan_seconds=float(os.getenv("AGENT_OUTCOME_SCAN_SECONDS", "5")),
         outcome_job_timeout_seconds=float(
             os.getenv("AGENT_OUTCOME_JOB_TIMEOUT_SECONDS", "300")
+        ),
+        automation_enabled=os.getenv("AGENT_AUTOMATION_ENABLED", "false").casefold()
+        in {"1", "true", "yes", "on"},
+        automation_scan_seconds=float(os.getenv("AGENT_AUTOMATION_SCAN_SECONDS", "5")),
+        automation_job_timeout_seconds=float(
+            os.getenv("AGENT_AUTOMATION_JOB_TIMEOUT_SECONDS", "300")
         ),
     )

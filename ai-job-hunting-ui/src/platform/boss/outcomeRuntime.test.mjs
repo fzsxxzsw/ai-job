@@ -86,3 +86,22 @@ test('first unbound HR event stays visible until exact panel message proof, then
     assert.equal(rig.events[0].bindingObservedAt, 1788757201000)
     assert.equal(rig.events[0].messages[0].sentAt, null)
 })
+test('live peer-lookup association replays only its exact original message and retains observation time', async () => {
+    const rig=environment()
+    rig.runtime.observeOutcomeMessage(rig.raw,rig.raw.body.text,'40')
+    rig.advance(1000)
+    const contact={bossId:A.uid,encryptJobId:A.encryptJobId,encryptBossId:A.encryptBossId,securityId:A.securityId}
+    rig.runtime.observeOutcomePeerAssociation(contact,rig.raw,'40',rig.runtime.captureOutcomeContext(),()=>true)
+    await rig.flush()
+    assert.equal(rig.events.length,1)
+    assert.equal(rig.events[0].observedAt,1788757200000);assert.equal(rig.events[0].bindingObservedAt,1788757201000)
+    assert.equal(rig.events[0].messages[0].sentAt,null)
+    assert.equal(rig.events[0].coverage,null,'peer identity is never terminal coverage proof')
+})
+test('superseded or foreign-peer lookup cannot backfill an old HR message', async () => {
+    for (const [peer,current] of [['81',false],['82',true]]) {
+        const rig=environment();rig.runtime.observeOutcomeMessage(rig.raw,rig.raw.body.text,'40');rig.advance(1000)
+        rig.runtime.observeOutcomePeerAssociation({bossId:peer,encryptJobId:A.encryptJobId,encryptBossId:A.encryptBossId,securityId:A.securityId},rig.raw,'40',rig.runtime.captureOutcomeContext(),()=>current)
+        await rig.flush();assert.equal(rig.events.length,0);assert.equal(rig.views.at(-1).unbound,1)
+    }
+})

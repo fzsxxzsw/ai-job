@@ -6,6 +6,8 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 
+from job_helper_api.automation.schema import automation_metadata
+from job_helper_api.career.schema import career_metadata
 from job_helper_api.config import Settings
 from job_helper_api.main import create_app
 from job_helper_api.outcomes.schema import outcome_metadata
@@ -76,6 +78,8 @@ def world(tmp_path):
     fake = FakeModel()
     engine = create_engine("sqlite:///" + path.as_posix())
     outcome_metadata().create_all(engine)
+    automation_metadata().create_all(engine)
+    career_metadata().create_all(engine)
     engine.dispose()
     settings = Settings(
         database_url="sqlite+aiosqlite:///" + path.as_posix(),

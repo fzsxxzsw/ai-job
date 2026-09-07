@@ -23,6 +23,8 @@ from sqlalchemy.engine import URL, RowMapping
 from sqlalchemy.ext.asyncio import AsyncConnection, create_async_engine
 from sqlalchemy.pool import NullPool
 
+from .automation.schema import TABLES as AUTOMATION_TABLES
+from .career.schema import TABLES as CAREER_TABLES
 from .errors import ApiError
 from .outcomes.schema import TABLES as OUTCOME_TABLES
 
@@ -35,7 +37,13 @@ LEGACY_TABLES = (
     "job_application_snapshot",
     "rejection_analysis",
 )
-OWN_TABLES = ("py_api_control", "py_api_request", *OUTCOME_TABLES)
+OWN_TABLES = (
+    "py_api_control",
+    "py_api_request",
+    *OUTCOME_TABLES,
+    *AUTOMATION_TABLES,
+    *CAREER_TABLES,
+)
 
 
 def now_ms() -> int:

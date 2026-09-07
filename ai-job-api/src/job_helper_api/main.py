@@ -13,6 +13,7 @@ from httpx import AsyncBaseTransport
 from starlette.exceptions import HTTPException
 
 from . import audit, conversation, filtering, prompts, rejections, users
+from .automation.routes import register_routes as register_automation_routes
 from .config import Settings, load_settings
 from .contracts import (
     AskInput,
@@ -27,6 +28,7 @@ from .contracts import (
 )
 from .database import Database, now_ms
 from .errors import ApiError, envelope
+from .execution_authority import bump_authority
 from .middleware import RequestSizeLimitMiddleware
 from .model import PROVIDERS, effective_config, row_config
 from .model_routing import ModelRouter
@@ -70,7 +72,7 @@ def create_app(
         CORSMiddleware,
         allow_origins=ALLOWED_ORIGINS,
         allow_credentials=True,
-        allow_methods=["GET", "POST", "OPTIONS"],
+        allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
         allow_headers=["Authorization", "Content-Type", "X-Request-ID"],
         expose_headers=["X-Job-Helper-Backend", "X-Job-Helper-Build"],
     )
@@ -230,6 +232,8 @@ def create_app(
 
     @app.post("/api/job/filter/one")
     async def filter_job(payload: FilterInput, uid=Depends(require_user)):
+        if app.state.settings.automation_enabled:
+            raise ApiError("AUTOMATION_REQUIRED", 409)
         return envelope(
             await filtering.filter_job(
                 app.state.db, app.state.model, app.state.settings, uid, payload
@@ -255,6 +259,8 @@ def create_app(
 
     @app.post("/api/job/seeker/cloned/ask")
     async def ask(payload: AskInput, uid=Depends(writable)):
+        if app.state.settings.automation_enabled:
+            raise ApiError("AUTOMATION_REQUIRED", 409)
         return envelope(
             await conversation.conversation_reply(
                 app.state.db,
@@ -284,9 +290,11 @@ def create_app(
         lock_key = "conversation:" + jobKey if not stop and jobKey != "globalJobKey" else key
         async with app.state.db.lock(uid, lock_key):
             async with app.state.db.engine.begin() as c:
+                epoch = await bump_authority(app.state.db, c, uid)
                 await app.state.db.set_control(c, uid, key, stop)
                 if not stop and jobKey != "globalJobKey":
                     await app.state.db.set_control(c, uid, "chat-rounds:" + jobKey, 0)
+                    await app.state.db.set_control(c, uid, "graph-round-reset:" + jobKey, epoch)
         return envelope(True)
 
     @app.post("/api/job/seeker/cloned/change/session/user/stop")
@@ -408,6 +416,7 @@ def create_app(
         raise ApiError("个人自用模式已关闭售卖、支付和邀请兑换功能", 410)
 
     register_outcome_routes(app, require_user, writable)
+    register_automation_routes(app, require_user, writable)
     install_routing_routes(app, require_user, writable)
     return app
 

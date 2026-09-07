@@ -24,6 +24,7 @@ import Test from "../test/Test.vue";
 import ReadMe from "./UseDocument.vue";
 import InvitationExchange from "./InvitationExchange.vue";
 import AiConfig from "./AiConfig.vue";
+import CareerWorkspace from './CareerWorkspace.vue';
 import {IS_PERSONAL_MODE} from "../../deploymentMode";
 
 interface Comp {
@@ -40,6 +41,7 @@ componentMap.set('1', {component: AiJob, name: 'AI 助手'});
 componentMap.set('2', {component: Preference, name: '偏好设置'});
 componentMap.set('3', {component: RunRecord, name: '运行记录'});
 componentMap.set('4', {component: AiConfig, name: 'AI 配置'});
+componentMap.set('8', {component: CareerWorkspace, name: '求职复盘'});
 if (!IS_PERSONAL_MODE) componentMap.set('5', {component: InvitationExchange, name: '邀请兑换'});
 componentMap.set('6', {component: ReadMe, name: '使用文档'});
 if (!isProdEnv()) {

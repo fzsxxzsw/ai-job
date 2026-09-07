@@ -109,6 +109,44 @@ not evidence of provider availability.
 
 ## Development and acceptance
 
+### Unified automation and career review
+
+`API_AUTOMATION_ENABLED` routes automatic replies and contact decisions through
+the Agent's persistent graph. API owns immutable inputs, one artifact and separate
+actions. A generated draft is not a sent message: only exact platform ACKs update
+conversation history, reply rounds or attachment observations. The contact ACK
+and greeting ACK are independent. Lost dispatch results remain UNKNOWN and cannot
+be automatically resent. Phone, WeChat and resume exchanges require approval of
+the specific payload. An explicitly reported abort before the platform call is
+distinct from a definite platform failure; ordinary timeouts remain UNKNOWN.
+
+`API_CAREER_ENABLED` enables immutable resume versions, application timelines,
+fixed-window cohorts, review confirmation and separate proposal/strategy approval.
+Statistics use confirmed event time, retain historical interviews after rejection,
+and distinguish contact-based rates from resume-send-based interview rates.
+Unknown or mixed actual resume exposure cannot enter a named-version comparison.
+Current cohorts remain descriptive because job family, level and channel have not
+been independently normalized and verified. No causal or automatic optimization
+claim is made from these counts.
+
+The selected prepared version's actual content enters future filtering, while a
+platform attachment ID alone never proves its resume content. Model-assisted
+reviews use the existing analysis router with at most three provider attempts and
+independent evidence checks; failures are visibly RULES_ONLY. Evidence and complete
+JD samples are bounded with explicit coverage counts. Acceptable resume patches
+currently perform formatting only; new skills, dates, employers and achievements
+remain questions until verified. Strategy application preserves hard preferences,
+selects a future plan and does not start automation. Dispatch reservations consume
+the plan's allocation even when the platform result is unknown; selecting the same
+plan again cannot restore its budget.
+
+Deleting a review clears its private API input/artifact and creates a persistent
+deletion fence. The Agent removes the actual checkpoint and acknowledges cleanup
+before the API reports deletion complete. Accepted resume versions, confirmed
+application facts and explicitly approved strategy records are separate retained
+resources; external backups follow their own retention. Startup never runs the
+explicit migration required for these new tables.
+
 ```sh
 uv sync --frozen
 uv run --frozen pytest

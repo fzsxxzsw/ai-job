@@ -8,6 +8,7 @@ from typing import Any
 from .contracts import ConfigInput, PreferenceInput
 from .database import Database, dumps, loads, now_date, now_ms
 from .errors import ApiError
+from .execution_authority import bump_authority
 from .model import MASKED_KEY, ModelClient, row_config
 
 CONFIG_FIELDS = {
@@ -53,6 +54,7 @@ async def save_preference(db: Database, uid: int, payload: PreferenceInput) -> N
         values["ai_seat_status"] = int(payload.aiSeatStatus)
     t = db.table("user_info")
     async with db.engine.begin() as c:
+        await bump_authority(db, c, uid)
         await c.execute(t.update().where(t.c.id == uid, t.c.is_active.is_(True)).values(**values))
 
 
@@ -99,6 +101,7 @@ async def save_resume(db: Database, uid: int, text: str, resume_id: str) -> dict
     t, u = db.table("user_resume"), db.table("user_info")
     async with db.lock(uid, "resume"):
         async with db.engine.begin() as c:
+            await bump_authority(db, c, uid)
             await c.execute(
                 t.update()
                 .where(t.c.user_id == uid, t.c.is_active.is_(True))
@@ -189,6 +192,7 @@ async def save_config(
         values.update(test_passed=merged["test_passed"], updated_id=uid, updated_date=now_date())
         t = db.table("user_ai_config")
         async with db.engine.begin() as c:
+            await bump_authority(db, c, uid)
             if old:
                 await c.execute(
                     t.update().where(t.c.id == old["id"], t.c.user_id == uid).values(**values)

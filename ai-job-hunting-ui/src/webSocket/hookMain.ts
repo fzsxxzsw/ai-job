@@ -18,6 +18,7 @@ import {shouldHandleManualOutgoingEcho} from "./manualOutgoing";
 import {appendRejectionMessage} from "../platform/boss/rejectionAnalysis";
 import {makeConversationKey} from "../platform/deliveryAudit";
 import {observeOutcomeAcknowledgement, observeOutcomeMessage} from '../platform/boss/outcomeRuntime';
+import {acknowledgeUnifiedAutomation} from '../platform/unifiedRuntime';
 
 const WS_HOOK_LOCK_KEY = '__AI_JOB_HELPER_WS_HOOK_V2__'
 const existingHookStatus = Tools.window[WS_HOOK_LOCK_KEY]
@@ -483,6 +484,7 @@ async function handleReceivedChatProtocol(wsData: TechwolfChatProtocol): Promise
     extractDeliveryConfirmations(wsData).forEach(({clientMid, serverMid}) => {
         Tools.window.AIJobHelperChatBridge?.confirm?.(clientMid, serverMid)
         observeOutcomeAcknowledgement(clientMid, serverMid)
+        acknowledgeUnifiedAutomation(clientMid, serverMid)
     })
     const messages = Array.isArray(wsData?.messages) ? wsData.messages : []
     for (const message of messages) {

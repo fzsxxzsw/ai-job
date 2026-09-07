@@ -37,6 +37,10 @@ class Settings:
     outcome_read_wait_hours: int = 24
     outcome_unread_wait_hours: int = 72
     outcome_lease_seconds: int = 180
+    automation_enabled: bool = False
+    career_enabled: bool = False
+    automation_lease_seconds: int = 180
+    action_lease_seconds: int = 60
 
     def __post_init__(self):
         if self.owner_user_id <= 0:
@@ -61,7 +65,9 @@ class Settings:
             raise ValueError("Enabled email notifications require SMTP host and sender")
         if any(c in self.mail_sender for c in "\r\n"):
             raise ValueError("Invalid SMTP sender")
-        if self.outcome_enabled and len(self.outcome_internal_token) < 32:
+        if (self.outcome_enabled or self.automation_enabled or self.career_enabled) and len(
+            self.outcome_internal_token
+        ) < 32:
             raise ValueError("API_OUTCOME_INTERNAL_TOKEN must contain at least 32 characters")
         if (
             not 1 <= self.outcome_read_wait_hours <= 720
@@ -70,6 +76,11 @@ class Settings:
             raise ValueError("Outcome waiting thresholds must be between 1 and 720 hours")
         if not 30 <= self.outcome_lease_seconds <= 600:
             raise ValueError("Outcome lease must be between 30 and 600 seconds")
+        if (
+            not 30 <= self.automation_lease_seconds <= 600
+            or not 10 <= self.action_lease_seconds <= 180
+        ):
+            raise ValueError("Invalid automation lease duration")
 
 
 def load_settings() -> Settings:
@@ -131,4 +142,8 @@ def load_settings() -> Settings:
         outcome_read_wait_hours=int(os.getenv("API_OUTCOME_READ_WAIT_HOURS", "24")),
         outcome_unread_wait_hours=int(os.getenv("API_OUTCOME_UNREAD_WAIT_HOURS", "72")),
         outcome_lease_seconds=int(os.getenv("API_OUTCOME_LEASE_SECONDS", "180")),
+        automation_enabled=os.getenv("API_AUTOMATION_ENABLED", "false").lower() == "true",
+        career_enabled=os.getenv("API_CAREER_ENABLED", "false").lower() == "true",
+        automation_lease_seconds=int(os.getenv("API_AUTOMATION_LEASE_SECONDS", "180")),
+        action_lease_seconds=int(os.getenv("API_ACTION_LEASE_SECONDS", "60")),
     )

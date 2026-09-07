@@ -14,6 +14,7 @@ from uuid import uuid4
 
 from .database import dumps, now_ms
 from .errors import ApiError
+from .execution_authority import bump_authority
 from .model import ModelClient, ProviderError
 from .model_catalog import TASKS, catalog, model_info
 from .routing_contracts import RouteModel, RoutingInput
@@ -184,6 +185,7 @@ class ModelRouter(ModelClient):
                     raise ApiError("没有可用的免费模型，请先导入额度并检查状态", 422)
                 doc["config"] = payload.model_dump()
                 doc["config"]["revision"] += 1
+                await bump_authority(self.db, c, self.uid)
                 await self.db.set_control(c, self.uid, quota_scope(config), doc)
         return await self.view(config)
 
@@ -333,7 +335,13 @@ class ModelRouter(ModelClient):
         await self.settle(config, row, ticket, task, started, result=result)
         return result
 
-    async def complete(self, config, messages, max_tokens=1024, *, task=None, thinking="auto"):
+    async def complete(
+        self, config, messages, max_tokens=1024, *, task=None, thinking="auto", max_attempts=None
+    ):
+        if max_attempts is not None and (
+            type(max_attempts) is not int or not 1 <= max_attempts <= 3
+        ):
+            raise ValueError("Per-request model attempts must be an integer between 1 and 3")
         if task is None:
             return await super().complete(config, messages, max_tokens, thinking=thinking)
         doc = await self.document(config)
@@ -344,7 +352,9 @@ class ModelRouter(ModelClient):
         last_error = None
         try:
             async with asyncio.timeout(doc["config"]["totalTimeoutSeconds"]):
-                for _ in range(doc["config"]["maxAttempts"]):
+                for _ in range(
+                    min(doc["config"]["maxAttempts"], max_attempts or doc["config"]["maxAttempts"])
+                ):
                     reserved = await self.reserve(
                         config, task, request_reservation(messages, max_tokens), excluded
                     )

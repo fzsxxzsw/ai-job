@@ -6,6 +6,8 @@ import asyncio
 from sqlalchemy import MetaData, Table, inspect, select, text
 from sqlalchemy.dialects.mysql import LONGTEXT
 
+from .automation.schema import automation_metadata
+from .career.schema import career_metadata
 from .config import Settings, load_settings
 from .database import LEGACY_TABLES, OWN_TABLES, Database, loads, now_date, own_metadata
 from .outcomes.schema import outcome_metadata
@@ -72,6 +74,14 @@ async def migrate(settings: Settings | None = None, *, apply: bool = True) -> li
                 "create " + name for name in (*OWN_TABLES, *sorted(optional)) if name not in names
             ]
             alterations: list[str] = []
+            if "automation_job" in names:
+                automation_columns = await connection.run_sync(
+                    lambda c: {col["name"] for col in inspect(c).get_columns("automation_job")}
+                )
+                if "graph_finalized" not in automation_columns:
+                    alterations.append(
+                        "ALTER TABLE automation_job ADD COLUMN graph_finalized INTEGER NOT NULL DEFAULT 1"
+                    )
             for table_name in sorted(LONG_TEXT_COLUMNS.keys() | BINARY_KEY_COLUMNS.keys()):
                 long_columns = LONG_TEXT_COLUMNS.get(table_name, ())
                 if table_name not in names:
@@ -128,6 +138,8 @@ async def migrate(settings: Settings | None = None, *, apply: bool = True) -> li
             await connection.run_sync(rejection_metadata().create_all)
             await connection.run_sync(own_metadata().create_all)
             await connection.run_sync(outcome_metadata().create_all)
+            await connection.run_sync(automation_metadata().create_all)
+            await connection.run_sync(career_metadata().create_all)
             for statement in alterations:
                 await connection.execute(text(statement))
         await db.open()

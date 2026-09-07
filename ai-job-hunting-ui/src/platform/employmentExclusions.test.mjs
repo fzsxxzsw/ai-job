@@ -45,9 +45,11 @@ function handlers() {
     const userStore = {user: {preference: pref, aiSeatStatus: 1}}
     const Type = runInNewContext(code, {
         userStore, localStorage: memory, getBossRiskStop: () => false,
+        captureOutcomeContext: () => 'synthetic-scope', exactPlatformId: value => String(value || ''),
+        unifiedAutomationEnabled: async () => false,
         checkConversationExclusion, stableDeliveryKey: (a,b) => a + b,
         logger: {info() {}, debug() {}}, logging: {trace() {}},
-        Tools: {isHardBlockedCompany: () => false},
+        Tools: {isHardBlockedCompany: () => false, window: {_PAGE: {uid: '40'}}},
         AiPower: {ask: () => {calls.ask++; throw Error('Must not call AI')}},
         isDispatchUncertain: () => false, isManualReviewDelivery: () => false,
         readDeliveryAudit: () => [], hasBossDeliveryReceipt: () => false,
@@ -57,6 +59,7 @@ function handlers() {
     Type.inboundMessageProcessingKeys = new Set()
     Type.aiReplySendingKeys = new Set()
     Type.bossUserInfoMap = new Map()
+    Type.latestLiveInbound = new Map()
     Type.logRecorder = {warn() {}, error() {}}
     Type.messageCache = {isMessageProcessed: () => false, markMessageAsProcessed() {}}
     const instance = new Type()

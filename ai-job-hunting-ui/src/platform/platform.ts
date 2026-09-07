@@ -11,7 +11,13 @@ import {
 import {scrollElementToBottom, simulateScrollToEnd, TampermonkeyApi, Tools} from "./utils";
 import logger, {LogLevel} from '../logging'
 import axiosOriginal from "axios";
-import {captureOutcomeContext, observeOutcomeApplication} from './boss/outcomeRuntime';
+import {captureOutcomeContext, observeOutcomeApplication, observeOutcomeContacts} from './boss/outcomeRuntime';
+import {automationRequestId, type AutomationAction, type FilterInput, type ActionReceipt} from './unifiedAutomation';
+import {unifiedAutomationEnabled, registerAutomationExecutor, submitAutomation, getAutomationJob, bindAutomationContact, cancelAutomationJob, unresolvedAutomationApplication, captureAutomationScope, saveAutomationSnapshot,
+    holdUnifiedAutomation, currentAutomationPolicy, browserAutomationReady, type BrowserAutomationContext} from './unifiedRuntime';
+import {performUnifiedText, prepareUnifiedChat, unknownPlatformReceipt} from './unifiedBossActions';
+import {PushRunStore} from '../stores/pushRun';
+import {exactPlatformId} from './boss/outcomeCollector';
 import {PushResultStatus, PushStatus} from "../enums";
 import {Message} from "../webSocket/protobuf";
 import {LogRecorder} from "../logging/record";
@@ -339,6 +345,7 @@ class BossPlatform extends AbsPlatform {
     private receiptVerifierRunning = false;
     private lastJobSourceDiagnosticKey = "";
     private applicationSnapshotContexts = new Map<string, Omit<ApplicationSnapshotPayload, 'appliedAt'>>();
+    private unifiedFilterInputs = new Map<string, FilterInput>();
 
     private buildAiFilterCacheKey(parts: string[]): string {
         const raw = parts.join('\u0001')
@@ -521,6 +528,7 @@ class BossPlatform extends AbsPlatform {
     }
 
     private async deliverPendingGreetingLocked(entry: PendingGreeting, waitForChannel: boolean): Promise<boolean> {
+        if (await unifiedAutomationEnabled()) { holdUnifiedAutomation('旧招呼队列等待核对，不会与 LangGraph 重复发送'); return false }
         if (getBossRiskStop()) return false
         if (this.greetingSendingKeys.has(entry.key)) {
             return false
@@ -946,6 +954,72 @@ class BossPlatform extends AbsPlatform {
         super();
         this.curUrl = curUrl;
         this.startGreetingRetryWorker();
+        registerAutomationExecutor('APPLICATION', {
+            ready: (context, action) => this.unifiedApplicationReady(context, action),
+            prepare: async (context, action) => {
+                if (action.kind === 'SEND_GREETING') await prepareUnifiedChat()
+                if (!this.unifiedApplicationReady(context, action)) throw new PublishStopExp('投递授权已变化')
+            },
+            run: async (context, action, operation) => {
+                if (action.kind === 'CONTACT_JOB') await this.runWithGlobalPushCooldown(operation)
+                else await runWithOptionalDeliveryLock((globalThis.navigator as any)?.locks, 'greeting', context.conversationKey || '', operation)
+            },
+            perform: async (context, action, mid) => action.kind === 'CONTACT_JOB'
+                ? this.performUnifiedContact(context, action) : performUnifiedText(context.contact!, action, mid),
+            acknowledged: async (context, action, receipt) => {
+                if (action.kind !== 'CONTACT_JOB' || !context.job || context.account !== String(Tools.window._PAGE?.uid || '')) return
+                const capturedScope = captureAutomationScope()
+                if (context.snapshot && receipt?.status === 'ACKNOWLEDGED' && receipt.occurredAt && context.policy === currentAutomationPolicy()) {
+                    const outcomeContext = captureOutcomeContext()
+                    try {
+                        await saveApplicationSnapshotWithRetry({...context.snapshot, appliedAt: receipt.occurredAt}, {
+                            save: value => saveAutomationSnapshot(value, capturedScope),
+                        })
+                        observeOutcomeApplication(context.encryptJobId, outcomeContext)
+                    } catch { holdUnifiedAutomation('沟通已成功，投递快照保存尚未确认，资料已保留在本地任务') }
+                }
+                if (!context.greetingEnabled) return
+                // This hook runs once per persisted ACK. Contact success is already recorded;
+                // a failed bounded lookup neither retries contact nor starts a polling loop.
+                try {
+                    const result = await this.requestBossData(context.job)
+                    const bossId = exactPlatformId(result?.data?.bossId)
+                    if (!bossId || !capturedScope || capturedScope !== captureAutomationScope() || context.account !== String(Tools.window._PAGE?.uid || '')) return
+                    const conversationKey = makeConversationKey(context.job.encryptBossId, context.job.securityId)
+                    await bindAutomationContact(action.actionId, bossId, conversationKey)
+                    context.bossId = bossId; context.conversationKey = conversationKey
+                    context.contact = {bossId, encryptBossId: context.job.encryptBossId, securityId: context.job.securityId,
+                        encryptJobId: context.job.encryptJobId, jobTitle: this.getJobKey(context.job)} as unknown as BossUserInfo
+                    observeOutcomeContacts([{uid: bossId, encryptJobId: context.job.encryptJobId,
+                        encryptBossId: context.job.encryptBossId, securityId: context.job.securityId}], context.account, captureOutcomeContext())
+                } catch { holdUnifiedAutomation('沟通已成功，招呼等待可靠联系人关联；不会重新发起沟通') }
+            },
+        })
+    }
+
+    private unifiedApplicationReady(context: BrowserAutomationContext, action: AutomationAction): boolean {
+        const job = context.job
+        if (!job || !browserAutomationReady(context, action) || this.pushStatus !== PushStatus.PUSHING || this._pushMock
+            || Tools.isHardBlockedCompany(job.brandName) || matchEmploymentExclusion(userStore.user.preference, job)
+            || this.isLimit(job).limit || String(job.encryptJobId) !== action.payload.encryptJobId) return false
+        if (action.kind === 'CONTACT_JOB') return true
+        return action.kind === 'SEND_GREETING' && !!context.contact && !!action.payload.bossId
+            && String(context.contact.bossId) === action.payload.bossId
+            && makeConversationKey(job.encryptBossId, job.securityId) === action.payload.conversationKey
+    }
+
+    private async performUnifiedContact(context: BrowserAutomationContext, action: AutomationAction): Promise<ActionReceipt> {
+        if (!this.unifiedApplicationReady(context, action)) return {status: 'FAILED', serverMid: null, platformCode: null, occurredAt: Date.now(), errorCode: 'AUTHORIZATION_CHANGED', executionPhase: 'BEFORE_PLATFORM_CALL'}
+        const job = context.job!
+        try {
+            const response = await axiosOriginal.post(`https://www.zhipin.com/wapi/zpgeek/friend/add.json?securityId=${encodeURIComponent(job.securityId)}&jobId=${encodeURIComponent(job.encryptJobId)}&lid=${encodeURIComponent(job.lid)}`,
+                null, {headers: {'Zp_token': Tools.getCookieValue('bst')}, timeout: 6000})
+            tripBossRiskCircuit(response); this.stopForBossDailyLimit(response)
+            const code = response?.data?.code
+            if (code === 0) return {status: 'ACKNOWLEDGED', serverMid: null, platformCode: 0, occurredAt: Date.now(), errorCode: null}
+            if (typeof code === 'number') return {status: 'FAILED', serverMid: null, platformCode: code, occurredAt: Date.now(), errorCode: 'PLATFORM_REJECTED'}
+            return unknownPlatformReceipt()
+        } catch (error) { tripBossRiskCircuit(error); this.stopForBossDailyLimit(error); return unknownPlatformReceipt() }
     }
 
     getPlatformType(): PlatformTypeEnum {
@@ -1503,7 +1577,13 @@ class BossPlatform extends AbsPlatform {
             matchedKeywords: jobTitleDecision.matchedKeywords,
         }
         const resumeMatchEnabled = userStore.user.preference.resumeMatchE
-        if (resumeMatchEnabled) {
+        const unified = await unifiedAutomationEnabled()
+        if (unified) this.unifiedFilterInputs.set(String(jobDetail.encryptJobId), {
+            prompt: '', jobBaseInfo: snapshotJobBaseInfo, jobExtInfo: snapshotJobExtInfo, resumeMatchEnabled: !!resumeMatchEnabled,
+            minMatchScore: Number(userStore.user.preference.resumeMatchMinScore) || 0,
+            titleRuleStatus: jobTitleDecision.status, titleMatchedKeywords: jobTitleDecision.matchedKeywords,
+        })
+        if (resumeMatchEnabled && !unified) {
             const jobBaseInfo = snapshotJobBaseInfo
             const jobExtInfo = snapshotJobExtInfo
             const minMatchScore = userStore.user.preference.resumeMatchMinScore
@@ -1658,9 +1738,11 @@ class BossPlatform extends AbsPlatform {
             if (riskStop) throw new PublishLimitExp(`BOSS风控熔断：${riskStop.reason}`)
             const currentLimit = this.isLimit({} as JobDetail)
             if (currentLimit.limit) throw new PublishLimitExp(currentLimit.msg)
+            if (this.pushStatus !== PushStatus.PUSHING || PushRunStore().stopRequested) throw new PublishStopExp('用户已暂停投递')
 
             TampermonkeyApi.GmSetValue(BOSS_LAST_PUSH_AT_KEY, Date.now())
-            return await operation()
+            try { return await operation() }
+            finally { TampermonkeyApi.GmSetValue(BOSS_LAST_PUSH_AT_KEY, Date.now()) }
         }
 
         const lockManager = (globalThis.navigator as any)?.locks
@@ -1671,6 +1753,41 @@ class BossPlatform extends AbsPlatform {
     }
 
     async doPush(jobDetail: BossJobDetail): Promise<any> {
+        if (await unifiedAutomationEnabled()) {
+            const filterInput = this.unifiedFilterInputs.get(String(jobDetail.encryptJobId))
+            if (!filterInput) throw new AiDecisionUnknownExp(this.getJobKey(jobDetail), '缺少已通过硬过滤的岗位资料')
+            const account = exactPlatformId(Tools.window._PAGE?.uid), runId = PushRunStore().runId
+            if (!account || !runId) throw new PublishStopExp('缺少本轮投递授权')
+            const previous = await unresolvedAutomationApplication(String(jobDetail.encryptJobId))
+            if (previous) throw new AiDecisionUnknownExp(this.getJobKey(jobDetail), '同一岗位已有已派发或待核实任务，请先核对原任务；不会新建重复沟通')
+            const {client: career} = await (await import('./careerApi')).scopedCareerClient()
+            const selection = await career.selection()
+            const cycleKey = await automationRequestId(['application-cycle', account, runId, String(jobDetail.encryptJobId)])
+            const mode = normalizeGreetingDeliveryMode(userStore.user.preference.greetingDeliveryMode, !!userStore.user.preference.cgE, userStore.user.preference.cg)
+            const job = await submitAutomation({requestId: cycleKey, kind: 'APPLICATION', platformAccount: account,
+                conversationKey: null, bossId: null, encryptJobId: String(jobDetail.encryptJobId), input: {cycleKey, filterInput,
+                    localAssessment: {passed: true, reason: '本轮岗位已通过浏览器硬过滤'},
+                    greeting: {enabled: customGreetingEnabled(mode), text: String(userStore.user.preference.cg || '')},
+                    preparedResumeVersionId: selection.preparedResumeVersionId, strategyPlanId: selection.strategyPlanId}},
+                {kind: 'APPLICATION', account, runId, policy: currentAutomationPolicy(), job: structuredClone(jobDetail),
+                    encryptJobId: String(jobDetail.encryptJobId), bossId: null, conversationKey: null,
+                    snapshot: this.applicationSnapshotContexts.get(String(jobDetail.encryptJobId)), greetingEnabled: customGreetingEnabled(mode)})
+            for (;;) {
+                if (this.pushStatus !== PushStatus.PUSHING || PushRunStore().stopRequested) {
+                    await cancelAutomationJob(job.jobId).catch(() => undefined)
+                    throw new PublishStopExp('用户已暂停；未派发动作已请求取消，已有回执保留')
+                }
+                const current = await getAutomationJob(job.jobId)
+                const contact = current.actions.find(action => action.kind === 'CONTACT_JOB')
+                if (contact?.status === 'ACKNOWLEDGED') return {code: 0, message: 'Success', automationJobId: job.jobId}
+                if (['COMPLETED', 'FAILED', 'UNCERTAIN', 'CANCELLED', 'SUPERSEDED'].includes(current.status)) {
+                    if (current.decision?.code === 'REJECT' || current.decision?.code === 'STOP') throw new NotMatchException(this.getJobKey(jobDetail), current.decision.reason, 'LangGraph 岗位决策')
+                    if (contact?.status === 'UNKNOWN' || contact?.status === 'FAILED') throw new PushReqException(this.getJobKey(jobDetail), '沟通动作未确认成功，请查看统一任务分项回执')
+                    throw new AiDecisionUnknownExp(this.getJobKey(jobDetail), current.decision?.reason || '统一任务尚未获得可执行结论')
+                }
+                await Tools.sleep(1500)
+            }
+        }
         const jobTitle = this.getJobKey(jobDetail)
         const activeRiskStop = getBossRiskStop()
         if (activeRiskStop) throw new PublishLimitExp(`BOSS风控熔断：${activeRiskStop.reason}`)
@@ -1794,7 +1911,10 @@ class BossPlatform extends AbsPlatform {
 
             const snapshotKey = String(jobDetail.encryptJobId)
             const snapshotContext = this.applicationSnapshotContexts.get(snapshotKey)
-            if (snapshotContext) {
+            if ((pushResult as any).automationJobId) {
+                // The graph's CONTACT receipt hook owns snapshot capture independently of greeting completion.
+                this.applicationSnapshotContexts.delete(snapshotKey)
+            } else if (snapshotContext) {
                 const outcomeContext = captureOutcomeContext()
                 void saveApplicationSnapshotWithRetry({...snapshotContext, appliedAt: Date.now()}).then(() => {
                     observeOutcomeApplication(snapshotKey, outcomeContext)
@@ -1833,6 +1953,7 @@ class BossPlatform extends AbsPlatform {
      * 投递后发送自定义消息
      */
     async pushAfterSendMsg(jobDetail: BossJobDetail) {
+        if (await unifiedAutomationEnabled()) return
         const greetingMode = normalizeGreetingDeliveryMode(
             userStore.user.preference.greetingDeliveryMode,
             !!userStore.user.preference.cgE,

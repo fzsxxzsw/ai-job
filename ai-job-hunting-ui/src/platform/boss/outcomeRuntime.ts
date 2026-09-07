@@ -148,6 +148,21 @@ export function observeOutcomeContacts(friends: any[], platformAccount: unknown,
         ensureIdentity(); collector.bind(friends, platformAccount, Date.now()); notify(); start()
     } catch { /* passive */ }
 }
+/** Fresh peer-lookup association from the original live handler, never a later cache replay. */
+export function observeOutcomePeerAssociation(contact: {bossId: unknown; encryptJobId: unknown; encryptBossId: string; securityId: string},
+    rawMessage: any, platformAccount: string, expectedContext: string, stillCurrent: () => boolean): void {
+    try {
+        const peer = exactPlatformId(contact.bossId), mid = exactPlatformId(rawMessage?.mid)
+        if (!stillCurrent() || !expectedContext || expectedContext !== captureOutcomeContext() || !peer || !mid
+            || exactPlatformId(rawMessage.from?.uid) !== peer || exactPlatformId(rawMessage.to?.uid) !== platformAccount
+            || typeof contact.encryptJobId !== 'string' || !contact.encryptJobId || !contact.encryptBossId || !contact.securityId) return
+        ensureIdentity()
+        const conversationKey = `${contact.encryptBossId}:${contact.securityId}`
+        collector.bind([{uid: peer, encryptJobId: contact.encryptJobId, encryptBossId: contact.encryptBossId, securityId: contact.securityId}],
+            platformAccount, Date.now(), {bossId: peer, encryptJobId: contact.encryptJobId, conversationKey, messageIds: [mid]})
+        notify(); start()
+    } catch { /* Association cannot interfere with the reply or its platform response. */ }
+}
 export function observeOutcomeMessage(message: unknown, text: string, platformAccount: unknown): void {
     try { ensureIdentity(); collector.message(message, text, platformAccount, Date.now()); notify(); start() } catch { /* passive */ }
 }
