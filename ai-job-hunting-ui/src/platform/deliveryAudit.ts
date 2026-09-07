@@ -26,6 +26,8 @@ export type DeliveryAuditEntry = {
     /** Outgoing client id and the server id returned by BOSS messageSync. */
     clientMid?: string,
     serverMid?: string,
+    /** Diagnostic upload ownership is never inferred for historical records. */
+    upload?: {scope: string; attempts: number; retryAt: number; sentAt?: number; error?: string},
 }
 
 export type DeliveryIdentity = {
@@ -164,16 +166,68 @@ function writeDeliveryAudit(entries: DeliveryAuditEntry[]): void {
     localStorage.setItem(DELIVERY_AUDIT_KEY, raw)
 }
 
-function reportDeliveryAudit(entry: DeliveryAuditEntry): void {
-    const authorization = localStorage.getItem('Authorization')
-    if (!authorization) return
+let auditUploadRunning = false
+
+async function captureDeliveryAuditSession() {
+    const authorization = localStorage.getItem('Authorization') || ''
+    const account = String((window as any)._PAGE?.uid || '')
+    const server = new URL(String(GM_getValue('custom_server_url', 'http://127.0.0.1:9100/')))
+    // The extension's audit transport only allows this exact local endpoint.
+    if (!authorization || !/^[1-9]\d*$/.test(account) || server.origin !== 'http://127.0.0.1:9100'
+        || server.pathname !== '/' || server.username || server.password || server.search || server.hash) return null
+    const raw = JSON.stringify([authorization, account, server.href])
+    const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(raw))
+    return {authorization, scope: Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join(''),
+        isCurrent: () => authorization === localStorage.getItem('Authorization')
+            && account === String((window as any)._PAGE?.uid || '')
+            && server.href === new URL(String(GM_getValue('custom_server_url', 'http://127.0.0.1:9100/'))).href}
+}
+
+function reportDeliveryAudit(entry: DeliveryAuditEntry, newlyCreated = false): void {
+    const revision = JSON.stringify({...entry, upload: undefined})
+    void (async () => {
+        const session = await captureDeliveryAuditSession()
+        if (!session?.isCurrent()) return
+        const entries = readDeliveryAudit()
+        const current = entries.find(item => item.id === entry.id)
+        if (!current || current.createdAt !== entry.createdAt) return
+        // The creation call owns this record even if a synchronous transition
+        // occurred while SHA-256 was pending. Only that call may seed ownership.
+        if (JSON.stringify({...current, upload: undefined}) !== revision && !(newlyCreated && !current.upload)) return
+        if (!current.upload && !newlyCreated) return
+        if (current.upload && current.upload.scope !== session.scope) return
+        current.upload = {scope: session.scope, attempts: 0, retryAt: 0}
+        writeDeliveryAudit(entries)
+        await flushDeliveryAuditReports()
+    })().catch(() => { /* Local diagnostic data remains available. */ })
+}
+
+/** Bounded durable retries; periodic passive audit reconciliation also resumes these after reload. */
+export async function flushDeliveryAuditReports(): Promise<void> {
+    if (auditUploadRunning) return
+    auditUploadRunning = true
     try {
-        GM_xmlhttpRequest({
+        const session = await captureDeliveryAuditSession()
+        if (!session?.isCurrent()) return
+        const entries = readDeliveryAudit()
+        const entry = entries.find(item => item.upload?.scope === session.scope && !item.upload.sentAt
+            && item.upload.attempts < 5 && item.upload.retryAt <= Date.now())
+        if (!entry?.upload) return
+        const revision = JSON.stringify({...entry, upload: undefined})
+        entry.upload.attempts++
+        entry.upload.retryAt = Date.now() + Math.min(300_000, 15_000 * 2 ** (entry.upload.attempts - 1))
+        entry.upload.error = '等待审计上传确认'
+        writeDeliveryAudit(entries)
+        const success = await new Promise<boolean>(resolve => {
+            let settled = false
+            const done = (ok: boolean) => { if (!settled) { settled = true; clearTimeout(timer); resolve(ok) } }
+            const timer = setTimeout(() => done(false), 6_000)
+            try { GM_xmlhttpRequest({
             method: 'POST',
             url: 'http://127.0.0.1:9100/api/job/delivery/audit',
             timeout: 5_000,
             headers: {
-                'Authorization': authorization,
+                'Authorization': session.authorization,
                 'Content-Type': 'application/json; charset=utf-8',
             },
             data: JSON.stringify({
@@ -192,10 +246,24 @@ function reportDeliveryAudit(entry: DeliveryAuditEntry): void {
                 clientMid: entry.clientMid,
                 serverMid: entry.serverMid,
             }),
+            onload: response => {
+                try { const body = JSON.parse(response.responseText); done(response.status === 200 && body.code === 200 && !!body.data?.id) }
+                catch { done(false) }
+            },
+            onerror: () => done(false), ontimeout: () => done(false),
+        }) } catch { done(false) }
         })
+        const latest = readDeliveryAudit()
+        const current = latest.find(item => item.id === entry.id)
+        if (current?.upload?.scope === session.scope && JSON.stringify({...current, upload: undefined}) === revision
+            && current.upload.attempts === entry.upload.attempts) {
+            if (success) { current.upload.sentAt = Date.now(); delete current.upload.error }
+            else current.upload.error = current.upload.attempts >= 5 ? '审计上传失败，已停止自动重试' : '审计上传失败，将重试'
+            writeDeliveryAudit(latest)
+        }
     } catch (_) {
         // Reporting is diagnostic only and must never interrupt message delivery.
-    }
+    } finally { auditUploadRunning = false }
 }
 
 export function recordDeliveryAudit(input: {
@@ -257,6 +325,7 @@ export function recordDeliveryAudit(input: {
         ...materialState,
         createdAt: Number(previous?.createdAt || now),
         updatedAt: now,
+        ...(previous?.upload ? {upload: previous.upload} : {}),
         ...(previous?.acknowledgedAt ? {acknowledgedAt: previous.acknowledgedAt} : {}),
         ...(previous?.receiptAt ? {receiptAt: previous.receiptAt} : {}),
     }
@@ -273,7 +342,7 @@ export function recordDeliveryAudit(input: {
     if (index >= 0) entries[index] = entry
     else entries.push(entry)
     writeDeliveryAudit(entries)
-    reportDeliveryAudit(entry)
+    reportDeliveryAudit(entry, !previous)
     return entry
 }
 
@@ -313,6 +382,7 @@ export function hasBossDeliveryReceipt(content: string, identity: DeliveryIdenti
 }
 
 export function reconcileDeliveryAuditFromDom(): DeliveryAuditEntry[] {
+    void flushDeliveryAuditReports()
     const entries = readDeliveryAudit()
     let changed = false
     const changedEntries: DeliveryAuditEntry[] = []
@@ -336,7 +406,7 @@ export function reconcileDeliveryAuditFromDom(): DeliveryAuditEntry[] {
     }
     if (changed) {
         writeDeliveryAudit(entries)
-        changedEntries.forEach(reportDeliveryAudit)
+        changedEntries.forEach(entry => reportDeliveryAudit(entry))
     }
     return entries
 }

@@ -1,7 +1,8 @@
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from ..database import dumps, loads, now_ms
 from ..errors import ApiError
+from ..outcomes.storage import task_view
 from .storage import TERMINAL, Storage, digest, identifier
 
 
@@ -232,6 +233,21 @@ class Jobs(Storage):
                 self.db.table("outcome_report").c.user_id == uid
             )
         )
+        outcome_jobs = self.db.table("outcome_job")
+        outcome_counts = {
+            row["status"]: row["total"]
+            for row in await self.db.rows(
+                select(outcome_jobs.c.status, func.count().label("total"))
+                .where(outcome_jobs.c.user_id == uid)
+                .group_by(outcome_jobs.c.status)
+            )
+        }
+        recent_outcome_jobs = await self.db.rows(
+            select(outcome_jobs)
+            .where(outcome_jobs.c.user_id == uid)
+            .order_by(outcome_jobs.c.updated_at.desc(), outcome_jobs.c.id.desc())
+            .limit(10)
+        )
         return {
             "contractVersion": 1,
             "enabled": self.settings.automation_enabled,
@@ -252,6 +268,11 @@ class Jobs(Storage):
                 "caseCount": len(cases),
                 "reportCount": len(reports),
                 "lastObservedAt": max((r["last_observed_at"] for r in cases), default=None),
+                "tasks": {
+                    "counts": outcome_counts,
+                    "total": sum(outcome_counts.values()),
+                    "items": [task_view(row) for row in recent_outcome_jobs],
+                },
             },
             "buildId": self.settings.build_id,
         }

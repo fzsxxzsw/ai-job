@@ -6,10 +6,24 @@
         <p v-if="state.error" class="task-warning" role="status">{{ state.error }}</p>
         <template v-if="state.status">
             <p>分析工作进程：{{ workerLabel(state.status.agent.state) }} · 浏览器执行器：{{ workerLabel(state.status.executor.state) }}</p>
-            <p>排队 {{ state.status.counts.queued }} · 处理中 {{ state.status.counts.running }} · 等待执行 {{ state.status.counts.waitingExecution }} · 等待确认 {{ state.status.counts.waitingConfirmation }} · 待核实 {{ state.status.counts.uncertain }} · 失败 {{ state.status.counts.failed }}</p>
+            <p>回复／投递／复盘：排队 {{ state.status.counts.queued }} · 处理中 {{ state.status.counts.running }} · 等待执行 {{ state.status.counts.waitingExecution }} · 等待确认 {{ state.status.counts.waitingConfirmation }} · 待核实 {{ state.status.counts.uncertain }} · 失败 {{ state.status.counts.failed }}</p>
             <small>已结束任务 {{ state.status.counts.completed }}；最近结束 {{ formatTime(state.status.agent.lastCompletedAt) }}。工作进程在线不代表任务已执行。</small>
         </template>
-        <p v-if="!state.jobs.length">当前没有可显示的统一任务。收到消息或开始原有投递流程后，实际任务阶段会显示在这里。</p>
+        <p v-if="!state.jobs.length">当前没有回复、投递或复盘任务；投递结果分析任务单独列在下方。</p>
+        <section v-if="state.status?.outcomes.tasks" aria-label="投递结果分析任务">
+            <strong>投递结果分析 · {{ state.status.outcomes.tasks.total }} 个任务</strong>
+            <p>排队 {{ (state.status.outcomes.tasks.counts.READY || 0) + (state.status.outcomes.tasks.counts.RETRY || 0) }} · 处理中 {{ state.status.outcomes.tasks.counts.RUNNING || 0 }} · 等待确认 {{ state.status.outcomes.tasks.counts.WAITING_CONFIRMATION || 0 }} · 反馈后待恢复 {{ state.status.outcomes.tasks.counts.CONFIRMATION_READY || 0 }} · 已完成 {{ state.status.outcomes.tasks.counts.COMPLETED || 0 }} · 失败 {{ state.status.outcomes.tasks.counts.FAILED || 0 }} · 已被替代 {{ state.status.outcomes.tasks.counts.SUPERSEDED || 0 }}</p>
+            <small>按已保存的分析任务统计，报告保存后仍需等待确认与任务恢复；下列展示最近 10 个任务。</small>
+            <p v-if="!state.status.outcomes.tasks.total">尚无分析任务；收到可靠且可关联的消息后才会创建。</p>
+            <details v-for="task in state.status.outcomes.tasks.items" :key="task.jobId" :open="task.status === 'WAITING_CONFIRMATION'">
+                <summary>投递结果分析 · {{ outcomeTaskLabel(task) }} · 第 {{ task.revision }} 版</summary>
+                <p>任务 {{ task.jobId }} · 更新于 {{ formatTime(task.updatedAt) }}</p>
+                <ol><li v-for="(step, index) in task.phaseHistory" :key="index">{{ outcomePhaseLabel(step.phase) }} · {{ formatTime(step.at) }}</li></ol>
+                <p v-if="task.status === 'WAITING_CONFIRMATION'">报告已保存，请在投递结果自动分析卡片中确认、纠正或忽略。</p>
+                <p v-if="task.lastErrorCode" class="task-warning">任务未完成：{{ task.lastErrorCode }}<span v-if="task.nextAttemptAt"> · 下次重试 {{ formatTime(task.nextAttemptAt) }}</span></p>
+            </details>
+        </section>
+        <p v-else-if="state.status">分析任务统计尚未提供，请查看投递结果自动分析卡片；不能据此判断没有任务。</p>
         <el-button v-if="pushRun.status === 'completed'" size="small" :disabled="!!busy" @click="stopGreetingContinuation">停止本轮待发招呼</el-button>
         <details v-for="job in state.jobs" :key="job.jobId" :open="job.status === 'WAITING_CONFIRMATION'">
             <summary>{{ kindLabel(job.kind) }} · {{ automationJobLabel(job) }}</summary>
@@ -36,6 +50,7 @@ import {onMounted, onUnmounted, ref} from 'vue'
 import {subscribeUnifiedAutomation, approveAutomationAction, cancelAutomationJob, stopGreetingContinuation} from '../../platform/unifiedRuntime'
 import {PushRunStore} from '../../stores/pushRun'
 import {automationActionLabel, automationJobLabel, automationPhaseLabel} from '../../platform/automationPresentation'
+import {outcomeTaskLabel, outcomePhaseLabel} from '../../extension/outcomesProtocol'
 import type {AutomationAction, AutomationSnapshot} from '../../platform/unifiedAutomation'
 import {ElMessage} from '../../utils/tools'
 const state = ref<AutomationSnapshot>({status: null, jobs: [], error: '', held: 0, updatedAt: 0})

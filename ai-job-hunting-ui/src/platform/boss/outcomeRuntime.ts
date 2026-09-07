@@ -6,7 +6,7 @@ import {createPassiveOutcomeCollector, exactPlatformId} from './outcomeCollector
 import type {TerminalProof} from './outcomeCollector'
 import {captureCurrentOutcomePanel} from './outcomeDom'
 
-type Snapshot = OutcomeStatus & {unbound: number; discarded: number}
+type Snapshot = OutcomeStatus & {unbound: number; discarded: number; captureDiagnostic?: string}
 const empty = (): Snapshot => ({scope: '', pending: 0, blocked: 0, expired: 0, error: '', items: [], updatedAt: 0, unbound: 0, discarded: 0})
 const listeners = new Set<(value: Snapshot) => void>()
 const pending = new Map<string, {identity: string; observation: OutcomeObservation}>()
@@ -20,6 +20,7 @@ let counter = 0
 let syncInFlight: Promise<void> | null = null
 let inspectAfterRestore: (() => void) | null = null
 let restoredAnchors = ''
+let captureDiagnostic = {identity: '', message: ''}
 
 function sessionContext() {
     const authorization = localStorage.getItem('Authorization') || ''
@@ -32,7 +33,8 @@ function contextIdentity(context: ReturnType<typeof sessionContext>): string {
     return JSON.stringify([context.authorization, context.platformAccount, context.serverUrl])
 }
 function notify() {
-    snapshot = {...snapshot, ...collector.health()}
+    if (captureDiagnostic.identity !== identity) captureDiagnostic = {identity, message: ''}
+    snapshot = {...snapshot, ...collector.health(), captureDiagnostic: captureDiagnostic.identity === identity ? captureDiagnostic.message : ''}
     for (const listener of listeners) listener({...snapshot})
 }
 
@@ -197,7 +199,9 @@ export function watchCurrentOutcomeConversation(root: Document = document,
         queued = false
         try {
             ensureIdentity()
-            const panel = captureCurrentOutcomePanel(root, (window as any)._PAGE?.uid)
+            const panel = captureCurrentOutcomePanel(root, (window as any)._PAGE?.uid, message => {
+                captureDiagnostic = {identity, message}; notify()
+            })
             if (!panel || !panel.recheck()) return
             const current = panel.binding
             collector.bind([{...current, uid: current.bossId}], (window as any)._PAGE?.uid, Date.now(),
@@ -207,7 +211,7 @@ export function watchCurrentOutcomeConversation(root: Document = document,
             // No terminal source is assumed: a viewport at the bottom does not prove full coverage.
             collector.inspectCurrent(root, current, Date.now(), readTerminalProof?.(root, current) || null)
             notify()
-        } catch { /* selectors and absent platform component data are unknown */ }
+        } catch { captureDiagnostic = {identity, message: '当前消息采集未完成，等待下一次页面变化后核对'}; notify() }
     }
     const observer = new MutationObserver(records => {
         if (queued || !records.some(record => (record.target as Element)?.closest?.('.chat-conversation, .friend-content, .friend-content-warp')

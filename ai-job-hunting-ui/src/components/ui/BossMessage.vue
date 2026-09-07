@@ -33,6 +33,15 @@
         </el-tag>
         <el-tag type="success" effect="plain">招呼已送达/已读 {{ greetingReceiptCount }}</el-tag>
         <el-tag type="success" effect="plain">AI 回复已送达/已读 {{ aiReplyReceiptCount }}</el-tag>
+        <el-tag v-if="auditPendingCount" type="warning" effect="plain">
+            本地审计待同步 {{ auditPendingCount }}（仅在原登录和账号下重试）
+        </el-tag>
+        <el-tag v-if="auditFailedCount" type="danger" effect="plain">
+            审计同步失败 {{ auditFailedCount }}（已重试5次；不代表消息发送失败）
+        </el-tag>
+        <el-tag v-if="auditUnownedCount" type="info" effect="plain">
+            历史审计归属未记录 {{ auditUnownedCount }}（不自动补传或重发）
+        </el-tag>
         <el-tag v-if="ungreetedConversationCount > 0" type="danger" effect="plain">
             会话仅创建未发招呼 {{ ungreetedConversationCount }}
         </el-tag>
@@ -245,6 +254,9 @@ const aiReplyAwaitingReceiptCount = ref(0)
 const aiReplyReceiptCount = ref(0)
 const deliveryFailedCount = ref(0)
 const deliveryBlockedCount = ref(0)
+const auditPendingCount = ref(0)
+const auditFailedCount = ref(0)
+const auditUnownedCount = ref(0)
 const hookDuplicateStarts = ref(0)
 const riskStopReason = ref('')
 const rejectionAnalysisLoading = ref(false)
@@ -276,6 +288,11 @@ const refreshChatHealth = () => {
     const configuredGreeting = userStore.user?.preference?.cg || ''
     backfillVisibleGreetingReceipts(configuredGreeting)
     const audit = reconcileDeliveryAuditFromDom()
+    auditPendingCount.value = audit.filter(item => item.upload && !item.upload.sentAt
+        && item.upload.error !== '审计上传失败，已停止自动重试').length
+    auditFailedCount.value = audit.filter(item => item.upload && !item.upload.sentAt
+        && item.upload.error === '审计上传失败，已停止自动重试').length
+    auditUnownedCount.value = audit.filter(item => !item.upload).length
     greetingAwaitingReceiptCount.value = audit.filter(item => item.kind === 'greeting'
         && item.status === 'acknowledged').length
     greetingReceiptCount.value = audit.filter(item => item.kind === 'greeting' && item.status === 'receipt'

@@ -6,6 +6,7 @@
             <el-tag size="small" effect="plain">{{ outcomeSubscriptionLabel(automation.status, state.updatedAt, state.error || automation.error) }}</el-tag>
             <span v-if="state.pending">{{ state.pending }} 条观察待同步</span>
         </div>
+        <p v-if="state.captureDiagnostic" class="outcome-warning" role="status">{{ state.captureDiagnostic }}</p>
         <p v-if="state.error" class="outcome-warning" role="status">{{ state.error }}</p>
         <p v-if="state.unbound || state.discarded" class="outcome-warning" role="status">
             {{ state.unbound }} 条消息等待可靠的岗位／会话关联；{{ state.discarded }} 条因本页队列上限或过期未能关联。
@@ -71,7 +72,7 @@ import {sendOutcomeFeedback, subscribeOutcomeReports, watchCurrentOutcomeConvers
 import {outcomeLivePresentation, outcomePhaseLabel, outcomeTaskLabel, outcomeReportNotice} from '../../extension/outcomesProtocol'
 import type {OutcomeCase, OutcomeReport, OutcomeStatus} from '../../extension/outcomesProtocol'
 
-const state = ref<OutcomeStatus & {unbound: number; discarded: number}>({scope: '', pending: 0, blocked: 0, expired: 0, error: '', items: [], updatedAt: 0, unbound: 0, discarded: 0})
+const state = ref<OutcomeStatus & {unbound: number; discarded: number; captureDiagnostic?: string}>({scope: '', pending: 0, blocked: 0, expired: 0, error: '', items: [], updatedAt: 0, unbound: 0, discarded: 0})
 const busy = ref('')
 const automation = ref<AutomationSnapshot>({status: null, jobs: [], error: '', held: 0, updatedAt: 0})
 let disposeAutomation: (() => void) | undefined

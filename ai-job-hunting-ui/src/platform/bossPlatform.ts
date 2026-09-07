@@ -67,6 +67,7 @@ type PendingAiReply = {
     inboundMessageMid?: string,
     inboundTextKey?: string,
     recovered?: boolean,
+    receiptScope?: string,
 }
 
 type ConversationReplyState = {
@@ -354,6 +355,10 @@ export class BossOption {
     }
 
     private enqueueAiReply(entry: PendingAiReply, lastError?: unknown): void {
+        // Never adopt a pre-upgrade entry whose sender/session was not recorded.
+        if (!entry.dispatchedAt && !entry.serverMid && !entry.attempts) {
+            entry.receiptScope ||= captureAutomationScope()
+        }
         const queue = this.readAiReplyQueue().filter(item => item.key !== entry.key)
         queue.push(entry)
         this.writeAiReplyQueue(queue)
@@ -489,7 +494,7 @@ export class BossOption {
     private async deliverPendingAiReplyLocked(entry: PendingAiReply, html?: string): Promise<boolean> {
         if (await unifiedAutomationEnabled()) {
             holdUnifiedAutomation('旧回复队列等待回执核对，不会与 LangGraph 重复发送')
-            return false
+            return this.reconcileLegacyAiReplyAck(entry)
         }
         if (getBossRiskStop()) return false
         if (BossOption.aiReplySendingKeys.has(entry.key)) {
@@ -644,8 +649,49 @@ export class BossOption {
         }
     }
 
+    private reconcileLegacyAiReplyAck(entry: PendingAiReply): boolean {
+        const scope = captureAutomationScope()
+        if (!scope || entry.receiptScope !== scope || !entry.conversationKey
+            || !entry.bossId || hasServerAcknowledgement(entry)
+            || !(isDispatchUncertain(entry) || isManualReviewDelivery(entry))) return false
+        const clientMid = String(entry.clientMid || '')
+        if (!/^[1-9]\d*$/.test(clientMid)) return false
+        const ack = Tools.window.AIJobHelperChatBridge?.getAcknowledgement?.(clientMid)
+        const serverMid = String(ack?.serverMid || '')
+        // Aliased ACKs without an independently retained mapping remain uncertain.
+        if (String(ack?.clientMid || '') !== clientMid || !/^[1-9]\d*$/.test(serverMid)
+            || serverMid === clientMid || scope !== captureAutomationScope()) return false
+        entry.serverMid = serverMid
+        entry.acknowledgedAt = Date.now()
+        delete entry.manualReviewAt
+        this.persistAiReplyEntry(entry)
+        recordDeliveryAudit({key: entry.key, kind: 'ai-reply', status: 'acknowledged',
+            jobTitle: entry.jobTitle, content: entry.content, attempts: entry.attempts,
+            bossId: entry.bossId, conversationKey: entry.conversationKey, clientMid, serverMid})
+        return true
+    }
+
+    private pruneScopedLegacyAiReplyReceipts(): void {
+        const scope = captureAutomationScope()
+        if (!scope) return
+        const receipts = readDeliveryAudit().filter(item => item.kind === 'ai-reply' && item.status === 'receipt')
+        const queue = this.readAiReplyQueue()
+        const retained = queue.filter(entry => entry.receiptScope !== scope || !entry.clientMid || !entry.serverMid
+            || !entry.bossId || !entry.conversationKey || !receipts.some(receipt => receipt.key === entry.key
+                && receipt.bossId === String(entry.bossId) && receipt.conversationKey === entry.conversationKey
+                && receipt.clientMid === entry.clientMid && receipt.serverMid === entry.serverMid))
+        if (retained.length !== queue.length && scope === captureAutomationScope()) this.writeAiReplyQueue(retained)
+    }
+
     private async drainAiReplyQueue(): Promise<void> {
         if (BossOption.aiReplyDrainRunning) return
+        if (await unifiedAutomationEnabled()) {
+            // Receipt-only path is independent of AI enablement and never invokes
+            // finalization (which sends MessageRead), contact lookup or transport.
+            for (const entry of this.readAiReplyQueue()) this.reconcileLegacyAiReplyAck(entry)
+            this.pruneScopedLegacyAiReplyReceipts()
+            return
+        }
         const queue = this.pruneSettledAiReplyQueue()
         if (getBossRiskStop()
             || !userStore?.user?.aiSeatStatus

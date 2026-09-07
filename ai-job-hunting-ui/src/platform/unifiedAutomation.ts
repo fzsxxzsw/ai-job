@@ -1,4 +1,5 @@
 /** Fixed authenticated automation transport. Platform operations are injected by the browser adapter. */
+import type {OutcomeTask} from '../extension/outcomesProtocol'
 export const ACTION_KINDS = ['CONTACT_JOB', 'SEND_GREETING', 'SEND_TEXT', 'SEND_RESUME', 'ACCEPT_PHONE', 'ACCEPT_WECHAT', 'ACCEPT_RESUME'] as const
 export type ActionKind = typeof ACTION_KINDS[number]
 export type AutomationDecision = {code: 'SEND' | 'CONTACT' | 'REJECT' | 'STOP' | 'MISSING_MATERIALS' | 'REVIEW_READY'; reason: string}
@@ -20,7 +21,8 @@ export type AutomationStatus = {
     agent: {state: 'READY' | 'STALE' | 'OFFLINE'; lastSeenAt: number | null; lastCompletedAt: number | null; lastErrorCode: string | null}
     executor: {state: 'READY' | 'STALE' | 'OFFLINE'; lastSeenAt: number | null}
     counts: {queued: number; running: number; waitingExecution: number; waitingConfirmation: number; uncertain: number; failed: number; completed: number}
-    outcomes: {enabled: boolean; caseCount: number; reportCount: number; lastObservedAt: number | null}
+    outcomes: {enabled: boolean; caseCount: number; reportCount: number; lastObservedAt: number | null
+        tasks?: {counts: Record<string, number>; total: number; items: OutcomeTask[]}}
 }
 export type FilterInput = {prompt: string; jobBaseInfo: string; jobExtInfo: string; resumeMatchEnabled: boolean; minMatchScore: number; titleRuleStatus?: string; titleMatchedKeywords: string[]}
 export type AutomationSubmission = {

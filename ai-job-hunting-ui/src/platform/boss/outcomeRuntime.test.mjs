@@ -105,3 +105,25 @@ test('superseded or foreign-peer lookup cannot backfill an old HR message', asyn
         await rig.flush();assert.equal(rig.events.length,0);assert.equal(rig.views.at(-1).unbound,1)
     }
 })
+
+test('capture diagnostics survive status synchronization and clear after leaving conversation', async () => {
+    const rig=environment({messageOwned:false})
+    let stop=rig.runtime.watchCurrentOutcomeConversation(rig.root)
+    await rig.flush()
+    assert.match(rig.views.at(-1).captureDiagnostic,/原始编号/)
+    stop()
+    stop=rig.runtime.watchCurrentOutcomeConversation({body:{},querySelector:()=>null})
+    await rig.flush();stop()
+    assert.equal(rig.views.at(-1).captureDiagnostic,'')
+})
+
+test('historical message-owned binding recovery emits observation only with original timestamp',async()=>{
+    const rig=environment({panelSource:null})
+    rig.raw.encryptJobId='JobA';rig.raw.conversationKey='BossA:SecA';rig.raw.time=1788750000000
+    const stop=rig.runtime.watchCurrentOutcomeConversation(rig.root)
+    await rig.flush();stop()
+    assert.equal(rig.events.length,1)
+    assert.equal(rig.events[0].messages[0].sentAt,1788750000000)
+    assert.equal(rig.events[0].coverage,null)
+    assert.equal(rig.events[0].source,'BOSS_PASSIVE_MESSAGE')
+})

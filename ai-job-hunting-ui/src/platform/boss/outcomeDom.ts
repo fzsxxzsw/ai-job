@@ -39,25 +39,40 @@ function rowFacts(row: Element, own: string, peer: string) {
 }
 
 /** A selection is not a chat-panel identity. Missing panel/message-owned data withholds HR evidence. */
-export function captureCurrentOutcomePanel(root: ParentNode, ownAccount: unknown) {
+export function captureCurrentOutcomePanel(root: ParentNode, ownAccount: unknown, diagnose: (message: string) => void = () => {}) {
     const own = exactPlatformId(ownAccount)
     const selected = selectedBinding(root)
     const panel = root.querySelector('.chat-conversation')
     const panelBinding = binding(source(panel))
-    if (!own || !panel || !selected || !panelBinding || JSON.stringify(selected) !== JSON.stringify(panelBinding)) return null
+    if (!panel) { diagnose(''); return null }
+    if (!own) { diagnose('当前账号尚未识别，已有消息暂未采集'); return null }
+    if (!selected) { diagnose('当前联系人缺少可靠的岗位和会话关联，已有消息暂未采集'); return null }
+    if (panelBinding && JSON.stringify(selected) !== JSON.stringify(panelBinding)) {
+        diagnose('聊天面板与所选联系人不一致，等待页面完成切换'); return null
+    }
+    const current = panelBinding || selected
+    const reasons = new Set<string>()
     const rows: {row: Element; fingerprint: string; message: ReturnType<typeof rowFacts>}[] = []
     for (const row of Array.from(panel.querySelectorAll('[data-mid], [data-message-id]'))) {
         if (row.closest('#ai-job, [contenteditable="true"]')) continue
-        const message = rowFacts(row, own, panelBinding.bossId)
-        if (!message || message.encryptJobId && message.encryptJobId !== panelBinding.encryptJobId
-            || message.conversationKey && message.conversationKey !== panelBinding.conversationKey) continue
+        const message = rowFacts(row, own, current.bossId)
+        if (!message) { reasons.add('消息原始编号、参与者或正文未能与页面对应'); continue }
+        if (message.encryptJobId && message.encryptJobId !== current.encryptJobId
+            || message.conversationKey && message.conversationKey !== current.conversationKey) {
+            reasons.add('消息与当前岗位或会话不一致'); continue
+        }
+        // Without panel-owned identity, every message must independently own both bindings.
+        if (!panelBinding && (message.encryptJobId !== current.encryptJobId || message.conversationKey !== current.conversationKey)) {
+            reasons.add('聊天面板缺少会话关联，消息自身也没有完整岗位和会话标识'); continue
+        }
         rows.push({row, fingerprint: JSON.stringify(message), message})
     }
     const recheck = () => root.querySelector('.chat-conversation') === panel
         && JSON.stringify(selectedBinding(root)) === JSON.stringify(selected)
         && JSON.stringify(binding(source(panel))) === JSON.stringify(panelBinding)
-        && rows.every(value => JSON.stringify(rowFacts(value.row, own, panelBinding.bossId)) === value.fingerprint)
-    if (!recheck()) return null
-    return {panel, binding: panelBinding, recheck, messages: rows.map(({message}) => ({...message!,
-        encryptJobId: panelBinding.encryptJobId, conversationKey: panelBinding.conversationKey}))}
+        && rows.every(value => JSON.stringify(rowFacts(value.row, own, current.bossId)) === value.fingerprint)
+    if (!recheck()) { diagnose('采集时会话发生变化，等待稳定后重新核对'); return null }
+    diagnose(reasons.size ? `已有消息采集受限：${[...reasons].join('；')}` : rows.length ? '' : '当前面板没有可核实原始编号的消息，尚未补充历史分析')
+    return {panel, binding: current, recheck, messages: rows.map(({message}) => ({...message!,
+        encryptJobId: current.encryptJobId, conversationKey: current.conversationKey}))}
 }
