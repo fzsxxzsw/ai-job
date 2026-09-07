@@ -154,7 +154,11 @@ class ModelClient:
             from .model_catalog import thinking_options
 
             body.update(thinking_options(config.name, thinking, self.settings.thinking_budget))
-            if "omni" in config.name.lower() or body.get("enable_thinking"):
+            if (
+                "omni" in config.name.lower()
+                or config.name.lower() in {"glm-4.5-air", "qvq-max"}
+                or body.get("enable_thinking")
+            ):
                 body.update(stream=True, stream_options={"include_usage": True})
             if "omni" in config.name.lower():
                 body["modalities"] = ["text"]

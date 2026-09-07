@@ -291,6 +291,33 @@ def test_omni_uses_text_stream_protocol(world):
     asyncio.run(run())
 
 
+@pytest.mark.parametrize("name", ["glm-4.5-air", "qvq-max"])
+def test_stream_only_models_return_content_and_account_usage(world, name):
+    def provider(request):
+        body = json.loads(request.content)
+        if not body["stream"]:
+            return httpx.Response(400, json={"error": {"code": "invalid_parameter_error"}})
+        assert body["stream_options"] == {"include_usage": True}
+        assert "modalities" not in body and "thinking_budget" not in body
+        return httpx.Response(
+            200,
+            content=b'data: {"choices":[{"delta":{"reasoning_content":"private"}}]}\n\ndata: {"choices":[{"delta":{"content":"OK"},"finish_reason":"stop"}]}\n\ndata: {"choices":[],"usage":{"total_tokens":42}}\n\ndata: [DONE]\n\n',
+        )
+
+    async def run():
+        client = ModelClient(world["settings"], httpx.MockTransport(provider))
+        try:
+            result = await client.complete(
+                replace(effective_config(world["settings"]), name=name),
+                [{"role": "user", "content": "ok"}],
+            )
+            assert result == "OK" and result.total_tokens == 42
+        finally:
+            await client.http.aclose()
+
+    asyncio.run(run())
+
+
 def test_attempt_limit_retains_uncertain_usage_and_never_tries_same_model_twice(world):
     calls = []
 
