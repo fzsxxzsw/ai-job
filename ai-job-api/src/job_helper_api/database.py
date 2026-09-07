@@ -24,6 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection, create_async_engine
 from sqlalchemy.pool import NullPool
 
 from .errors import ApiError
+from .outcomes.schema import TABLES as OUTCOME_TABLES
 
 LEGACY_TABLES = (
     "user_info",
@@ -34,7 +35,7 @@ LEGACY_TABLES = (
     "job_application_snapshot",
     "rejection_analysis",
 )
-OWN_TABLES = ("py_api_control", "py_api_request")
+OWN_TABLES = ("py_api_control", "py_api_request", *OUTCOME_TABLES)
 
 
 def now_ms() -> int:

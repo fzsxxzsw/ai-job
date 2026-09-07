@@ -32,6 +32,11 @@ class Settings:
     mail_sender: str = ""
     mail_security: str = "ssl"
     mail_timeout: int = 10
+    outcome_enabled: bool = False
+    outcome_internal_token: str = field(default="", repr=False)
+    outcome_read_wait_hours: int = 24
+    outcome_unread_wait_hours: int = 72
+    outcome_lease_seconds: int = 180
 
     def __post_init__(self):
         if self.owner_user_id <= 0:
@@ -56,6 +61,15 @@ class Settings:
             raise ValueError("Enabled email notifications require SMTP host and sender")
         if any(c in self.mail_sender for c in "\r\n"):
             raise ValueError("Invalid SMTP sender")
+        if self.outcome_enabled and len(self.outcome_internal_token) < 32:
+            raise ValueError("API_OUTCOME_INTERNAL_TOKEN must contain at least 32 characters")
+        if (
+            not 1 <= self.outcome_read_wait_hours <= 720
+            or not 1 <= self.outcome_unread_wait_hours <= 720
+        ):
+            raise ValueError("Outcome waiting thresholds must be between 1 and 720 hours")
+        if not 30 <= self.outcome_lease_seconds <= 600:
+            raise ValueError("Outcome lease must be between 30 and 600 seconds")
 
 
 def load_settings() -> Settings:
@@ -112,4 +126,9 @@ def load_settings() -> Settings:
         mail_sender=os.getenv("API_MAIL_SENDER", ""),
         mail_security=os.getenv("API_MAIL_SECURITY", "ssl"),
         mail_timeout=int(os.getenv("API_MAIL_TIMEOUT_SECONDS", "10")),
+        outcome_enabled=os.getenv("API_OUTCOME_ENABLED", "false").lower() == "true",
+        outcome_internal_token=os.getenv("API_OUTCOME_INTERNAL_TOKEN", ""),
+        outcome_read_wait_hours=int(os.getenv("API_OUTCOME_READ_WAIT_HOURS", "24")),
+        outcome_unread_wait_hours=int(os.getenv("API_OUTCOME_UNREAD_WAIT_HOURS", "72")),
+        outcome_lease_seconds=int(os.getenv("API_OUTCOME_LEASE_SECONDS", "180")),
     )

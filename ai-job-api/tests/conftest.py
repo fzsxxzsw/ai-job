@@ -4,9 +4,11 @@ import sqlite3
 import httpx
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import create_engine
 
 from job_helper_api.config import Settings
 from job_helper_api.main import create_app
+from job_helper_api.outcomes.schema import outcome_metadata
 
 SCHEMA = """
 CREATE TABLE user_info(id INTEGER PRIMARY KEY AUTOINCREMENT, phone TEXT, email TEXT, preference TEXT,
@@ -72,6 +74,9 @@ def world(tmp_path):
             "INSERT INTO user_resume(user_id,resume_content,resume_id,is_active) VALUES (3,'测试候选人，Python与Vue项目经验','resume-old',1)"
         )
     fake = FakeModel()
+    engine = create_engine("sqlite:///" + path.as_posix())
+    outcome_metadata().create_all(engine)
+    engine.dispose()
     settings = Settings(
         database_url="sqlite+aiosqlite:///" + path.as_posix(),
         signing_key="fixture-secret-" * 4,

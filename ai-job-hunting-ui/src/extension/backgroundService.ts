@@ -17,6 +17,7 @@ import type {
     NotificationPayload,
     ResumeDownloadPayload,
 } from './bridgeProtocol.ts'
+import type {OutcomeCommand} from './outcomesProtocol.ts'
 
 export type BackgroundSender = {
     url?: string
@@ -33,6 +34,7 @@ export type BackgroundServiceDependencies = {
     clearNotification(notificationId: string): Promise<boolean>
     setTimer(callback: () => void, delay: number): TimerHandle
     clearTimer(handle: TimerHandle): void
+    outcomes?: {handle(command: OutcomeCommand, owner: string): Promise<unknown>}
 }
 
 type ActiveRequest = {controller: AbortController}
@@ -212,6 +214,16 @@ export function createBackgroundService(dependencies: BackgroundServiceDependenc
             if (!owner) return errorResponse('invalid-sender', 'denied', '消息来源缺少页面身份')
             const request = parseBackgroundRequest(rawMessage)
             if (!request) return errorResponse('invalid-request', 'invalid', '扩展后台拒绝了无效消息')
+            if (request.operation === 'outcomes.command') {
+                if (!dependencies.outcomes) return errorResponse(request.requestId, 'denied', '自动分析后台尚未就绪')
+                try {
+                    const payload = await dependencies.outcomes.handle(request.payload, owner)
+                    return {channel: BACKGROUND_CHANNEL, protocol: BRIDGE_PROTOCOL_VERSION,
+                        requestId: request.requestId, ok: true, operation: 'outcomes-response', payload: payload as Record<string, unknown>}
+                } catch (error) {
+                    return errorResponse(request.requestId, 'network', error)
+                }
+            }
             const key = requestKey(owner, request.requestId)
             if (request.operation === 'request.abort') {
                 activeRequests.get(key)?.controller.abort()

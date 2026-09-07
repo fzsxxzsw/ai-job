@@ -30,6 +30,7 @@ from .errors import ApiError, envelope
 from .middleware import RequestSizeLimitMiddleware
 from .model import PROVIDERS, ModelClient, effective_config, row_config
 from .notifications import MailTransport, Notifier
+from .outcomes.routes import register_routes as register_outcome_routes
 from .security import issue_token, verify_token
 
 ALLOWED_ORIGINS = [
@@ -403,6 +404,7 @@ def create_app(
     async def sales_disabled(path: str = ""):
         raise ApiError("个人自用模式已关闭售卖、支付和邀请兑换功能", 410)
 
+    register_outcome_routes(app, require_user, writable)
     return app
 
 

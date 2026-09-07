@@ -43,6 +43,7 @@ try {
     if ($LASTEXITCODE -ne 0 -or $pnpmVersion[-1] -ne '9.15.9') { throw 'Pinned pnpm 9.15.9 is unavailable.' }
 
     & (Join-Path $PSScriptRoot 'tests/job-helper-maintenance.tests.ps1')
+    & (Join-Path $PSScriptRoot 'tests/outcome-runtime.tests.ps1')
     foreach ($project in @('ai-job-api', 'ai-job-agent')) {
         Push-Location -LiteralPath (Join-Path $PSScriptRoot $project)
         try {

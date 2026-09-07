@@ -11,6 +11,7 @@ import {
 import {scrollElementToBottom, simulateScrollToEnd, TampermonkeyApi, Tools} from "./utils";
 import logger, {LogLevel} from '../logging'
 import axiosOriginal from "axios";
+import {captureOutcomeContext, observeOutcomeApplication} from './boss/outcomeRuntime';
 import {PushResultStatus, PushStatus} from "../enums";
 import {Message} from "../webSocket/protobuf";
 import {LogRecorder} from "../logging/record";
@@ -1785,7 +1786,9 @@ class BossPlatform extends AbsPlatform {
             const snapshotKey = String(jobDetail.encryptJobId)
             const snapshotContext = this.applicationSnapshotContexts.get(snapshotKey)
             if (snapshotContext) {
+                const outcomeContext = captureOutcomeContext()
                 void saveApplicationSnapshotWithRetry({...snapshotContext, appliedAt: Date.now()}).then(() => {
+                    observeOutcomeApplication(snapshotKey, outcomeContext)
                     if (this.applicationSnapshotContexts.get(snapshotKey) === snapshotContext) {
                         this.applicationSnapshotContexts.delete(snapshotKey)
                     }

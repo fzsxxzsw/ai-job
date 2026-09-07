@@ -1,7 +1,7 @@
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
 import hmac
 import os
+from collections.abc import AsyncIterator
+from contextlib import AsyncExitStack, asynccontextmanager
 from pathlib import Path
 from uuid import UUID
 
@@ -27,10 +27,12 @@ from job_helper_agent.models import (
     RunHistoryResponse,
     RunResponse,
 )
+from job_helper_agent.outcome_client import OutcomeAPIClient
+from job_helper_agent.outcome_graph import build_outcome_graph
+from job_helper_agent.outcome_worker import OutcomeWorker
 from job_helper_agent.recoverable_graph import build_recoverable_graph
 from job_helper_agent.repository import AgentRepository, RunConflict, RunNotFound
 from job_helper_agent.service import RecoverableAgentService
-
 
 STRICT_CHECKPOINT_SERIALIZER = JsonPlusSerializer(
     pickle_fallback=False,
@@ -65,7 +67,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.decision_graph = build_decision_graph()
     app.state.graph_ready = True
     app.state.persistence_ready = False
-    if not config.persistence_enabled:
+    if not config.persistence_enabled and not config.outcomes_enabled:
         try:
             yield
         finally:
@@ -74,29 +76,47 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     checkpoint_path = Path(config.checkpoint_path)
     checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
-    checkpoint_connection = await aiosqlite.connect(str(checkpoint_path))
-    saver = AsyncSqliteSaver(checkpoint_connection, serde=STRICT_CHECKPOINT_SERIALIZER)
-    try:
-        await saver.setup()
-        engine, sessions = create_engine_and_session(config.sqlalchemy_url())
-        app.state.checkpointer = saver
-        app.state.database_engine = engine
-        app.state.repository = AgentRepository(sessions)
-        app.state.recoverable_graph = build_recoverable_graph(saver)
-        app.state.agent_service = RecoverableAgentService(
-            config=config,
-            graph=app.state.recoverable_graph,
-            repository=app.state.repository,
+    async with AsyncExitStack() as resources:
+        checkpoint_connection = await aiosqlite.connect(str(checkpoint_path))
+        resources.push_async_callback(checkpoint_connection.close)
+        saver = AsyncSqliteSaver(
+            checkpoint_connection, serde=STRICT_CHECKPOINT_SERIALIZER
         )
-        await refresh_persistence_readiness(app)
+        await saver.setup()
+        app.state.checkpointer = saver
+        if config.persistence_enabled:
+            engine, sessions = create_engine_and_session(config.sqlalchemy_url())
+            resources.push_async_callback(engine.dispose)
+            app.state.database_engine = engine
+            app.state.repository = AgentRepository(sessions)
+            app.state.recoverable_graph = build_recoverable_graph(saver)
+            app.state.agent_service = RecoverableAgentService(
+                config=config,
+                graph=app.state.recoverable_graph,
+                repository=app.state.repository,
+            )
+            await refresh_persistence_readiness(app)
+        if config.outcomes_enabled:
+            outcome_client = OutcomeAPIClient(
+                config.outcome_api_url,
+                config.outcome_internal_token or config.internal_token,
+            )
+            resources.push_async_callback(outcome_client.close)
+            app.state.outcome_graph = build_outcome_graph(saver)
+            worker = OutcomeWorker(
+                outcome_client,
+                app.state.outcome_graph,
+                scan_seconds=config.outcome_scan_seconds,
+                job_timeout_seconds=config.outcome_job_timeout_seconds,
+            )
+            app.state.outcome_worker = worker
+            worker.start()
+            resources.push_async_callback(worker.stop)
         try:
             yield
         finally:
             app.state.persistence_ready = False
             app.state.graph_ready = False
-            await engine.dispose()
-    finally:
-        await checkpoint_connection.close()
 
 
 def create_app(config: AgentConfig | None = None) -> FastAPI:
@@ -109,14 +129,19 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
 
     @application.get("/health/live")
     async def health_live() -> dict[str, str]:
-        return {"status": "alive", "service": "job-helper-agent",
-                "version": os.getenv("JOB_HELPER_VERSION", "development"),
-                "buildId": os.getenv("JOB_HELPER_BUILD_ID", "development")}
+        return {
+            "status": "alive",
+            "service": "job-helper-agent",
+            "version": os.getenv("JOB_HELPER_VERSION", "development"),
+            "buildId": os.getenv("JOB_HELPER_BUILD_ID", "development"),
+        }
 
     @application.get("/health/ready")
     async def health_ready(request: Request, response: Response) -> dict[str, object]:
         graph_ready = bool(getattr(request.app.state, "graph_ready", False))
-        config_valid = isinstance(getattr(request.app.state, "config", None), AgentConfig)
+        config_valid = isinstance(
+            getattr(request.app.state, "config", None), AgentConfig
+        )
         checks: dict[str, str] = {
             "graph": "compiled" if graph_ready else "unavailable",
             "config": "valid" if config_valid else "invalid",
@@ -124,17 +149,50 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
         persistence_ok = True
         config_value = getattr(request.app.state, "config", None)
         if isinstance(config_value, AgentConfig) and config_value.persistence_enabled:
-            persistence_ok, persistence_checks = await refresh_persistence_readiness(request.app)
+            persistence_ok, persistence_checks = await refresh_persistence_readiness(
+                request.app
+            )
             checks.update(persistence_checks)
-        readiness_status = "ready" if graph_ready and config_valid and persistence_ok else "not_ready"
+        outcome_ok = True
+        outcome_status = None
+        if isinstance(config_value, AgentConfig) and config_value.outcomes_enabled:
+            worker = getattr(request.app.state, "outcome_worker", None)
+            outcome_graph_ok = (
+                getattr(request.app.state, "outcome_graph", None) is not None
+            )
+            outcome_ok = (
+                outcome_graph_ok
+                and worker is not None
+                and worker.running
+                and worker.last_error is None
+                and worker.last_successful_claim_at is not None
+            )
+            checks["outcomeGraph"] = "compiled" if outcome_graph_ok else "unavailable"
+            checks["outcomeWorker"] = "running" if outcome_ok else "unavailable"
+            outcome_status = {
+                "enabled": True,
+                "workerRunning": worker is not None and worker.running,
+                "lastSuccessfulClaimAt": worker.last_successful_claim_at
+                if worker
+                else None,
+                "lastErrorCode": worker.last_error if worker else "WORKER_UNAVAILABLE",
+            }
+        readiness_status = (
+            "ready"
+            if graph_ready and config_valid and persistence_ok and outcome_ok
+            else "not_ready"
+        )
         if readiness_status == "not_ready":
             response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
-        return {
+        result = {
             "status": readiness_status,
             "checks": checks,
             "version": os.getenv("JOB_HELPER_VERSION", "development"),
             "buildId": os.getenv("JOB_HELPER_BUILD_ID", "development"),
         }
+        if outcome_status is not None:
+            result["outcomes"] = outcome_status
+        return result
 
     @application.post(
         "/api/v1/job-decisions",
@@ -168,8 +226,12 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
                 detail="persistent Agent API is disabled",
             )
         expected = config_value.internal_token.get_secret_value()
-        if x_internal_token is None or not hmac.compare_digest(x_internal_token, expected):
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid token")
+        if x_internal_token is None or not hmac.compare_digest(
+            x_internal_token, expected
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid token"
+            )
         persistence_ready, _ = await refresh_persistence_readiness(request.app)
         if not persistence_ready:
             raise HTTPException(
@@ -196,9 +258,13 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
         try:
             return await operation
         except RunNotFound as error:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(error)) from error
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail=str(error)
+            ) from error
         except RunConflict as error:
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT, detail=str(error)
+            ) from error
 
     @application.post("/api/v1/runs", response_model=RunResponse)
     async def create_run(
@@ -207,7 +273,9 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
         x_internal_token: str | None = Header(default=None, alias="X-Internal-Token"),
     ) -> RunResponse:
         await require_internal_token(request, x_internal_token)
-        run = await map_repository_error(request.app.state.agent_service.create_run(payload))
+        run = await map_repository_error(
+            request.app.state.agent_service.create_run(payload)
+        )
         return run_response(run)
 
     @application.post("/api/v1/runs/{run_id}/resume", response_model=RunResponse)
@@ -231,8 +299,12 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
     ) -> RunResponse:
         await require_internal_token(request, x_internal_token)
         repository = request.app.state.repository
-        run = await map_repository_error(repository.get_run(str(run_id), request.app.state.config.subject_ref))
-        run = await map_repository_error(request.app.state.agent_service.reconcile_run(run))
+        run = await map_repository_error(
+            repository.get_run(str(run_id), request.app.state.config.subject_ref)
+        )
+        run = await map_repository_error(
+            request.app.state.agent_service.reconcile_run(run)
+        )
         return run_response(run)
 
     @application.get("/api/v1/runs/{run_id}/history", response_model=RunHistoryResponse)
@@ -255,7 +327,8 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
                     seq=event.seq,
                     event_type=event.event_type,
                     payload=event.payload_json,
-                    occurred_at=event.occurred_at.isoformat(timespec="microseconds") + "Z",
+                    occurred_at=event.occurred_at.isoformat(timespec="microseconds")
+                    + "Z",
                 )
                 for event in events
             ],

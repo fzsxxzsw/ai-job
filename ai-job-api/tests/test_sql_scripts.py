@@ -26,7 +26,7 @@ def test_sql_loader_preserves_quoted_semicolons_and_escaped_quotes():
 def test_entire_standalone_mysql_schema_yields_nine_complete_table_statements():
     source = (Path(__file__).parents[1] / "schema.sql").read_text(encoding="utf-8-sig")
     statements = split_mysql_script(source)
-    assert len(statements) == 9
+    assert len(statements) == 14
     assert all(
         statement.lstrip().upper().startswith("CREATE TABLE IF NOT EXISTS")
         for statement in statements

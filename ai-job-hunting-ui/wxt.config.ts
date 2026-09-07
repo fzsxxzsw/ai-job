@@ -125,7 +125,7 @@ export default defineConfig({
         description: 'AI 工作猎手 Chrome MV3 受控执行扩展',
         version: extensionVersion,
         version_name: `${extensionVersion}+${buildId}`,
-        permissions: ['notifications'],
+        permissions: ['notifications', 'storage', 'alarms'],
         host_permissions: [
             'http://127.0.0.1:9100/*',
             'https://docdownload.zhipin.com/*',

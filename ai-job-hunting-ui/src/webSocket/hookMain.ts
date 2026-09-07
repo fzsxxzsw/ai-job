@@ -17,6 +17,7 @@ import {createAcknowledgedDispatchGate, GeekChatTransport} from "./geekChatTrans
 import {shouldHandleManualOutgoingEcho} from "./manualOutgoing";
 import {appendRejectionMessage} from "../platform/boss/rejectionAnalysis";
 import {makeConversationKey} from "../platform/deliveryAudit";
+import {observeOutcomeAcknowledgement, observeOutcomeMessage} from '../platform/boss/outcomeRuntime';
 
 const WS_HOOK_LOCK_KEY = '__AI_JOB_HELPER_WS_HOOK_V2__'
 const existingHookStatus = Tools.window[WS_HOOK_LOCK_KEY]
@@ -481,6 +482,7 @@ async function handleReceivedChatData(data: any): Promise<void> {
 async function handleReceivedChatProtocol(wsData: TechwolfChatProtocol): Promise<void> {
     extractDeliveryConfirmations(wsData).forEach(({clientMid, serverMid}) => {
         Tools.window.AIJobHelperChatBridge?.confirm?.(clientMid, serverMid)
+        observeOutcomeAcknowledgement(clientMid, serverMid)
     })
     const messages = Array.isArray(wsData?.messages) ? wsData.messages : []
     for (const message of messages) {
@@ -499,6 +501,7 @@ async function handleSingleReceivedChatMessage(wsData: TechwolfChatProtocol): Pr
         return;
     }
     const ownMessage = normalizeNumber(Tools.window._PAGE?.uid) === fromUid
+    observeOutcomeMessage(message, msgBody, Tools.window._PAGE?.uid)
     try {
         const peerUid = ownMessage ? normalizeNumber(message.to?.uid) : fromUid
         if (peerUid) {

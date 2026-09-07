@@ -91,59 +91,150 @@ CREATE TABLE IF NOT EXISTS delivery_audit (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS job_application_snapshot (
-	id BIGINT NOT NULL AUTO_INCREMENT, 
-	user_id BIGINT NOT NULL, 
-	encrypt_job_id VARCHAR(255) COLLATE utf8mb4_bin NOT NULL, 
-	applied_at BIGINT NOT NULL, 
-	job_base_info LONGTEXT, 
-	job_ext_info LONGTEXT, 
-	jd_hash VARCHAR(64) NOT NULL, 
-	resume_record_id BIGINT NOT NULL, 
-	resume_content LONGTEXT NOT NULL, 
-	resume_hash VARCHAR(64) NOT NULL, 
-	preference_snapshot LONGTEXT, 
-	pre_match_result LONGTEXT, 
-	created_at BIGINT NOT NULL, 
-	PRIMARY KEY (id), 
+	id BIGINT NOT NULL AUTO_INCREMENT,
+	user_id BIGINT NOT NULL,
+	encrypt_job_id VARCHAR(255) COLLATE utf8mb4_bin NOT NULL,
+	applied_at BIGINT NOT NULL,
+	job_base_info LONGTEXT,
+	job_ext_info LONGTEXT,
+	jd_hash VARCHAR(64) NOT NULL,
+	resume_record_id BIGINT NOT NULL,
+	resume_content LONGTEXT NOT NULL,
+	resume_hash VARCHAR(64) NOT NULL,
+	preference_snapshot LONGTEXT,
+	pre_match_result LONGTEXT,
+	created_at BIGINT NOT NULL,
+	PRIMARY KEY (id),
 	CONSTRAINT uq_snapshot_user_job UNIQUE (user_id, encrypt_job_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS rejection_analysis (
-	id BIGINT NOT NULL AUTO_INCREMENT, 
-	user_id BIGINT NOT NULL, 
-	application_snapshot_id BIGINT, 
-	encrypt_job_id VARCHAR(255) COLLATE utf8mb4_bin NOT NULL, 
-	conversation_key VARCHAR(255), 
-	conversation_completeness VARCHAR(32) NOT NULL, 
-	conversation_json LONGTEXT NOT NULL, 
-	conversation_hash VARCHAR(64) NOT NULL, 
-	analysis_json LONGTEXT NOT NULL, 
-	status VARCHAR(32) NOT NULL, 
-	analysis_source VARCHAR(32) NOT NULL, 
-	model VARCHAR(160) NOT NULL, 
-	prompt_version VARCHAR(64) NOT NULL, 
-	corrected_reason VARCHAR(1000), 
-	corrected_code VARCHAR(80), 
-	created_at BIGINT NOT NULL, 
-	updated_at BIGINT NOT NULL, 
+	id BIGINT NOT NULL AUTO_INCREMENT,
+	user_id BIGINT NOT NULL,
+	application_snapshot_id BIGINT,
+	encrypt_job_id VARCHAR(255) COLLATE utf8mb4_bin NOT NULL,
+	conversation_key VARCHAR(255),
+	conversation_completeness VARCHAR(32) NOT NULL,
+	conversation_json LONGTEXT NOT NULL,
+	conversation_hash VARCHAR(64) NOT NULL,
+	analysis_json LONGTEXT NOT NULL,
+	status VARCHAR(32) NOT NULL,
+	analysis_source VARCHAR(32) NOT NULL,
+	model VARCHAR(160) NOT NULL,
+	prompt_version VARCHAR(64) NOT NULL,
+	corrected_reason VARCHAR(1000),
+	corrected_code VARCHAR(80),
+	created_at BIGINT NOT NULL,
+	updated_at BIGINT NOT NULL,
 	PRIMARY KEY (id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS py_api_control (
-	user_id BIGINT NOT NULL, 
-	control_key VARCHAR(255) COLLATE utf8mb4_bin NOT NULL, 
-	value_json TEXT NOT NULL, 
-	updated_at BIGINT NOT NULL, 
+	user_id BIGINT NOT NULL,
+	control_key VARCHAR(255) COLLATE utf8mb4_bin NOT NULL,
+	value_json TEXT NOT NULL,
+	updated_at BIGINT NOT NULL,
 	PRIMARY KEY (user_id, control_key)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS py_api_request (
-	user_id BIGINT NOT NULL, 
-	session_key VARCHAR(255) COLLATE utf8mb4_bin NOT NULL, 
-	request_hash VARCHAR(64) NOT NULL, 
-	status VARCHAR(32) NOT NULL, 
-	response_json TEXT, 
-	created_at BIGINT NOT NULL, 
-	updated_at BIGINT NOT NULL, 
+	user_id BIGINT NOT NULL,
+	session_key VARCHAR(255) COLLATE utf8mb4_bin NOT NULL,
+	request_hash VARCHAR(64) NOT NULL,
+	status VARCHAR(32) NOT NULL,
+	response_json TEXT,
+	created_at BIGINT NOT NULL,
+	updated_at BIGINT NOT NULL,
 	PRIMARY KEY (user_id, session_key, request_hash)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Durable application outcomes and human-confirmation workflow.
+
+CREATE TABLE IF NOT EXISTS outcome_case (
+	id VARCHAR(36) NOT NULL,
+	user_id BIGINT NOT NULL,
+	case_key VARCHAR(64) COLLATE utf8mb4_bin NOT NULL,
+	encrypt_job_id VARCHAR(255) COLLATE utf8mb4_bin NOT NULL,
+	conversation_key VARCHAR(255) COLLATE utf8mb4_bin,
+	boss_id VARCHAR(80) COLLATE utf8mb4_bin,
+	revision BIGINT NOT NULL,
+	facts_json LONGTEXT NOT NULL,
+	current_report_id VARCHAR(36),
+	status VARCHAR(32) NOT NULL,
+	next_check_at BIGINT,
+	last_observed_at BIGINT NOT NULL,
+	last_verified_observation_at BIGINT,
+	created_at BIGINT NOT NULL,
+	updated_at BIGINT NOT NULL,
+	PRIMARY KEY (id),
+	CONSTRAINT uq_outcome_case_owner_key UNIQUE (user_id, case_key),
+	KEY ix_outcome_case_due (user_id, next_check_at)
+);
+
+CREATE TABLE IF NOT EXISTS outcome_feedback (
+	id VARCHAR(36) NOT NULL,
+	user_id BIGINT NOT NULL,
+	report_id VARCHAR(36) NOT NULL,
+	request_id VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
+	payload_hash VARCHAR(64) NOT NULL,
+	action VARCHAR(16) NOT NULL,
+	corrected_outcome VARCHAR(32),
+	corrected_reason TEXT,
+	created_at BIGINT NOT NULL,
+	PRIMARY KEY (id),
+	CONSTRAINT uq_outcome_feedback_owner_request UNIQUE (user_id, request_id)
+);
+
+CREATE TABLE IF NOT EXISTS outcome_job (
+	id VARCHAR(36) NOT NULL,
+	user_id BIGINT NOT NULL,
+	case_id VARCHAR(36) NOT NULL,
+	revision BIGINT NOT NULL,
+	context_json LONGTEXT,
+	input_hash VARCHAR(64),
+	status VARCHAR(32) NOT NULL,
+	phase VARCHAR(32) NOT NULL,
+	phase_history_json LONGTEXT NOT NULL,
+	available_at BIGINT NOT NULL,
+	lease_token VARCHAR(128),
+	lease_until BIGINT,
+	attempts INTEGER NOT NULL,
+	artifact_json LONGTEXT,
+	artifact_id VARCHAR(36),
+	validation_hash VARCHAR(64),
+	report_id VARCHAR(36),
+	feedback_id VARCHAR(36),
+	last_error_code VARCHAR(64),
+	created_at BIGINT NOT NULL,
+	updated_at BIGINT NOT NULL,
+	PRIMARY KEY (id),
+	CONSTRAINT uq_outcome_job_case_revision UNIQUE (case_id, revision),
+	KEY ix_outcome_job_claim (user_id, status, available_at)
+);
+
+CREATE TABLE IF NOT EXISTS outcome_observation (
+	id VARCHAR(36) NOT NULL,
+	user_id BIGINT NOT NULL,
+	event_id VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
+	case_id VARCHAR(36) NOT NULL,
+	payload_hash VARCHAR(64) NOT NULL,
+	source VARCHAR(40) NOT NULL,
+	observed_at BIGINT NOT NULL,
+	received_at BIGINT NOT NULL,
+	payload_json LONGTEXT NOT NULL,
+	PRIMARY KEY (id),
+	CONSTRAINT uq_outcome_observation_owner_event UNIQUE (user_id, event_id)
+);
+
+CREATE TABLE IF NOT EXISTS outcome_report (
+	id VARCHAR(36) NOT NULL,
+	user_id BIGINT NOT NULL,
+	case_id VARCHAR(36) NOT NULL,
+	revision BIGINT NOT NULL,
+	report_json LONGTEXT NOT NULL,
+	feedback_status VARCHAR(32) NOT NULL,
+	created_at BIGINT NOT NULL,
+	updated_at BIGINT NOT NULL,
+	PRIMARY KEY (id),
+	CONSTRAINT uq_outcome_report_case_revision UNIQUE (case_id, revision)
+);

@@ -1,3 +1,6 @@
+import {normalizeOutcomeCommand} from './outcomesProtocol.ts'
+import type {OutcomeCommand} from './outcomesProtocol.ts'
+
 export const BRIDGE_PROTOCOL_VERSION = 1 as const
 export const MAIN_WORLD_SOURCE = 'ai-job-helper-main' as const
 export const ISOLATED_WORLD_SOURCE = 'ai-job-helper-isolated' as const
@@ -61,6 +64,9 @@ export type PageBridgeRequest = {
     target: typeof ISOLATED_WORLD_SOURCE
     requestId: string
 } & (PrivilegedGmRequest | {
+    operation: 'outcomes.command'
+    payload: OutcomeCommand
+} | {
     operation: 'request.abort'
     payload: Record<string, never>
 } | {
@@ -87,8 +93,8 @@ export type PageBridgeResponse = {
     requestId: string
 } & ({
     ok: true
-    operation: 'http-response' | 'notification-response'
-    payload: HttpResponsePayload | {notificationId: string}
+    operation: 'http-response' | 'notification-response' | 'outcomes-response'
+    payload: HttpResponsePayload | {notificationId: string} | Record<string, unknown>
 } | {
     ok: false
     operation: 'error'
@@ -277,6 +283,11 @@ export function parsePageBridgeRequest(value: unknown): PageBridgeRequest | null
     if (!isObject(value) || value.protocol !== BRIDGE_PROTOCOL_VERSION
         || value.source !== MAIN_WORLD_SOURCE || value.target !== ISOLATED_WORLD_SOURCE
         || !isRequestId(value.requestId)) return null
+    if (value.operation === 'outcomes.command') {
+        const payload = normalizeOutcomeCommand(value.payload)
+        return payload ? {protocol: BRIDGE_PROTOCOL_VERSION, source: MAIN_WORLD_SOURCE, target: ISOLATED_WORLD_SOURCE,
+            requestId: value.requestId, operation: 'outcomes.command', payload} : null
+    }
     if (value.operation === 'resume.download') {
         const payload = normalizeResumePayload(value.payload)
         return payload ? {...value, operation: 'resume.download', payload} as PageBridgeRequest : null
@@ -300,8 +311,8 @@ export function toBackgroundRequest(request: PageBridgeRequest): BackgroundReque
 
 export function parseBackgroundRequest(value: unknown): BackgroundRequest | null {
     if (!isObject(value) || value.channel !== BACKGROUND_CHANNEL || !isRequestId(value.requestId)) return null
-    return parsePageBridgeRequest({...value, source: MAIN_WORLD_SOURCE, target: ISOLATED_WORLD_SOURCE})
-        ? value as BackgroundRequest : null
+    const parsed = parsePageBridgeRequest({...value, source: MAIN_WORLD_SOURCE, target: ISOLATED_WORLD_SOURCE})
+    return parsed ? toBackgroundRequest(parsed) : null
 }
 
 export function toPageBridgeResponse(response: BackgroundResponse): PageBridgeResponse {
@@ -315,7 +326,7 @@ export function parsePageBridgeResponse(value: unknown): PageBridgeResponse | nu
         || !isRequestId(value.requestId)) return null
     if (value.ok === false && value.operation === 'error' && isObject(value.error)
         && typeof value.error.kind === 'string' && typeof value.error.message === 'string') return value as unknown as PageBridgeResponse
-    if (value.ok === true && (value.operation === 'http-response' || value.operation === 'notification-response')
+    if (value.ok === true && (value.operation === 'http-response' || value.operation === 'notification-response' || value.operation === 'outcomes-response')
         && isObject(value.payload)) return value as unknown as PageBridgeResponse
     return null
 }

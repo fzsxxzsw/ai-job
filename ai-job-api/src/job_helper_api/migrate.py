@@ -8,6 +8,7 @@ from sqlalchemy.dialects.mysql import LONGTEXT
 
 from .config import Settings, load_settings
 from .database import LEGACY_TABLES, OWN_TABLES, Database, loads, now_date, own_metadata
+from .outcomes.schema import outcome_metadata
 from .schema import rejection_metadata
 
 PAUSE_MARKER = "migration:legacy-session-pauses-v1"
@@ -126,6 +127,7 @@ async def migrate(settings: Settings | None = None, *, apply: bool = True) -> li
         async with db.engine.begin() as connection:
             await connection.run_sync(rejection_metadata().create_all)
             await connection.run_sync(own_metadata().create_all)
+            await connection.run_sync(outcome_metadata().create_all)
             for statement in alterations:
                 await connection.execute(text(statement))
         await db.open()

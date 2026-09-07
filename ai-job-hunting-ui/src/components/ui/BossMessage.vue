@@ -2,9 +2,6 @@
     <br/>
     <div class="chat-action-bar">
         <el-button type="success" @click="handlerClick">恢复当前会话 AI 回复</el-button>
-        <el-button type="primary" plain :loading="rejectionAnalysisLoading" @click="handleAnalyzeRejection">
-            分析这次拒绝
-        </el-button>
         <el-tag :type="userStore.user.aiSeatStatus ? 'success' : 'info'" effect="plain">
             AI 回复{{ userStore.user.aiSeatStatus ? '已启用' : '未启用' }}
         </el-tag>
@@ -49,6 +46,8 @@
             已拦截重复坐席 {{ hookDuplicateStarts }} 次
         </el-tag>
     </div>
+
+    <OutcomeReports/>
 
     <div v-if="riskStopReason" class="chat-risk-alert chat-risk-panel">
         <el-alert title="BOSS 风控熔断已生效，自动发送已停止"
@@ -187,6 +186,7 @@
 </template>
 
 <script setup lang="ts">
+import OutcomeReports from './OutcomeReports.vue';
 import {AiPower} from "../../platform/aiPower";
 import {ElMessage} from "../../utils/tools";
 import {BossOption} from "../../platform/bossPlatform";

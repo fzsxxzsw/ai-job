@@ -134,33 +134,9 @@ async def analyze(db, model, settings, uid: int, payload) -> dict:
         if prior:
             return report_view(prior)
         snapshot = await snapshot_row(db, uid, payload.encryptJobId)
-        evidence = build_evidence(messages, snapshot)
-        report = analyze_rules(evidence)
-        source, model_name = "RULES_ONLY", "none"
-        try:
-            model_evidence = dumps(evidence)
-            if len(model_evidence) > MAX_MODEL_EVIDENCE_CHARACTERS:
-                report["unknowns"].append(
-                    "证据正文已保留；总量超过本次模型输入上限，已使用规则分析"
-                )
-            else:
-                config = effective_config(settings, await db.ai_config(uid))
-                answer = await model.complete(
-                    config,
-                    [
-                        {"role": "system", "content": PROMPT},
-                        {"role": "user", "content": model_evidence},
-                    ],
-                    max_tokens=2400,
-                )
-                accepted = validated_findings(answer, evidence)
-                if accepted:
-                    report = merge_findings(report, accepted)
-                    source, model_name = "RULES_AI", config.name
-                else:
-                    report["unknowns"].append("模型未提供通过证据校验的新结论，本次仅使用规则分析")
-        except ApiError:
-            report["unknowns"].append("模型不可用或输出未通过证据校验，本次仅使用规则分析")
+        report, source, model_name = await compute_report(
+            db, model, settings, uid, messages, snapshot
+        )
         values = dict(
             user_id=uid,
             application_snapshot_id=snapshot["id"] if snapshot else None,
@@ -185,6 +161,36 @@ async def analyze(db, model, settings, uid: int, payload) -> dict:
                 raise ApiError("账号已停用", 403)
             inserted = await connection.execute(table.insert().values(**values))
         return report_view({**values, "id": inserted.inserted_primary_key[0]})
+
+
+async def compute_report(db, model, settings, uid: int, messages: list[dict], snapshot):
+    """Compute evidence-checked content without saving or changing feedback state."""
+    evidence = build_evidence(messages, snapshot)
+    report = analyze_rules(evidence)
+    source, model_name = "RULES_ONLY", "none"
+    try:
+        model_evidence = dumps(evidence)
+        if len(model_evidence) > MAX_MODEL_EVIDENCE_CHARACTERS:
+            report["unknowns"].append("证据正文已保留；总量超过本次模型输入上限，已使用规则分析")
+        else:
+            config = effective_config(settings, await db.ai_config(uid))
+            answer = await model.complete(
+                config,
+                [
+                    {"role": "system", "content": PROMPT},
+                    {"role": "user", "content": model_evidence},
+                ],
+                max_tokens=2400,
+            )
+            accepted = validated_findings(answer, evidence)
+            if accepted:
+                report = merge_findings(report, accepted)
+                source, model_name = "RULES_AI", config.name
+            else:
+                report["unknowns"].append("模型未提供通过证据校验的新结论，本次仅使用规则分析")
+    except ApiError:
+        report["unknowns"].append("模型不可用或输出未通过证据校验，本次仅使用规则分析")
+    return report, source, model_name
 
 
 async def get_report(db, uid: int, ident: int) -> dict:

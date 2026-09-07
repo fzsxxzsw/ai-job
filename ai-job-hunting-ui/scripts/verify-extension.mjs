@@ -33,7 +33,7 @@ assert.equal(manifest.manifest_version, 3, 'manifest must be MV3')
 assert.equal(manifest.version_name.includes(expectedBuildId), true, 'version_name must contain the build id')
 assert.deepEqual([...(manifest.host_permissions || [])].sort(), expectedHosts.sort(), 'host permissions must stay exact')
 assert.equal(JSON.stringify(manifest).includes('9101'), false, 'Python 9101 must not be exposed to the browser extension')
-assert.deepEqual(manifest.permissions, ['notifications'], 'only notification privilege is allowed')
+assert.deepEqual(manifest.permissions, ['notifications', 'storage', 'alarms'], 'privileges are limited to notifications and the local analysis outbox')
 assert.deepEqual(Object.keys(manifest.content_security_policy || {}), ['extension_pages'],
     'only the extension_pages CSP is allowed')
 assert.equal(normalizeCsp(manifest.content_security_policy?.extension_pages), expectedExtensionCsp,

@@ -1,4 +1,5 @@
 import axiosOriginal from "axios";
+import {captureOutcomeContext, observeOutcomeContacts} from './boss/outcomeRuntime';
 import {replyNoticeText, UI_FEEDBACK_Z_INDEX} from "../ui/feedback";
 import {Message, MessageRead, TechwolfChatProtocol} from "../webSocket/protobuf";
 import {MessageCache, Tools} from "./utils";
@@ -1294,6 +1295,8 @@ export class BossOption {
             bossIdList = bossIdList.slice(0, 199);
         }
         let bossIdListStr = bossIdList.map((bossId: any) => bossId.toString()).join(',');
+        const outcomeContext = captureOutcomeContext()
+        const outcomePlatformAccount = Tools.window._PAGE?.uid
         let resp: any = await axiosOriginal.get("https://www.zhipin.com/wapi/zprelation/friend/getGeekFriendList.json?friendIds=" + bossIdListStr)
         const responseRisk = tripBossRiskCircuit(resp)
         if (responseRisk) return []
@@ -1301,6 +1304,7 @@ export class BossOption {
         if (!friendList || friendList.length === 0) {
             return [];
         }
+        observeOutcomeContacts(friendList, outcomePlatformAccount, outcomeContext)
         return friendList.map((friend: any) => {
             return {
                 bossId: friend.uid,

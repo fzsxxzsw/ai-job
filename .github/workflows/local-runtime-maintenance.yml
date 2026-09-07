@@ -43,6 +43,9 @@ jobs:
           if ($failed) { exit 1 }
       - name: Validate Docker Compose configuration
         run: docker compose --env-file .env.example -f docker-compose.local.yml config --quiet
+      - name: Verify API and Agent outcome runtime wiring
+        shell: pwsh
+        run: ./tests/outcome-runtime.tests.ps1
       - name: Validate frontend health asset
         shell: pwsh
         run: |
