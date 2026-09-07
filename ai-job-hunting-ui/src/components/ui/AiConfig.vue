@@ -1,5 +1,6 @@
 <template>
     <div class="ai-config">
+        <ModelRouting />
         <el-collapse v-model="activeCollapseNames">
             <el-collapse-item name="tune" title=">模型微调(点击展开收起)" class="tune-form">
                 <div class="tune-form">
@@ -163,6 +164,7 @@
 </template>
 
 <script setup lang="ts">
+import ModelRouting from './ModelRouting.vue'
 import {ref, onMounted, watch} from 'vue'
 import axios from '../../axios'
 import {ElMessage} from '../../utils/tools'

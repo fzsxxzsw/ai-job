@@ -4,7 +4,7 @@
         :model="userStore.user"
         :rules="rules as FormRules<RuleForm>"
         label-position="right"
-        label-width="108px"
+        label-width="158px"
         class="form-preference"
         size="large"
         status-icon>
@@ -54,17 +54,23 @@
                         <el-checkbox v-model="userStore.user.preference.cneE" label="" size="large"/>
                         公司名排除&nbsp;&nbsp;&nbsp;
                     </template>
-                    <el-select v-model="visibleCompanyExclusions"
-                               multiple
-                               filterable
-                               allow-create
-                               clearable
-                               :reserve-keyword="false"
-                               placeholder="输入公司关键词后按 Enter"
-                               style="width: 240px"/>
+                    <CompanyExclusionsInput v-model="visibleCompanyExclusions"
+                                            :protected-keywords="Tools.HARD_BLOCKED_COMPANY_KEYWORDS"/>
                 </el-form-item>
             </div>
 
+            <el-form-item label="JD／对话排除词">
+                <template #label>
+                    <el-checkbox v-model="userStore.user.preference.employmentExcludeE" aria-label="启用 JD／对话排除"/>
+                    JD／对话排除词
+                </template>
+                <CompanyExclusionsInput v-model="employmentExclusionWords" input-label="JD／对话排除关键词"
+                                        placeholder="输入排除关键词，回车添加"/>
+                <el-text class="preference-exclusion-help" type="info">
+                    检查公司、岗位名称、JD 和对方消息。命中后跳过岗位或停止该会话的自动回复、简历及联系方式操作。
+                    “非外包”“不是猎头”等明确否定不命中；可修改关键词或关闭此项，保存后生效。
+                </el-text>
+            </el-form-item>
             <div class="preference-grid preference-grid-wide">
                 <el-form-item label="工作名包含" prop="jobNameInclude">
                     <template #label>
@@ -160,21 +166,15 @@
 
             <!--            <div class="form-bottom">-->
             <div class="preference-grid">
-                <div class="salary-preference-control">
-                    <span>薪资硬范围</span>
-                    <el-input class="input-opt"
-                              v-model="userStore.user.preference.sr"
-                              style="width: 324px"
-                              placeholder="超出不投，例如 13-18">
-                        <template #prepend>
-                            <el-select v-model="userStore.user.preference.srT" placeholder="月薪(k)"
-                                       style="width: 100px">
-                                <el-option label="月薪(k)" value="1"/>
-                                <el-option label="日薪" value="2"/>
-                            </el-select>
-                        </template>
-                    </el-input>
-                </div>
+                <el-form-item label="薪资硬范围">
+                    <div class="salary-preference-control">
+                        <el-select v-model="userStore.user.preference.srT" placeholder="月薪(k)" aria-label="薪资单位">
+                            <el-option label="月薪(k)" value="1"/>
+                            <el-option label="日薪" value="2"/>
+                        </el-select>
+                        <el-input v-model="userStore.user.preference.sr" placeholder="超出不投，例如 13-18" aria-label="薪资范围"/>
+                    </div>
+                </el-form-item>
 
                 <el-form-item label="公司规模范围" prop="jobContentExclude" style="margin-left: 0;">
                     <template #label>
@@ -219,7 +219,7 @@
                     </el-select>
                 </el-form-item>
                 <el-form-item label="位置要求">
-                    <el-select v-model="userStore.user.preference.commuteMode" style="width: 180px">
+                    <el-select v-model="userStore.user.preference.commuteMode" style="width: 220px">
                         <el-option label="优先附近岗位（推荐）" value="prefer"/>
                         <el-option label="必须匹配位置" value="required"/>
                         <el-option label="关闭偏好" value="off"/>
@@ -330,7 +330,7 @@
             <el-form-item label="预测问题" prop="jobContentExclude" style="margin-top: 10px;">
                 <template #label>
                     <el-checkbox v-model="userStore.user.preference.ppE" label="" size="large"/>
-                    预设问题&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+                    预设问题
                 </template>
                 <el-input type="textarea" v-model="userStore.user.preference.pp"/>
             </el-form-item>
@@ -338,53 +338,29 @@
             <el-form-item label="拒绝挽留" prop="jobContentExclude">
                 <template #label>
                     <el-checkbox v-model="userStore.user.preference.rfE" label="" size="large"/>
-                    拒绝挽留&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+                    拒绝挽留
                 </template>
                 <el-input type="textarea" v-model="userStore.user.preference.rf"/>
             </el-form-item>
 
-            <div style="display: flex;">
-                <el-checkbox style="padding-top: 6px" v-model="userStore.user.preference.hiaE" label="" size="large">高意向停止AI坐席
-                </el-checkbox>
-                <el-text type="primary" style="margin-top: -20px;">&nbsp;&nbsp;高意向条件:</el-text>
-                <el-form-item label="对话聊天轮数" prop="crC" style="margin-left:-30px;">
-                    <template #label>
-                        <el-text class="mx-1" type="primary" style="margin-top: 5px;">对话轮数 >=</el-text>
-                    </template>
-                    <el-text class="mx-1" type="primary" style="margin-top: 5px;">
-                        <el-input type="number" style="width: 50px" size="small"
-                                  v-model="userStore.user.preference.crC"/>
-                    </el-text>
+            <el-form-item label="高意向停止AI坐席" class="intent-preference-row">
+                <template #label><el-checkbox v-model="userStore.user.preference.hiaE"/>高意向停止AI坐席</template>
+                <div class="intent-preference-controls">
+                    <div class="interval-control"><span>对话轮数 ≥</span>
+                        <el-input v-model="userStore.user.preference.crC" type="number" min="0" max="100" size="small" style="width: 100px" aria-label="高意向对话轮数"/>
+                    </div>
+                    <span>或包含关键词</span>
+                    <el-select v-model="userStore.user.preference.crK" multiple filterable allow-create default-first-option
+                               :reserve-keyword="false" placeholder="输入关键词后按 Enter"/>
+                </div>
+            </el-form-item>
 
-                    <el-form-item label="对话聊天轮数关键字" prop="crC" style="margin-left: 0;margin-top: 3px;">
-                        <template #label>
-                            <el-text class="mx-1" type="primary">OR&nbsp;&nbsp;&nbsp;包含关键字</el-text>
-                        </template>
-                        <el-select v-model="userStore.user.preference.crK"
-                                   multiple
-                                   filterable
-                                   remote
-                                   allow-create
-                                   default-first-option
-                                   :reserve-keyword="false"
-                                   placeholder="包含关键字"
-                                   style="min-width:200px;width: 100%">
-                            <el-option v-for="(item,inx) in ['请输入包含关键字']"
-                                       :key="inx"
-                                       :label="item"
-                                       :value="item"/>
-                        </el-select>
-                    </el-form-item>
-                </el-form-item>
-            </div>
-
-            <el-form-item>
-
-                <el-checkbox v-model="userStore.user.preference.drE" label="" size="large">AI坐席延迟回复
-                </el-checkbox>
-                &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
-                <el-input-number v-model="userStore.user.preference.dr" :min="0" :max="30"  size="small"></el-input-number>
-                &nbsp;秒
+            <el-form-item label="AI坐席延迟回复">
+                <template #label><el-checkbox v-model="userStore.user.preference.drE"/>AI坐席延迟回复</template>
+                <div class="interval-control">
+                    <el-input-number v-model="userStore.user.preference.dr" :min="0" :max="30" size="small" aria-label="AI回复延迟"/>
+                    <span>秒</span>
+                </div>
             </el-form-item>
 
             <el-text class="mx-1 top-title" type="warning">邮件通知</el-text>
@@ -424,11 +400,17 @@ import {customGreetingEnabled} from "../../platform/greetingPolicy";
 
 import {ServerStore} from "../../stores/server";
 import {TampermonkeyApi} from "../../platform/utils";
+import {savePreference, preferenceSaveFailure} from '../../runtime/preferenceSave';
+import CompanyExclusionsInput from './CompanyExclusionsInput.vue';
 
 const axios = inject('$axios') as AxiosInstance
 const platform = inject('$platform') as AbsPlatform;
 const userStore = UserStore();
 const serverStore = ServerStore();
+const employmentExclusionWords = computed<string[]>({
+    get: () => userStore.user.preference.employmentExcludeKeywords || [],
+    set: values => { userStore.user.preference.employmentExcludeKeywords = values },
+})
 const protectedCompanyKeywords = new Set(
     Tools.HARD_BLOCKED_COMPANY_KEYWORDS.map(keyword => keyword.trim()).filter(Boolean)
 )
@@ -438,7 +420,11 @@ const visibleCompanyExclusions = computed<string[]>({
     set: (keywords) => {
         const protectedKeywords = (userStore.user.preference.cne || [])
             .filter(keyword => protectedCompanyKeywords.has(String(keyword).trim()))
-        userStore.user.preference.cne = Array.from(new Set([...keywords, ...protectedKeywords]))
+        const normalized = keywords.map(keyword => String(keyword).trim()).filter(Boolean)
+        if (normalized.some(keyword => protectedCompanyKeywords.has(keyword))) {
+            ElMessage({message: '该关键词已由内置规则排除，无需重复添加', type: 'info'})
+        }
+        userStore.user.preference.cne = Array.from(new Set([...normalized, ...protectedKeywords]))
     },
 })
 
@@ -582,13 +568,10 @@ const submitForm = async (formEl: FormInstance | undefined) => {
     // 无论是否在线，都先更新本地镜像和全局最新镜像
     const mirrorKey = serverStore.getMirrorKey('user_config')
     const globalMirrorKey = serverStore.getGlobalMirrorKey('user_config')
-    TampermonkeyApi.GmSetValue(mirrorKey, userStore.user)
+    const localSaved = TampermonkeyApi.GmSetValue(mirrorKey, userStore.user) !== false
     TampermonkeyApi.GmSetValue(globalMirrorKey, userStore.user)
 
-    await axios.post("/api/user/save/preference", {
-        ...userStore.user,
-        aiSeatStatus: userStore.user.aiSeatStatus ? 1 : 0
-    })
+    await savePreference(axios, userStore.user)
         .then(resp => {
             ElMessage({
                 message: "偏好设置已同步到服务器",
@@ -598,9 +581,7 @@ const submitForm = async (formEl: FormInstance | undefined) => {
         })
         .catch(err => {
             ElNotification({
-                title: '保存至本地',
-                message: '由于服务器离线，配置仅在本地生效。连接恢复后请重新同步。',
-                type: 'warning',
+                ...preferenceSaveFailure(err, localSaved),
                 duration: 4000
             });
         })
@@ -694,17 +675,113 @@ preferenceDefaultValueHandler()
 
 <style scoped>
 
-.input-opt > :first-child {
-    width: 100px;
+.form-preference {
+    container-type: inline-size;
+    --preference-label-width: 158px;
+    width: 100%;
+    min-width: 0;
+    line-height: 1.5;
 }
 
-.form-item-upload > :first-child {
-    margin-left: 0;
+/* The helper shares a document with the host; reset only our control interiors. */
+.form-preference :deep(input.el-input__inner),
+.form-preference :deep(input.el-select__input) {
+    border: 0 !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+    background: transparent !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    min-width: 0 !important;
+    min-height: 0 !important;
+    font: inherit;
 }
 
-.el-input-number--small {
-    line-height: 22px;
-    width: 80px;
+.form-preference :deep(input.el-input__inner) {
+    width: 100% !important;
+    height: var(--el-input-inner-height) !important;
+    line-height: normal !important;
+}
+
+.form-preference :deep(input.el-select__input) {
+    height: 24px !important;
+    line-height: 24px !important;
+}
+
+/* Legacy host input rules otherwise leave a narrow wrapper inside the full-width control. */
+.form-preference :deep(.el-input:not(.el-input-group)) {
+    display: inline-flex !important;
+}
+
+.form-preference :deep(.el-input:not(.el-input-group) > .el-input__wrapper) {
+    display: flex !important;
+    flex: 1 1 0% !important;
+    width: 0 !important;
+    min-width: 0 !important;
+    box-sizing: border-box;
+}
+
+.form-preference :deep(.el-input__inner::placeholder) {
+    color: #667085;
+}
+
+.preference-exclusion-help {
+    color: #606266;
+    line-height: 1.7;
+}
+
+.form-preference :deep(.el-form-item__label) {
+    white-space: nowrap;
+    align-items: center;
+    gap: 6px;
+    padding-right: 12px;
+}
+
+.form-preference :deep(.el-form-item__content) {
+    min-width: 0;
+    gap: 8px;
+}
+
+.form-preference :deep(.el-input),
+.form-preference :deep(.el-select),
+.form-preference :deep(.el-textarea) {
+    max-width: 100%;
+    min-width: 0;
+}
+
+.form-preference :deep(.el-input-number) {
+    flex: 0 0 152px;
+    width: 152px;
+}
+
+.form-preference :deep(.el-input-number .el-input__wrapper) {
+    padding-left: 34px;
+    padding-right: 34px;
+}
+
+.form-preference :deep(.el-input-number .el-input__inner) {
+    text-align: center;
+}
+
+.form-preference :deep(.el-checkbox) {
+    flex-shrink: 0;
+    margin-right: 0;
+}
+
+.form-preference :deep(.el-alert__content) {
+    min-width: 0;
+    line-height: 1.6;
+}
+
+.form-preference :deep(.el-alert__title),
+.form-preference :deep(.el-alert__description) {
+    line-height: 1.6;
+    overflow-wrap: anywhere;
+}
+
+.top-title {
+    display: block;
+    margin: 20px 0 12px;
 }
 
 .preference-grid {
@@ -716,7 +793,7 @@ preferenceDefaultValueHandler()
 }
 
 .preference-grid-wide {
-    grid-template-columns: minmax(0, 1.45fr) minmax(0, 1fr);
+    grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .preference-grid :deep(.el-form-item) {
@@ -728,7 +805,8 @@ preferenceDefaultValueHandler()
     min-width: 0;
 }
 
-.preference-account-row :deep(.el-input) {
+.preference-grid :deep(.el-input:not(.el-input-number .el-input)),
+.preference-grid :deep(.el-select) {
     width: 100% !important;
 }
 
@@ -737,16 +815,13 @@ preferenceDefaultValueHandler()
 }
 
 .salary-preference-control {
-    display: flex;
+    display: grid;
+    grid-template-columns: 112px minmax(0, 1fr);
+    width: 100%;
     min-width: 0;
     align-items: center;
     gap: 8px;
     min-height: 40px;
-}
-
-.salary-preference-control .input-opt {
-    flex: 1;
-    min-width: 0;
 }
 
 .delivery-preference-row {
@@ -765,8 +840,9 @@ preferenceDefaultValueHandler()
 }
 
 .safety-interval-tip {
-    margin: -2px 0 18px;
-    max-width: 860px;
+    margin: 4px 0 20px;
+    width: 100%;
+    max-width: 100%;
 }
 
 .benefit-preference-row {
@@ -778,7 +854,9 @@ preferenceDefaultValueHandler()
 }
 
 .benefit-preference-tip {
-    line-height: 40px;
+    width: 100%;
+    line-height: 1.6;
+    margin: 0 0 12px var(--preference-label-width);
 }
 
 .commute-preference-row {
@@ -791,7 +869,7 @@ preferenceDefaultValueHandler()
 
 .commute-preference-tip {
     width: 100%;
-    margin: -12px 0 8px 96px;
+    margin: 0 0 12px var(--preference-label-width);
 }
 
 .resume-match-row {
@@ -804,7 +882,54 @@ preferenceDefaultValueHandler()
 
 .resume-match-tip {
     width: 100%;
-    margin: -12px 0 8px 96px;
+    margin: 0 0 12px var(--preference-label-width);
+}
+
+.intent-preference-controls {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 12px;
+    width: 100%;
+}
+
+.intent-preference-controls :deep(.el-select) {
+    flex: 1 1 220px;
+    min-width: 180px;
+}
+
+.benefit-preference-row :deep(.el-form-item),
+.commute-preference-row :deep(.el-form-item),
+.resume-match-row :deep(.el-form-item) {
+    min-width: 0;
+    max-width: 100%;
+}
+
+@container (max-width: 950px) {
+    .preference-grid,
+    .preference-grid-wide {
+        grid-template-columns: minmax(0, 1fr);
+    }
+}
+
+@container (max-width: 560px) {
+    .form-preference :deep(.el-form-item) {
+        display: block;
+    }
+    .form-preference :deep(.el-form-item__label) {
+        justify-content: flex-start;
+        width: 100% !important;
+        height: auto;
+        min-height: 32px;
+    }
+    .form-preference :deep(.el-form-item__content) {
+        margin-left: 0 !important;
+    }
+    .benefit-preference-tip,
+    .commute-preference-tip,
+    .resume-match-tip {
+        margin-left: 0;
+    }
 }
 
 @media (max-width: 960px) {

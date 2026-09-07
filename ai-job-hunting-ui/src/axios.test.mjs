@@ -81,3 +81,16 @@ test('success and registration envelopes remain compatible',async()=>{
         assert.equal((await client.post('/api/user/silently/login',{})).data.code,code)
     }
 })
+
+test('a scope change between scheduling and dispatch cancels before contacting the new server',async()=>{
+    let sent=0
+    client.defaults.adapter=async config=>{sent++;return success(config,{code:200})}
+    const scope=state.generation
+    const pending=client.post('/api/user/ai/routing/test',{id:'old-model'},
+        {jobHelperScopeGuard:()=>state.generation===scope})
+    state.generation++
+    state.baseUrl='http://127.0.0.1:9200/'
+    await assert.rejects(pending,e=>e.code==='ERR_CANCELED')
+    assert.equal(sent,0)
+    assert.equal(state.toasts.length,0)
+})

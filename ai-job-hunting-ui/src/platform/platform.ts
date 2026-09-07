@@ -18,6 +18,7 @@ import {LogRecorder} from "../logging/record";
 import {pushResultCount, UserStore} from "../stores";
 import {userRemoteLoad} from "../stores/remote";
 import {AiPower} from "./aiPower";
+import {matchEmploymentExclusion} from './employmentExclusions';
 import {GM_addValueChangeListener, GM_getValue, GM_setValue} from "$";
 import {
     conversationIdentityFromElement,
@@ -1382,6 +1383,10 @@ class BossPlatform extends AbsPlatform {
         if (Tools.isHardBlockedCompany(jobDetail.brandName)) {
             throw new NotMatchException(jobTitle, jobDetail.brandName, '命中本地永久硬屏蔽公司（潮一相关）')
         }
+        const baseExclusion = matchEmploymentExclusion(userStore.user.preference, jobDetail)
+        if (baseExclusion) {
+            throw new NotMatchException(jobTitle, baseExclusion, '命中 JD／对话排除词')
+        }
         // 已经沟通过
         if (jobDetail.contact) {
             throw new NotMatchException(jobTitle, jobDetail.contact, '已经沟通过')
@@ -1430,6 +1435,10 @@ class BossPlatform extends AbsPlatform {
 
         // 通过接口获取工作详情扩展信息
         let jobDetailExt = await this.obtainBossJobDetailExt(jobDetail);
+        const jdExclusion = matchEmploymentExclusion(userStore.user.preference, jobDetailExt)
+        if (jdExclusion) {
+            throw new NotMatchException(jobTitle, jdExclusion, '命中 JD／对话排除词')
+        }
         logger.debug(`获取工作【${jobTitle}】详情扩展信息用于过滤 `, jobDetail)
 
         //  活跃度

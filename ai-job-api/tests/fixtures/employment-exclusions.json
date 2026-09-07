@@ -1,0 +1,15 @@
+[
+  {"text":"本岗位为软件外包开发","hit":"外包"},
+  {"text":"我们是猎头，给客户公司招聘","hit":"猎头"},
+  {"text":"项目采用劳务派遣合同","hit":"劳务派遣"},
+  {"text":"需接受人力外包或人才外派","hit":"外包"},
+  {"text":"驻场开发，为客户项目提供服务","hit":"驻场"},
+  {"text":"不接受外包，只考虑自研直签","hit":null},
+  {"text":"公司直招，非外包，不是猎头","hit":null},
+  {"text":"并非劳务派遣","hit":null},
+  {"text":"不是外包经验要求，而是外包岗位","hit":"外包"},
+  {"text":"Python 自研开发，正式员工合同","hit":null},
+  {"text":"HEADHUNTER recruiting for a client","hit":"headhunter"},
+  {"text":{"postDescription":"长期驻场研发"},"hit":"驻场"},
+  {"text":{"goldHunter":"1","jobName":"后端开发"},"hit":"平台猎头标记"}
+]

@@ -181,11 +181,12 @@ async def compute_report(db, model, settings, uid: int, messages: list[dict], sn
                     {"role": "user", "content": model_evidence},
                 ],
                 max_tokens=2400,
+                task="analysis",
             )
             accepted = validated_findings(answer, evidence)
             if accepted:
                 report = merge_findings(report, accepted)
-                source, model_name = "RULES_AI", config.name
+                source, model_name = "RULES_AI", getattr(answer, "model_name", config.name)
             else:
                 report["unknowns"].append("模型未提供通过证据校验的新结论，本次仅使用规则分析")
     except ApiError:

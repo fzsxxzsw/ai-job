@@ -7,11 +7,17 @@ import {DEFAULT_SERVER_URL, ServerStore} from './stores/server'
 import {shouldShowGlobalErrorToast} from './requestFeedback'
 import {ApiRequestError, responseErrorMessage} from './runtime/requestErrors'
 import {createToastGate} from './ui/feedback'
+import {modelRequestTimeout} from './runtime/modelRequestTimeout'
 
 const request = axios.create({timeout: 10000, headers: {'Content-Type': 'application/json; charset=utf-8'}})
 const mayShowError = createToastGate()
 
 request.interceptors.request.use(req => {
+    const scopeGuard = (req as any).jobHelperScopeGuard
+    if (typeof scopeGuard === 'function' && !scopeGuard()) {
+        throw new axios.CanceledError('连接或登录状态已变化，已取消旧操作')
+    }
+    req.timeout = modelRequestTimeout(req.url, req.timeout)
     try {
         const store = ServerStore()
         req.baseURL = store.baseUrl
