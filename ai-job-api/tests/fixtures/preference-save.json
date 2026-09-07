@@ -1,0 +1,19 @@
+{
+  "user": {
+    "id": 3,
+    "phone": "13800138000",
+    "email": "owner@example.test",
+    "resumeId": "resume-old",
+    "inviteCode": "read-only-invite",
+    "bindInviteCode": null,
+    "preferenceMap": {},
+    "aiSeatStatus": true,
+    "preference": {"cne": ["测试排除公司"], "cneE": true, "pi": 15, "npi": 90}
+  },
+  "payload": {
+    "phone": "13800138000",
+    "email": "owner@example.test",
+    "preference": {"cne": ["测试排除公司"], "cneE": true, "pi": 15, "npi": 90},
+    "aiSeatStatus": 1
+  }
+}

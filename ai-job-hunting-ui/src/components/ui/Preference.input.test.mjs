@@ -12,14 +12,14 @@ function formItem(label) {
     return source.slice(start, end)
 }
 
-test('company exclusion accepts locally created keywords instead of remote options', () => {
+test('company exclusion uses the local keyword editor and preserves built-in exclusions', () => {
     const companyExclusion = formItem('公司名排除')
 
-    assert.match(companyExclusion, /\bfilterable\b/)
-    assert.match(companyExclusion, /\ballow-create\b/)
+    assert.match(companyExclusion, /CompanyExclusionsInput/)
+    assert.match(companyExclusion, /v-model="visibleCompanyExclusions"/)
+    assert.match(companyExclusion, /:protected-keywords="Tools.HARD_BLOCKED_COMPANY_KEYWORDS"/)
     assert.doesNotMatch(companyExclusion, /\bremote\b/)
     assert.doesNotMatch(companyExclusion, /请输入公司名/)
-    assert.match(companyExclusion, /按 Enter/)
 })
 test('benefit, commute, and local resume filters remain visible in the preference form', () => {
     for (const label of ['周末双休', '五险一金', '通勤位置', '位置要求', '简历-JD本地匹配', '匹配参考线', '附加AI筛选条件']) {
