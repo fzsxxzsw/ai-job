@@ -1,7 +1,8 @@
 {
   "name": "ai-job-hunting",
   "private": true,
-  "version": "0.0.64",
+  "version": "0.0.65",
+  "packageManager": "pnpm@9.15.9",
   "type": "module",
   "scripts": {
     "dev": "wxt",

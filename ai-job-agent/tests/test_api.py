@@ -14,18 +14,22 @@ def _request(client: TestClient, **overrides):
     return client.post("/api/v1/job-decisions", json=payload)
 
 
-def test_health_and_graph_are_ready_without_external_dependencies() -> None:
+def test_health_and_graph_are_ready_without_external_dependencies(monkeypatch) -> None:
+    monkeypatch.setenv("JOB_HELPER_VERSION", "0.0.65")
+    monkeypatch.setenv("JOB_HELPER_BUILD_ID", "fixture-python-build")
     app = create_app()
     with TestClient(app) as client:
         live = client.get("/health/live")
         ready = client.get("/health/ready")
 
     assert live.status_code == 200
-    assert live.json() == {"status": "alive", "service": "job-helper-agent"}
+    assert live.json() == {"status": "alive", "service": "job-helper-agent",
+                           "version": "0.0.65", "buildId": "fixture-python-build"}
     assert ready.status_code == 200
     assert ready.json() == {
         "status": "ready",
         "checks": {"graph": "compiled", "config": "valid"},
+        "version": "0.0.65", "buildId": "fixture-python-build",
     }
 
 
@@ -38,7 +42,9 @@ def test_graph_is_compiled_once_for_multiple_requests() -> None:
         assert app.state.decision_graph is compiled_graph
 
 
-def test_readiness_returns_503_when_graph_is_not_ready() -> None:
+def test_readiness_returns_503_when_graph_is_not_ready(monkeypatch) -> None:
+    monkeypatch.setenv("JOB_HELPER_VERSION", "0.0.65")
+    monkeypatch.setenv("JOB_HELPER_BUILD_ID", "fixture-python-build")
     app = create_app()
     with TestClient(app) as client:
         app.state.graph_ready = False
@@ -48,7 +54,14 @@ def test_readiness_returns_503_when_graph_is_not_ready() -> None:
     assert response.json() == {
         "status": "not_ready",
         "checks": {"graph": "unavailable", "config": "valid"},
+        "version": "0.0.65", "buildId": "fixture-python-build",
     }
+
+
+def test_rejection_gateway_is_retired_without_breaking_graph() -> None:
+    with TestClient(create_app()) as client:
+        assert client.get("/internal/rejections/status").status_code == 404
+        assert _request(client).status_code == 200
 
 
 def test_excluded_keyword_is_rejected_before_required_keyword_match() -> None:

@@ -1,3 +1,9 @@
+> 历史架构说明：下文描述 `rejection-v0.1.0` 的 Java 登录网关 → Agent 拒绝分析方案。
+> 从本次完整 Python 移植起，9100 由 `ai-job-api` 直接处理身份和拒绝分析，
+> Agent 不再重复承载拒绝分析引擎，也不再需要 `docker-compose.rejection.yml` 或网关签名。
+> 当前数据库计划命令为 `python -m job_helper_api.migrate`，应用命令加 `--apply`；
+> 本地发布流程见 [本机部署说明](../本机部署说明.md)，采用先本地验收、后 GitHub 归档。
+> 下文保留用于核对历史提交，不能作为当前部署命令。
 # 拒绝分析：同一个 9100 入口，Python 处理业务
 
 ## 交付边界

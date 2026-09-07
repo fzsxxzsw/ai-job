@@ -92,7 +92,9 @@ jobs:
 
           live = json.loads(Path('/tmp/agent-live.json').read_text())
           ready = json.loads(Path('/tmp/agent-ready.json').read_text())
-          assert live == {'status': 'alive', 'service': 'job-helper-agent'}
+          assert live['status'] == 'alive' and live['service'] == 'job-helper-agent'
+          assert live['version'] == ready['version']
+          assert live['buildId'] == ready['buildId']
           assert ready['status'] == 'ready'
           assert ready['checks'] == {
               'graph': 'compiled',

@@ -33,7 +33,7 @@ services:
       MYSQL_PASSWORD: ${MYSQL_PASSWORD}
     volumes:
       - mysql_data:/var/lib/mysql
-      - ./ai-job-hunting-server/src/main/resources/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+      - ./ai-job-api/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "mysqladmin ping -h localhost -uroot -p$$MYSQL_ROOT_PASSWORD --silent"]
       interval: 5s
@@ -47,37 +47,50 @@ services:
     container_name: job-helper-backend
     restart: unless-stopped
     build:
-      context: ./ai-job-hunting-server
-      dockerfile: Dockerfile.local
+      context: ./ai-job-api
+      dockerfile: Dockerfile
       labels:
         org.opencontainers.image.revision: ${JOB_HELPER_BUILD_SHA:-unreleased}
         io.job-helper.build-id: ${JOB_HELPER_BUILD_ID:-unreleased}
         io.job-helper.build-channel: ${JOB_HELPER_BUILD_CHANNEL:-unreleased}
+        io.job-helper.managed: "true"
+        io.job-helper.version: ${JOB_HELPER_VERSION:-unreleased}
     depends_on:
       mysql:
         condition: service_healthy
     environment:
       TZ: Asia/Shanghai
       MYSQL_PASSWORD: ${MYSQL_PASSWORD}
-      SMART_PASSWORD: ${SMART_PASSWORD}
-      KIMI_API_KEY: ${KIMI_API_KEY:-}
       JOB_HELPER_PERSONAL_MODE: ${JOB_HELPER_PERSONAL_MODE:-true}
+      API_OWNER_USER_ID: ${API_OWNER_USER_ID:-0}
+      API_READ_ONLY: "false"
+      API_SECRET_FILE: /app/data/session.key
+      JOB_HELPER_BUILD_ID: ${JOB_HELPER_BUILD_ID:-unreleased}
+      JOB_HELPER_VERSION: ${JOB_HELPER_VERSION:-unreleased}
+      API_ALLOWED_MODEL_HOSTS: ${API_ALLOWED_MODEL_HOSTS:-}
+      API_CONFIRMED_EDUCATION: ${API_CONFIRMED_EDUCATION:-}
+      API_MAIL_ENABLED: ${API_MAIL_ENABLED:-false}
+      API_MAIL_HOST: ${API_MAIL_HOST:-}
+      API_MAIL_PORT: ${API_MAIL_PORT:-465}
+      API_MAIL_USERNAME: ${API_MAIL_USERNAME:-}
+      API_MAIL_PASSWORD: ${API_MAIL_PASSWORD:-}
+      API_MAIL_SENDER: ${API_MAIL_SENDER:-}
+      API_MAIL_SECURITY: ${API_MAIL_SECURITY:-ssl}
+      API_MAIL_TIMEOUT_SECONDS: ${API_MAIL_TIMEOUT_SECONDS:-10}
       AI_API_KEY: ${AI_API_KEY:-}
       AI_BASE_URL: ${AI_BASE_URL:-https://dashscope.aliyuncs.com/compatible-mode/v1}
       AI_COMPLETIONS_PATH: ${AI_COMPLETIONS_PATH:-/chat/completions}
       AI_MODEL: ${AI_MODEL:-qwen3-vl-32b-thinking}
       AI_TIMEOUT_SECONDS: ${AI_TIMEOUT_SECONDS:-15}
       AI_THINKING_BUDGET: ${AI_THINKING_BUDGET:-256}
-      JAVA_TOOL_OPTIONS: "-XX:MaxRAMPercentage=70 -XX:+UseG1GC -XX:+ExitOnOutOfMemoryError -Dfile.encoding=UTF-8"
     ports:
-      # AI 后端仅通过 Windows 防火墙向本机局域网开放。
-      - "${BACKEND_BIND_ADDRESS:-127.0.0.1}:9100:9100"
-      # Smart Config 管理端口仍只允许本机访问。
-      - "127.0.0.1:6768:6768"
+      # Personal API is loopback-only; it is not an Internet login service.
+      - "127.0.0.1:9100:9100"
     volumes:
       - app_logs:/app/logs
+      - api_data:/app/data
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:9100/actuator/health | grep -q '\"status\":\"UP\"'"]
+      test: ["CMD", "python", "-c", "import json,urllib.request; assert json.load(urllib.request.urlopen('http://127.0.0.1:9100/actuator/health',timeout=3))['status']=='UP'"]
       interval: 15s
       timeout: 5s
       retries: 8
@@ -96,8 +109,12 @@ services:
         org.opencontainers.image.revision: ${JOB_HELPER_BUILD_SHA:-unreleased}
         io.job-helper.build-id: ${JOB_HELPER_BUILD_ID:-unreleased}
         io.job-helper.build-channel: ${JOB_HELPER_BUILD_CHANNEL:-unreleased}
+        io.job-helper.managed: "true"
+        io.job-helper.version: ${JOB_HELPER_VERSION:-unreleased}
     environment:
       TZ: Asia/Shanghai
+      JOB_HELPER_BUILD_ID: ${JOB_HELPER_BUILD_ID:-unreleased}
+      JOB_HELPER_VERSION: ${JOB_HELPER_VERSION:-unreleased}
       AGENT_PERSISTENCE_ENABLED: "true"
       AGENT_CHECKPOINT_PATH: /app/data/langgraph-checkpoints.sqlite3
       AGENT_DB_HOST: mysql
@@ -132,3 +149,4 @@ volumes:
   mysql_data:
   app_logs:
   agent_data:
+  api_data:

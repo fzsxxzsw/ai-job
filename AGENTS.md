@@ -46,8 +46,10 @@ This project is indexed by GitNexus as **ai-job** (4149 symbols, 11052 relations
 
 # Release Workflow
 
-- For every future code change, commit and push the intended change to GitHub first.
-- Wait for the corresponding GitHub Actions build/checks to complete successfully before publishing it locally.
-- Only after the GitHub build succeeds, run the local runtime build/sync and verify the served build ID.
-- Do not sync an unpushed or failed GitHub build into the local runtime unless the user explicitly requests an emergency local preview.
+- The user changed the release order on 2026-09-07: build, test, and verify locally first; then commit and push the tested source to GitHub for version management.
+- Use build-job-helper.ps1 and release-job-helper.ps1 as the normal local workflow. GitHub checks validate the pushed archive; they are not a prerequisite for this local-first workflow.
+- Keep one current local release and one previous rollback package. Always overwrite the existing job-helper-wxt-local-extension directory used by Chrome; do not create another active extension directory for each build.
+- Record the exact source HEAD, dirty diff digest, version, build ID, Docker image IDs, and extension hashes in the receipt. Link the later Git commit to that tested build ID.
+- Daily startup starts only the existing current containers. Database migration and extension-file publication belong to explicit release operations, with stopped writers, a verified database backup, and rollback protection.
+- Browser-facing acceptance requires the installed extension's visible badge to match the receipt version/build ID. Without specific Chrome/BOSS authorization, update files and report that browser reload/badge verification remains manual.
 - Never include unrelated dirty-worktree changes in a commit or push; isolate the requested change first.

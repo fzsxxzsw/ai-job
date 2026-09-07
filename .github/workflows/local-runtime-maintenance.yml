@@ -9,32 +9,16 @@ on:
     paths:
       - '.env.example'
       - '.github/workflows/local-runtime-maintenance.yml'
-      - 'ai-job-hunting-server/pom.xml'
-      - 'ai-job-hunting-server/src/**'
-      - 'ai-job-hunting-server/Dockerfile.local'
-      - 'ai-job-hunting-server/application-local.properties'
+      - 'ai-job-api/**'
       - 'ai-job-hunting-ui/public/healthz'
       - 'docker-compose.local.yml'
       - '*-job-helper.ps1'
       - 'job-helper-release-common.psm1'
-      - 'tests/job-helper-maintenance.tests.ps1'
+      - 'tests/*.tests.ps1'
       - '本机部署说明.md'
   workflow_dispatch:
 
 jobs:
-  test-java-backend:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '17'
-          cache: maven
-      - name: Run Java 17 Maven tests
-        working-directory: ai-job-hunting-server
-        run: mvn -B test
-
   validate:
     runs-on: ubuntu-latest
     steps:
@@ -97,17 +81,14 @@ jobs:
           $start = Get-Content -Raw start-job-helper.ps1
           $build = Get-Content -Raw build-job-helper.ps1
           $release = Get-Content -Raw release-job-helper.ps1
-          if ($start -notmatch '--no-build' -or $start -notmatch '--pull never') {
-            throw 'Start must prohibit builds and pulls.'
+          if ($start -match 'docker compose|pnpm|mvn|sync-local-runtime|alembic') {
+            throw 'Daily start may only start existing containers, never rebuild/recreate/migrate.'
           }
-          if ($start -match 'pnpm|mvn|sync-local-runtime') {
-            throw 'Start contains a build or publication command.'
+          if ($build -match 'compose[^\r\n]+(?:\bup\b|\brun\b)|docker start') {
+            throw 'Build contains a service startup command.'
           }
-          if ($build -match 'compose[^\r\n]+up' -or $build -match 'sync-local-runtime\.mjs\s*(?:$|[\r\n])') {
-            throw 'Build contains startup or runtime publication.'
-          }
-          if (-not $release.Contains('Get-JobHelperRequiredWorkflows')) {
-            throw 'Release does not consume the tested required-workflow contract.'
+          if ($release -match 'Assert-PushedRequiredWorkflows|EmergencyPreview') {
+            throw 'Normal local release must support local-first validation.'
           }
       - name: Test release receipt and tag behavior
         shell: powershell

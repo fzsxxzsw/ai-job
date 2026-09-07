@@ -15,6 +15,9 @@ $composeFile = Join-Path $PSScriptRoot "docker-compose.local.yml"
 $envPath = Join-Path $PSScriptRoot ".env"
 $runtimePath = Join-Path $PSScriptRoot "ai-job-hunting-ui\public\ai-job-hunting-runtime.js"
 if ([string]::IsNullOrWhiteSpace($ReleaseReceiptPath)) {
+    if (Test-Path -LiteralPath (Join-Path $PSScriptRoot '.job-helper-releases/activation.json')) {
+        throw 'An interrupted activation requires recovery with release-job-helper.ps1 -Recover before daily startup.'
+    }
     $activePointerPath = Join-Path $PSScriptRoot ".job-helper-active.json"
     if (-not (Test-Path -LiteralPath $activePointerPath -PathType Leaf)) {
         throw "No active release pointer exists. Run release-job-helper.ps1 first."
@@ -59,7 +62,7 @@ function Get-HttpBytes {
 
 function Assert-RequiredEnvironment {
     $required = @(
-        "MYSQL_ROOT_PASSWORD", "MYSQL_PASSWORD", "SMART_PASSWORD", "AGENT_INTERNAL_TOKEN", "AI_API_KEY",
+        "MYSQL_ROOT_PASSWORD", "MYSQL_PASSWORD", "AGENT_INTERNAL_TOKEN", "AI_API_KEY", "API_OWNER_USER_ID",
         "AI_BASE_URL", "AI_MODEL", "AI_TIMEOUT_SECONDS", "AI_THINKING_BUDGET"
     )
     $missing = @($required | Where-Object {
@@ -91,7 +94,7 @@ function Assert-ProjectImage {
     $buildId = [string]$metadata.Config.Labels.'io.job-helper.build-id'
     if ($revision -ne $ExpectedSha -or $buildId -ne $ExpectedBuildId -or
         [string]$metadata.Id -ne $ExpectedImageId) {
-        throw "Image '$Image' does not match release SHA/build ID. Re-run release-job-helper.ps1 after CI succeeds."
+        throw "Image '$Image' does not match release SHA/build ID. Rebuild and validate the local candidate."
     }
 }
 
@@ -128,7 +131,7 @@ if ($LASTEXITCODE -ne 0) { throw "Docker Desktop is not running." }
 Assert-RequiredEnvironment
 
 $receipt = Get-Content -Raw -LiteralPath $ReleaseReceiptPath | ConvertFrom-Json
-if ($receipt.schemaVersion -ne 1 -or $receipt.releaseSha -notmatch '^[a-f0-9]{40}$' -or
+if ($receipt.schemaVersion -notin @(1, 2) -or $receipt.releaseSha -notmatch '^[a-f0-9]{40}$' -or
     $receipt.buildId -notmatch '^[a-z0-9][a-z0-9._-]{2,79}$' -or
     $receipt.runtimeSha256 -notmatch '^[a-f0-9]{64}$' -or
     $receipt.frontendImageId -notmatch '^sha256:[a-f0-9]{64}$' -or
@@ -141,6 +144,16 @@ if ($receipt.frontendImage -ne "nginx:1.27-alpine" -or $receipt.mysqlImage -ne "
     throw "Release receipt contains unsupported infrastructure images."
 }
 Assert-JobHelperReceiptChannel -Receipt $receipt
+if ($receipt.schemaVersion -eq 2) {
+    $extensionTarget = Get-JobHelperExtensionTarget -RepositoryRoot $PSScriptRoot
+    if ((Get-JobHelperTreeDigest -Directory $extensionTarget) -ne $receipt.extensionSha256) {
+        throw 'Installed extension files do not match the current local receipt.'
+    }
+    $manifest = Get-Content -LiteralPath (Join-Path $extensionTarget 'manifest.json') -Raw | ConvertFrom-Json
+    if ($manifest.version -ne $receipt.version -or $manifest.version_name -ne "$($receipt.version)+$($receipt.buildId)") {
+        throw 'Installed extension version/build ID differs from the local receipt.'
+    }
+}
 if ($receipt.channel -eq "release" -and $receipt.workingTreeDirty) {
     throw "A formal release receipt cannot describe a dirty working tree."
 }
@@ -178,24 +191,36 @@ if ($listeners.Count -gt 0 -and $dockerFrontend -notcontains "job-helper-fronten
 
 $previousFrontendImage = $env:JOB_HELPER_FRONTEND_IMAGE
 $previousMysqlImage = $env:JOB_HELPER_MYSQL_IMAGE
+$previousBuildId = $env:JOB_HELPER_BUILD_ID
 $previousBackendImage = $env:JOB_HELPER_BACKEND_IMAGE
 $previousAgentImage = $env:JOB_HELPER_AGENT_IMAGE
+$previousVersion = $env:JOB_HELPER_VERSION
 try {
     $env:JOB_HELPER_FRONTEND_IMAGE = [string]$receipt.frontendImage
     $env:JOB_HELPER_MYSQL_IMAGE = [string]$receipt.mysqlImage
+    $env:JOB_HELPER_BUILD_ID = [string]$receipt.buildId
     $env:JOB_HELPER_BACKEND_IMAGE = [string]$receipt.backendImage
     $env:JOB_HELPER_AGENT_IMAGE = [string]$receipt.agentImage
-    Write-Host "Starting verified build $($receipt.buildId) without builds or pulls..."
-    & docker compose --env-file $envPath -f $composeFile up -d --no-build --pull never
-    if ($LASTEXITCODE -ne 0) {
-        throw "Docker Compose startup failed with exit code $LASTEXITCODE."
+    if ($receipt.schemaVersion -eq 2) { $env:JOB_HELPER_VERSION = [string]$receipt.version }
+    foreach ($service in @('mysql', 'frontend', 'backend', 'agent')) {
+        $container = Get-JobHelperContainer -Name "job-helper-$service" -Service $service
+        if ($null -eq $container -or $container.Image -ne $receipt."${service}ImageId") {
+            throw "Current $service container is missing or differs from its verified image. Run the explicit release command."
+        }
+    }
+    Write-Host "Starting existing verified build $($receipt.buildId) without builds, pulls, or container recreation..."
+    foreach ($service in @('mysql', 'frontend', 'backend', 'agent')) {
+        & docker start "job-helper-$service" | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "Current $service container could not start." }
     }
 }
 finally {
     $env:JOB_HELPER_FRONTEND_IMAGE = $previousFrontendImage
     $env:JOB_HELPER_MYSQL_IMAGE = $previousMysqlImage
+    $env:JOB_HELPER_BUILD_ID = $previousBuildId
     $env:JOB_HELPER_BACKEND_IMAGE = $previousBackendImage
     $env:JOB_HELPER_AGENT_IMAGE = $previousAgentImage
+    $env:JOB_HELPER_VERSION = $previousVersion
 }
 
 Wait-HttpHealth -Name "frontend" -Uri "http://127.0.0.1:5173/healthz" -TimeoutSeconds 45 `
@@ -206,13 +231,24 @@ if ($servedSha -ne $receipt.runtimeSha256 -or
     -not [Text.Encoding]::UTF8.GetString($servedBytes).Contains([string]$receipt.buildId)) {
     throw "The runtime served on port 5173 does not match the release SHA/build ID receipt."
 }
-Wait-HttpHealth -Name "Java backend" -Uri "http://127.0.0.1:9100/actuator/health" -TimeoutSeconds 90 `
+Wait-HttpHealth -Name "Business API" -Uri "http://127.0.0.1:9100/actuator/health" -TimeoutSeconds 90 `
     -IsHealthy { param($value) $null -ne $value -and $value.status -eq "UP" }
+if ($receipt.PSObject.Properties.Name -contains "backendImplementation" -and $receipt.backendImplementation -eq "python") {
+    $businessHealth = Invoke-RestMethod -Uri "http://127.0.0.1:9100/actuator/health" -TimeoutSec 5
+    if ($businessHealth.implementation -ne "python" -or $businessHealth.buildId -ne $receipt.buildId) {
+        throw "Python business API implementation/build identity mismatch."
+    }
+}
 Wait-HttpHealth -Name "Python Agent" -Uri "http://127.0.0.1:9101/health/ready" -TimeoutSeconds 45 `
     -IsHealthy { param($value) $null -ne $value -and $value.status -eq "ready" }
+if ($receipt.schemaVersion -eq 2) {
+    $agentHealth = Invoke-RestMethod -Uri 'http://127.0.0.1:9101/health/ready' -TimeoutSec 5
+    if ($businessHealth.version -ne $receipt.version -or $agentHealth.version -ne $receipt.version -or
+        $agentHealth.buildId -ne $receipt.buildId) { throw 'Python services do not share the extension version/build ID.' }
+}
 
 Write-Host "Job Helper is ready: channel=$($receipt.channel) sha=$($receipt.releaseSha) build=$($receipt.buildId) runtime_sha256=$servedSha"
-Write-Host "Java API:     http://127.0.0.1:9100/"
+Write-Host "Business API: http://127.0.0.1:9100/"
 Write-Host "Python Agent: http://127.0.0.1:9101/ (durable approval/outbox API; no executor)"
 Write-Host "Frontend:     http://127.0.0.1:5173/"
 }

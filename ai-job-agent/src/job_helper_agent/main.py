@@ -1,6 +1,7 @@
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 import hmac
+import os
 from pathlib import Path
 from uuid import UUID
 
@@ -29,7 +30,6 @@ from job_helper_agent.models import (
 from job_helper_agent.recoverable_graph import build_recoverable_graph
 from job_helper_agent.repository import AgentRepository, RunConflict, RunNotFound
 from job_helper_agent.service import RecoverableAgentService
-from job_helper_agent.rejection.routes import router as rejection_router, rejection_runtime
 
 
 STRICT_CHECKPOINT_SERIALIZER = JsonPlusSerializer(
@@ -99,25 +99,19 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await checkpoint_connection.close()
 
 
-@asynccontextmanager
-async def combined_lifespan(app: FastAPI):
-    async with lifespan(app):
-        async with rejection_runtime(app):
-            yield
-
-
 def create_app(config: AgentConfig | None = None) -> FastAPI:
     application = FastAPI(
         title="Job Helper Agent",
         version="0.1.0",
-        lifespan=combined_lifespan,
+        lifespan=lifespan,
     )
     application.state.config_override = config
-    application.include_router(rejection_router)
 
     @application.get("/health/live")
     async def health_live() -> dict[str, str]:
-        return {"status": "alive", "service": "job-helper-agent"}
+        return {"status": "alive", "service": "job-helper-agent",
+                "version": os.getenv("JOB_HELPER_VERSION", "development"),
+                "buildId": os.getenv("JOB_HELPER_BUILD_ID", "development")}
 
     @application.get("/health/ready")
     async def health_ready(request: Request, response: Response) -> dict[str, object]:
@@ -138,6 +132,8 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
         return {
             "status": readiness_status,
             "checks": checks,
+            "version": os.getenv("JOB_HELPER_VERSION", "development"),
+            "buildId": os.getenv("JOB_HELPER_BUILD_ID", "development"),
         }
 
     @application.post(

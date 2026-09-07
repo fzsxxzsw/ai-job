@@ -8,8 +8,8 @@ function Assert-Equal {
 }
 
 $required = @(Get-JobHelperRequiredWorkflows)
-Assert-Equal -Actual $required.Count -Expected 3 -Name "workflow count"
-foreach ($name in @("UI build", "Local runtime maintenance", "Python Agent build")) {
+Assert-Equal -Actual $required.Count -Expected 5 -Name "workflow count"
+foreach ($name in @("UI build", "Local runtime maintenance", "Python Agent build", "Python API build", "Chrome extension build")) {
     if ($required -notcontains $name) { throw "Required workflow missing: $name" }
 }
 
@@ -76,18 +76,6 @@ $buildScript = Get-Content -Raw -LiteralPath (Join-Path $repositoryRoot "build-j
 $startScript = Get-Content -Raw -LiteralPath (Join-Path $repositoryRoot "start-job-helper.ps1")
 $releaseScript = Get-Content -Raw -LiteralPath (Join-Path $repositoryRoot "release-job-helper.ps1")
 $composeScript = Get-Content -Raw -LiteralPath (Join-Path $repositoryRoot "docker-compose.local.yml")
-$imageProbePattern = '\$ErrorActionPreference\s*=\s*"Continue"\s*\r?\n\s*\$null\s*=\s*& docker image inspect \$immutableImage 2>\$null\s*\r?\n\s*\$imageExists\s*=\s*\$LASTEXITCODE -eq 0'
-if ($buildScript -notmatch $imageProbePattern -or $buildScript -notmatch 'if \(\$imageExists\)') {
-    throw "Build must treat a missing immutable Docker tag as a normal probe result on Windows PowerShell."
-}
-
-$remoteProbePattern = '\$remoteUrls\s*=\s*@\(& git remote get-url \$RemoteName 2>\$null\)\s*\r?\n\s*\$remoteExitCode\s*=\s*\$LASTEXITCODE\s*\r?\n\s*\$remoteUrl\s*=\s*\$remoteUrls\s*\|\s*Select-Object -First 1'
-if ($releaseScript -notmatch $remoteProbePattern) {
-    throw "Release must capture git remote exit status before selecting the first URL."
-}
-if ($releaseScript -match '& git remote get-url \$RemoteName 2>\$null \| Select-Object') {
-    throw "Release must not read LASTEXITCODE after piping git remote output."
-}
 $expectedFrontendHealthLine = 'test: ["CMD-SHELL", "tmp=$$(mktemp) || exit 1; trap ''rm -f \"$$tmp\"'' EXIT; wget -qO \"$$tmp\" http://127.0.0.1/healthz || exit 1; hex=$$(od -An -tx1 \"$$tmp\" | tr -d '' \\n''); case \"$$hex\" in 6f6b|6f6b0a|6f6b0d0a) exit 0 ;; *) exit 1 ;; esac"]'
 if (-not $composeScript.Contains($expectedFrontendHealthLine)) {
     throw "Frontend healthcheck must use the exact byte whitelist and cleanup-safe temporary-file probe."
@@ -199,6 +187,59 @@ try { Assert-JobHelperWorkspaceSnapshotEqual -Expected $snapshotA -Actual $snaps
 catch { $sourceChangeRejected = $true }
 if (-not $sourceChangeRejected) { throw "Build-time workspace source change was accepted." }
 
+# Code points keep this test meaningful when Windows PowerShell 5.1 reads an
+# ASCII-compatible script without a UTF-8 BOM. The actual paths remain Unicode.
+$unicodeStem = -join [char[]]@(0x6784, 0x5EFA, 0x8BF4, 0x660E)
+$unicodeSource = "$unicodeStem source.md"
+$unicodeAdded = "$unicodeStem added.txt"
+$snapshotFixture = Join-Path ([IO.Path]::GetTempPath()) "job-helper-snapshot-$([Guid]::NewGuid().ToString('N'))-$unicodeStem"
+New-Item -ItemType Directory -Path $snapshotFixture | Out-Null
+try {
+    Push-Location -LiteralPath $snapshotFixture
+    try {
+        & git init --quiet
+        if ($LASTEXITCODE -ne 0) { throw 'Snapshot fixture Git initialization failed.' }
+        & git config core.autocrlf false
+        & git config core.quotepath true
+        Set-Content -LiteralPath 'removed.txt' -Value 'old source'
+        Set-Content -LiteralPath $unicodeSource -Value 'initial content'
+        & git add --all
+        & git -c user.name=Test -c user.email=test@example.invalid commit --quiet -m initial
+        if ($LASTEXITCODE -ne 0) { throw 'Snapshot fixture initial commit failed.' }
+
+        Remove-Item -LiteralPath (Join-Path $snapshotFixture 'removed.txt')
+        Set-Content -LiteralPath $unicodeAdded -Value 'new source'
+        $beforeStage = Get-JobHelperWorkspaceSnapshot -RepositoryRoot $snapshotFixture
+        & git add --all
+        if ($LASTEXITCODE -ne 0) { throw 'Snapshot fixture staging failed.' }
+        $afterStage = Get-JobHelperWorkspaceSnapshot -RepositoryRoot $snapshotFixture
+        Assert-Equal $afterStage.sourceTreeHash $beforeStage.sourceTreeHash 'same source tree after staging additions and deletions'
+        & git -c user.name=Test -c user.email=test@example.invalid commit --quiet -m changed
+        if ($LASTEXITCODE -ne 0) { throw 'Snapshot fixture changed commit failed.' }
+        $afterCommit = Get-JobHelperWorkspaceSnapshot -RepositoryRoot $snapshotFixture
+        Assert-Equal $afterCommit.sourceTreeHash $beforeStage.sourceTreeHash 'same source tree after committing additions and deletions'
+        Assert-Equal $afterCommit.workingTreeDirty $false 'committed fixture is clean'
+
+        Set-Content -LiteralPath $unicodeSource -Value 'first change'
+        $unicodeFirst = Get-JobHelperWorkspaceSnapshot -RepositoryRoot $snapshotFixture
+        Set-Content -LiteralPath $unicodeSource -Value 'second change'
+        $unicodeSecond = Get-JobHelperWorkspaceSnapshot -RepositoryRoot $snapshotFixture
+        if ($unicodeFirst.sourceTreeHash -eq $afterCommit.sourceTreeHash -or
+            $unicodeSecond.sourceTreeHash -eq $unicodeFirst.sourceTreeHash -or
+            $unicodeSecond.diffHash -eq $unicodeFirst.diffHash) {
+            throw 'Unicode source changes were omitted from the content or build-time drift hash.'
+        }
+        $unicodeDriftRejected = $false
+        try { Assert-JobHelperWorkspaceSnapshotEqual -Expected $unicodeFirst -Actual $unicodeSecond }
+        catch { $unicodeDriftRejected = $true }
+        if (-not $unicodeDriftRejected) { throw 'Unicode source changes during a build were accepted.' }
+    }
+    finally { Pop-Location }
+}
+finally {
+    Remove-JobHelperManagedDirectory -Root ([IO.Path]::GetTempPath()) -Path (Split-Path -Leaf $snapshotFixture)
+}
+
 $rollbackEvents = New-Object Collections.Generic.List[string]
 Invoke-JobHelperCandidateRollback `
     -RestorePublishedFiles { $rollbackEvents.Add("restore") } `
@@ -247,6 +288,53 @@ try {
     }
     finally { Exit-JobHelperOperationLock -Mutex $firstLock }
 }
-finally { Remove-Item -LiteralPath $temporaryRoot -Recurse -Force }
+finally { Remove-JobHelperManagedDirectory -Root ([IO.Path]::GetTempPath()) -Path (Split-Path -Leaf $temporaryRoot) }
 
 Write-Output "Job Helper maintenance behavior tests: PASS"
+
+
+$local = [pscustomobject]@{channel='local';backendImage=$imageA;backendImageId=$imageA;agentImage=$imageB;agentImageId=$imageB}
+Assert-JobHelperReceiptChannel -Receipt $local
+$local.backendImage = 'job-helper-backend:current'
+$rejected = $false
+try { Assert-JobHelperReceiptChannel -Receipt $local } catch { $rejected = $true }
+if (-not $rejected) { throw 'Mutable local image tag was accepted.' }
+
+$safeRoot = Join-Path ([IO.Path]::GetTempPath()) "job-helper-paths-$([Guid]::NewGuid().ToString('N'))"
+New-Item -ItemType Directory -Path $safeRoot | Out-Null
+try {
+    foreach ($unsafe in @('..', '../outside', '../job-helper-paths-sibling/file')) {
+        $rejected = $false
+        try { $null = Resolve-JobHelperChildPath -Root $safeRoot -Path $unsafe } catch { $rejected = $true }
+        if (-not $rejected) { throw "Path traversal accepted: $unsafe" }
+    }
+    $source = Join-Path $safeRoot 'source'
+    New-Item -ItemType Directory -Path $source | Out-Null
+    Set-Content -LiteralPath (Join-Path $source 'manifest.json') -Value '{"version":"0.0.65"}'
+    $target = Join-Path $safeRoot 'target'
+    Copy-JobHelperTree -Source $source -Destination $target
+    Assert-Equal (Get-JobHelperTreeDigest $source) (Get-JobHelperTreeDigest $target) 'copied extension digest'
+    Set-Content -LiteralPath (Join-Path $target 'manifest.json') -Value 'tampered'
+    if ((Get-JobHelperTreeDigest $source) -eq (Get-JobHelperTreeDigest $target)) { throw 'Changed extension passed digest validation.' }
+    $backup = Join-Path $safeRoot 'backup.sql'
+    Set-Content -LiteralPath $backup -Value (('SQL' * 500) + "`n-- Dump completed on 2026-09-07 12:00:00")
+    $null = Assert-JobHelperDatabaseBackup $backup
+    Set-Content -LiteralPath $backup -Value ('truncated' * 500)
+    $rejected = $false
+    try { $null = Assert-JobHelperDatabaseBackup $backup } catch { $rejected = $true }
+    if (-not $rejected) { throw 'Incomplete database backup accepted.' }
+    foreach ($project in @('unrelated', 'job-helper-rejection-intelligence')) {
+        $foreign = [pscustomobject]@{Config=[pscustomobject]@{Labels=[pscustomobject]@{'com.docker.compose.project'=$project;'com.docker.compose.service'='backend'}}}
+        $rejected = $false
+        try { Assert-JobHelperOwnedContainer $foreign 'backend' } catch { $rejected = $true }
+        if (-not $rejected) { throw 'Foreign Docker project accepted for lifecycle operations.' }
+    }
+}
+finally { Remove-JobHelperManagedDirectory -Root ([IO.Path]::GetTempPath()) -Path (Split-Path -Leaf $safeRoot) }
+
+if ($startScript -match '& docker compose|\buv\s|\bpnpm|\balembic\b|job_helper_api\.migrate') { throw 'Daily start may only start existing current containers.' }
+if ($buildScript -match 'compose[^\r\n]+(?:\bup\b|\brun\b)|docker start') { throw 'Build starts a service.' }
+if ($releaseScript -match 'Assert-PushedRequiredWorkflows|EmergencyPreview|gh run') { throw 'Normal local release must not depend on a prior GitHub push.' }
+if ($composeScript -match 'JAVA_TOOL_OPTIONS|6768|ai-job-hunting-server') { throw 'Python runtime Compose still depends on Java deployment.' }
+& (Join-Path $PSScriptRoot 'runtime-activation.tests.ps1')
+Write-Output 'Local channel, safe paths, artifact identity, Docker ownership, and activation tests: PASS'

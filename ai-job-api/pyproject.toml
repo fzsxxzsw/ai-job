@@ -1,0 +1,35 @@
+[project]
+name = "job-helper-api"
+version = "0.1.0"
+description = "Personal Python replacement for the Job Helper Java business API"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+  "fastapi>=0.116,<1", "uvicorn>=0.35,<1", "pydantic>=2.11,<3",
+  "sqlalchemy[asyncio]>=2.0.52,<2.1", "asyncmy>=0.2.14,<0.3",
+  "httpx>=0.28,<0.29", "python-multipart>=0.0.20,<1", "pypdf>=6.12,<7",
+]
+[dependency-groups]
+dev = [
+    "pytest>=8.4,<10",
+    "aiosqlite>=0.21,<1",
+    "ruff==0.16.6",
+    "sqlparse>=0.5.3,<0.6",
+]
+[build-system]
+requires = ["hatchling>=1.27,<2"]
+build-backend = "hatchling.build"
+[tool.hatch.build.targets.wheel]
+packages = ["src/job_helper_api"]
+[tool.pytest.ini_options]
+addopts = "-q"
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I", "UP", "B"]
+
+[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls = ["fastapi.Depends", "fastapi.Query", "fastapi.File", "fastapi.Form"]

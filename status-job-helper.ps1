@@ -1,57 +1,44 @@
 [CmdletBinding()]
 param([switch]$VerboseLogs)
-
-$ErrorActionPreference = "Stop"
-$ProgressPreference = "SilentlyContinue"
-Set-Location -LiteralPath $PSScriptRoot
-$envPath = Join-Path $PSScriptRoot ".env"
-$composeFile = Join-Path $PSScriptRoot "docker-compose.local.yml"
-$activePointerPath = Join-Path $PSScriptRoot ".job-helper-active.json"
-
-if (Test-Path -LiteralPath $activePointerPath -PathType Leaf) {
+$ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
+Import-Module (Join-Path $PSScriptRoot 'job-helper-release-common.psm1') -Force
+$activePath = Join-Path $PSScriptRoot '.job-helper-active.json'
+$receipt = $null
+if (Test-Path -LiteralPath $activePath) {
+    $active = Get-Content -LiteralPath $activePath -Raw | ConvertFrom-Json
+    $receiptPath = Resolve-JobHelperChildPath -Root $PSScriptRoot -Path $active.receiptPath
+    $receipt = Get-Content -LiteralPath $receiptPath -Raw | ConvertFrom-Json
+    Write-Host "Current: channel=$($receipt.channel) version=$($receipt.version) build=$($receipt.buildId)"
+}
+else { Write-Host 'Current: no selected local receipt' }
+foreach ($service in @('mysql', 'frontend', 'backend', 'agent')) {
+    $container = Get-JobHelperContainer -Name "job-helper-$service" -Service $service
+    if ($null -eq $container) { Write-Host "${service}: missing"; continue }
+    Write-Host "${service}: $($container.State.Status), image=$($container.Image)"
+}
+foreach ($probe in @(
+    @{name='Python API';url='http://127.0.0.1:9100/actuator/health'},
+    @{name='Python Agent';url='http://127.0.0.1:9101/health/ready'}
+)) {
     try {
-        $active = Get-Content -Raw -LiteralPath $activePointerPath | ConvertFrom-Json
-        if ($active.channel -in @("release", "emergency") -and
-            $active.buildId -match '^[a-z0-9][a-z0-9._-]{2,79}$') {
-            Write-Host "Active release: channel=$($active.channel) build=$($active.buildId)"
-        }
-        else { Write-Host "Active release: invalid pointer" }
+        $health = Invoke-RestMethod -Uri $probe.url -TimeoutSec 3
+        $matches = $null -ne $receipt -and $health.buildId -eq $receipt.buildId -and $health.version -eq $receipt.version
+        Write-Host "$($probe.name): $($health.status), version=$($health.version), build=$($health.buildId), receipt_matches=$matches"
     }
-    catch { Write-Host "Active release: unreadable pointer" }
+    catch { Write-Host "$($probe.name): unavailable" }
 }
-else { Write-Host "Active release: not selected" }
-
-& docker compose --env-file $envPath -f $composeFile ps
-Write-Host ""
 try {
-    $frontend = Invoke-WebRequest -Uri "http://127.0.0.1:5173/healthz" -UseBasicParsing -TimeoutSec 3
-    $runtime = Invoke-WebRequest -Uri "http://127.0.0.1:5173/ai-job-hunting-runtime.js" -Method Head -UseBasicParsing -TimeoutSec 3
-    $content = if ($frontend.Content -is [byte[]]) { [Text.Encoding]::UTF8.GetString($frontend.Content) } else { [string]$frontend.Content }
-    $length = [long]($runtime.Headers.'Content-Length' | Select-Object -First 1)
-    if ($frontend.StatusCode -ne 200 -or $content.Trim() -ne "ok" -or $runtime.StatusCode -ne 200 -or $length -lt 100000) {
-        throw "Invalid frontend health payload."
-    }
-    Write-Host "Frontend:     healthy at http://127.0.0.1:5173/ (runtime $length bytes)"
+    $extensionTarget = Get-JobHelperExtensionTarget -RepositoryRoot $PSScriptRoot
+    $manifest = Get-Content -LiteralPath (Join-Path $extensionTarget 'manifest.json') -Raw | ConvertFrom-Json
+    $matches = $null -ne $receipt -and (Get-JobHelperTreeDigest -Directory $extensionTarget) -eq $receipt.extensionSha256
+    Write-Host "Chrome files: $($manifest.version_name), receipt_matches=$matches, path=$extensionTarget"
 }
-catch { Write-Host "Frontend:     not healthy" }
-
-try {
-    $backend = Invoke-RestMethod -Uri "http://127.0.0.1:9100/actuator/health" -TimeoutSec 3
-    Write-Host "Java backend: $($backend.status) at http://127.0.0.1:9100/"
-}
-catch { Write-Host "Java backend: not healthy" }
-
-try {
-    $agent = Invoke-RestMethod -Uri "http://127.0.0.1:9101/health/ready" -TimeoutSec 3
-    Write-Host "Python Agent: $($agent.status) at http://127.0.0.1:9101/ (graph=$($agent.checks.graph), checkpoint=$($agent.checks.checkpoint), migration=$($agent.checks.migration), outbox-only)"
-}
-catch { Write-Host "Python Agent: not healthy" }
-
-Write-Host ""
+catch { Write-Host 'Chrome files: missing or invalid' }
+Write-Host 'Chrome loaded state and visible page badge were not inspected.'
 if ($VerboseLogs) {
-    Write-Warning "Verbose logs may contain identifiers. Do not share them without redaction."
-    & docker compose --env-file $envPath -f $composeFile logs --tail 80 backend agent
-}
-else {
-    Write-Host "Service logs are hidden; use -VerboseLogs only for local diagnosis."
+    foreach ($service in @('backend', 'agent')) {
+        $container = Get-JobHelperContainer -Name "job-helper-$service" -Service $service
+        if ($null -ne $container) { & docker logs --tail 80 $container.Id }
+    }
 }

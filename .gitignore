@@ -36,6 +36,10 @@ components.d.ts
 /ai-job-hunting-ui/public/ai-job-hunting-runtime.js
 
 # Python Agent local state and caches
+/ai-job-api/.venv/
+/ai-job-api/.pytest_cache/
+/ai-job-api/.ruff_cache/
+/ai-job-api/data/
 /ai-job-agent/.venv/
 /ai-job-agent/.pytest_cache/
 /ai-job-agent/.ruff_cache/
