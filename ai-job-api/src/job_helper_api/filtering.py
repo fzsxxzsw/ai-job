@@ -205,7 +205,9 @@ async def filter_job(
         if settings.confirmed_education:
             question += "\n用户明确确认的学历事实：" + settings.confirmed_education
     answer = await model.complete(
-        config, [{"role": "system", "content": system}, {"role": "user", "content": question}]
+        config,
+        [{"role": "system", "content": system}, {"role": "user", "content": question}],
+        task="filter",
     )
     try:
         raw = structured_object(answer)

@@ -28,8 +28,10 @@ from .contracts import (
 from .database import Database, now_ms
 from .errors import ApiError, envelope
 from .middleware import RequestSizeLimitMiddleware
-from .model import PROVIDERS, ModelClient, effective_config, row_config
+from .model import PROVIDERS, effective_config, row_config
+from .model_routing import ModelRouter
 from .notifications import MailTransport, Notifier
+from .routing_routes import install_routing_routes
 from .security import issue_token, verify_token
 
 ALLOWED_ORIGINS = [
@@ -51,7 +53,7 @@ def create_app(
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.settings = settings or load_settings()
         app.state.db = Database(app.state.settings.database_url)
-        app.state.model = ModelClient(app.state.settings, transport)
+        app.state.model = ModelRouter(app.state.settings, app.state.db, transport)
         app.state.notifier = Notifier(app.state.settings, mail_transport)
         app.state.pdf_lock = asyncio.Semaphore(1)
         await app.state.db.health()
@@ -246,6 +248,7 @@ def create_app(
                     {"role": "system", "content": prompts.GREETING},
                     {"role": "user", "content": resume["resume_content"][:30000]},
                 ],
+                task="greeting",
             )
         )
 
@@ -403,6 +406,7 @@ def create_app(
     async def sales_disabled(path: str = ""):
         raise ApiError("个人自用模式已关闭售卖、支付和邀请兑换功能", 410)
 
+    install_routing_routes(app, require_user, writable)
     return app
 
 

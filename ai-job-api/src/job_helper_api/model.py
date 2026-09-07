@@ -142,7 +142,7 @@ class ModelClient:
             raise ApiError("未配置可用模型，请检查本机 AI_API_KEY、AI_MODEL 或 AI 配置", 503)
         return config.base.rstrip("/") + "/" + config.path.lstrip("/")
 
-    async def complete(self, config, messages, max_tokens=1024):
+    async def complete(self, config, messages, max_tokens=1024, *, thinking="auto", task=None):
         url = self.endpoint(config)
         body = {
             "model": config.name,
@@ -151,7 +151,13 @@ class ModelClient:
             "max_tokens": max_tokens,
         }
         if urlsplit(config.base).hostname == "dashscope.aliyuncs.com":
-            body.update(enable_thinking=True, thinking_budget=self.settings.thinking_budget)
+            from .model_catalog import thinking_options
+
+            body.update(thinking_options(config.name, thinking, self.settings.thinking_budget))
+            if "omni" in config.name.lower() or body.get("enable_thinking"):
+                body.update(stream=True, stream_options={"include_usage": True})
+            if "omni" in config.name.lower():
+                body["modalities"] = ["text"]
         try:
             await asyncio.wait_for(self.slots.acquire(), timeout=3)
         except TimeoutError:
@@ -165,29 +171,98 @@ class ModelClient:
                     json=body,
                     timeout=httpx.Timeout(config.timeout, connect=5),
                 ) as resp:
-                    if resp.status_code in (401, 403):
-                        raise ApiError("模型服务拒绝访问，请检查模型密钥及权限", 502)
-                    if resp.status_code == 429:
-                        raise ApiError("模型服务限流或额度不足，请稍后检查", 429)
-                    if resp.status_code != 200:
-                        raise ApiError("模型服务暂不可用", 502)
                     chunks, size = [], 0
                     async for part in resp.aiter_bytes():
                         size += len(part)
                         if size > 2_000_000:
                             raise ApiError("模型响应过大，已停止处理", 502)
                         chunks.append(part)
-            data = json.loads(b"".join(chunks))
+                    raw = b"".join(chunks)
+                    if resp.status_code != 200:
+                        raise provider_error(resp.status_code, raw)
+            data = parse_completion(raw)
             result = data["choices"][0]["message"]["content"]
             if not isinstance(result, str) or not result.strip():
                 raise ApiError("模型返回空内容，本次未执行任何动作", 502)
-            return result.strip()
+            return ModelReply(result.strip(), config.name, data.get("usage"))
         except (TimeoutError, httpx.TimeoutException):
-            raise ApiError("模型请求超时，本次未执行任何动作", 504) from None
+            raise ProviderError("timeout", "模型请求超时，本次未执行任何动作", 504, True) from None
         except (httpx.HTTPError, ValueError, KeyError, IndexError, TypeError):
             raise ApiError("模型响应无效，本次未执行任何动作", 502) from None
         finally:
             self.slots.release()
+
+
+class ModelReply(str):
+    """String-compatible result with request-local provenance, safe under concurrency."""
+
+    def __new__(cls, text, model_name, usage=None):
+        obj = super().__new__(cls, text)
+        obj.model_name = model_name
+        value = usage.get("total_tokens") if isinstance(usage, dict) else None
+        obj.total_tokens = value if type(value) is int and 0 <= value <= 10_000_000 else None
+        return obj
+
+
+class ProviderError(ApiError):
+    def __init__(self, reason, message, code=502, uncertain=False):
+        super().__init__(message, code)
+        self.reason = reason
+        self.uncertain = uncertain
+
+
+def provider_error(status, raw):
+    # Never expose a provider body: it may echo prompts or credentials.
+    try:
+        data = json.loads(raw)
+        error = data.get("error", data)
+        code = error.get("code", "") if isinstance(error, dict) else ""
+    except (ValueError, TypeError, AttributeError):
+        code = ""
+    if status == 403 and code == "AllocationQuota.FreeTierOnly":
+        return ProviderError("free_quota_exhausted", "该模型免费额度已用完", 503)
+    if code in {"InvalidApiKey", "InvalidApiKey.NotFound"} or status == 401:
+        return ProviderError("authentication", "模型密钥无效，请检查配置")
+    if status == 403:
+        return ProviderError("permission", "模型服务拒绝访问，请检查模型密钥及权限")
+    if status == 429:
+        return ProviderError("rate_limit", "模型服务限流，请稍后重试", 429)
+    if status == 404 or code in {"ModelNotFound", "InvalidModel", "InvalidParameter.Model"}:
+        return ProviderError("model_unavailable", "该模型不存在、未授权或已下线")
+    if status >= 500:
+        return ProviderError("provider_unavailable", "模型服务暂不可用", 502, True)
+    return ProviderError("invalid_request", "模型不接受当前请求，请检查模型兼容性")
+
+
+def parse_completion(raw):
+    if not raw.lstrip().startswith(b"data:"):
+        return json.loads(raw)
+    parts, usage, finished = [], None, False
+    for line in raw.decode("utf-8").splitlines():
+        if not line.startswith("data:"):
+            continue
+        value = line[5:].strip()
+        if value == "[DONE]":
+            finished = True
+            continue
+        chunk = json.loads(value)
+        if chunk.get("error"):
+            raise ProviderError("invalid_response", "模型流式响应异常", 502, True)
+        if chunk.get("usage"):
+            usage = chunk["usage"]
+        for choice in chunk.get("choices", [])[:1]:
+            text = choice.get("delta", {}).get("content")
+            if isinstance(text, str):
+                parts.append(text)
+            if choice.get("finish_reason") == "length":
+                raise ProviderError(
+                    "invalid_response", "模型输出达到上限，本次未执行任何动作", 502, True
+                )
+            if choice.get("finish_reason") == "stop":
+                finished = True
+    if not finished:
+        raise ProviderError("invalid_response", "模型流式响应未完成", 502, True)
+    return {"choices": [{"message": {"content": "".join(parts)}}], "usage": usage}
 
 
 def structured_object(text):

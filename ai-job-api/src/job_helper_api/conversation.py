@@ -103,7 +103,9 @@ async def debug_reply(db, model, settings, uid, payload):
     if not history or history[-1] != {"role": "user", "content": payload.question}:
         history.append({"role": "user", "content": payload.question})
     result = await model.complete(
-        effective_config(settings, row), [{"role": "system", "content": system}] + history
+        effective_config(settings, row),
+        [{"role": "system", "content": system}] + history,
+        task="conversation",
     )
     # Debug output is never persisted or sent. Action commands remain visible but cannot execute here.
     return shape_answer(result, payload.question, pref)
@@ -206,6 +208,7 @@ async def conversation_reply(db, model, settings, uid, payload, notifier=None):
             answer = await model.complete(
                 effective_config(settings, config),
                 messages + history + [{"role": "user", "content": payload.question}],
+                task="conversation",
             )
             result = shape_answer(answer, payload.question, pref)
             # A stop clicked during the model call wins over the generated draft.

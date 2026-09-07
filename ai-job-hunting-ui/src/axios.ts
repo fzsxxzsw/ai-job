@@ -7,11 +7,13 @@ import {DEFAULT_SERVER_URL, ServerStore} from './stores/server'
 import {shouldShowGlobalErrorToast} from './requestFeedback'
 import {ApiRequestError, responseErrorMessage} from './runtime/requestErrors'
 import {createToastGate} from './ui/feedback'
+import {modelRequestTimeout} from './runtime/modelRequestTimeout'
 
 const request = axios.create({timeout: 10000, headers: {'Content-Type': 'application/json; charset=utf-8'}})
 const mayShowError = createToastGate()
 
 request.interceptors.request.use(req => {
+    req.timeout = modelRequestTimeout(req.url, req.timeout)
     try {
         const store = ServerStore()
         req.baseURL = store.baseUrl
