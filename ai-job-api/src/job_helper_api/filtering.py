@@ -62,6 +62,16 @@ SPECIFICITY = {
 }
 REQUIRED = re.compile(r"必须|必备|硬性|要求|至少|精通|熟练|掌握|及以上|以上经验", re.I)
 PREFERRED = re.compile(r"优先|加分|最好|preferred|nice[- ]?to[- ]?have", re.I)
+NON_TECHNICAL_ROLE = re.compile(
+    r"主播|直播带货|美妆|调解|催收|销售|客服|招聘|人事|行政|文员|商务拓展|商务推广|商务bd|"
+    r"渠道拓展|课程顾问|电话邀约|市场开发|业务开发|客户开发|产品经理|产品运营|内容运营|"
+    r"用户运营|直播运营|数据标注|模型训练",
+    re.I,
+)
+APPLICATION_ROLE_OVERRIDE = re.compile(r"ai应用|人工智能应用|aigc|agent|智能体|全栈", re.I)
+PURE_FRONTEND_ROLE = re.compile(r"前端|web前端", re.I)
+PURE_JAVA_ROLE = re.compile(r"java.*(?:后端|开发|研发|工程师|程序员)|(?:后端|开发|研发|工程师|程序员).*java", re.I)
+TRAINING_ALGORITHM_ROLE = re.compile(r"算法(?:训练|工程师|研发|开发)|模型训练", re.I)
 
 
 def parse_object(value: str) -> dict[str, Any]:
@@ -150,6 +160,22 @@ def local_match(payload: FilterInput, resume: str) -> dict[str, Any]:
     }
 
 
+def target_role_mismatch(payload: FilterInput) -> str | None:
+    base = parse_object(payload.jobBaseInfo)
+    title = re.sub(r"\s+", "", unicodedata.normalize("NFKC", str(base.get("jobName") or ""))).lower()
+    if NON_TECHNICAL_ROLE.search(title):
+        return "岗位名称明确属于非技术或非研发方向"
+    if APPLICATION_ROLE_OVERRIDE.search(title):
+        return None
+    if PURE_FRONTEND_ROLE.search(title):
+        return "岗位名称明确为纯前端方向，不属于当前投递方向"
+    if PURE_JAVA_ROLE.search(title):
+        return "岗位名称明确为纯 Java 方向，不属于当前投递方向"
+    if TRAINING_ALGORITHM_ROLE.search(title):
+        return "岗位名称明确为算法训练方向，不属于当前投递方向"
+    return None
+
+
 def academic_mismatch(payload: FilterInput, education: str) -> str | None:
     # An explicitly configured fact replaces the old per-user hard-coded degree.
     if education != "全日制本科":
@@ -177,6 +203,13 @@ async def filter_job(
 ) -> dict[str, Any]:
     user = await db.user(uid)
     pref = loads((user or {}).get("preference"), {})
+    if mismatch := target_role_mismatch(payload):
+        return {
+            "decisionStatus": "REJECT",
+            "filter": True,
+            "engine": "LOCAL_ROLE_GATE",
+            "reason": mismatch,
+        }
     if reason := match_employment_exclusion(
         pref if isinstance(pref, dict) else {},
         parse_object(payload.jobBaseInfo),

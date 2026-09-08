@@ -77,3 +77,34 @@ def test_legacy_education_fact_is_explicit_and_preferred_degree_is_not_hard_gate
             == "MATCH"
         )
     assert world["fake"].calls == []
+
+
+def test_clear_non_target_role_is_rejected_even_when_browser_title_rule_is_off(client, world):
+    for title in ("AI产品运营", "商务推广专员", "大模型数据标注", "前端开发工程师", "Java后端开发", "算法训练工程师"):
+        result = client.post(
+            "/api/job/filter/one",
+            json=browser_payload(
+                jobBaseInfo=json.dumps({"jobName": title}),
+                jobExtInfo=json.dumps({"postDescription": "要求3-5年经验"}),
+                titleRuleStatus=None,
+                titleMatchedKeywords=[],
+            ),
+        ).json()["data"]
+        assert result["decisionStatus"] == "REJECT", title
+        assert result["filter"] is True
+    assert world["fake"].calls == []
+
+
+def test_experience_range_is_advisory_for_a_target_role(client, world):
+    result = client.post(
+        "/api/job/filter/one",
+        json=browser_payload(
+            jobBaseInfo=json.dumps({"jobName": "Python后端开发"}),
+            jobExtInfo=json.dumps({"postDescription": "要求3-5年工作经验，熟悉Python和FastAPI"}),
+            titleRuleStatus=None,
+            titleMatchedKeywords=[],
+        ),
+    ).json()["data"]
+    assert result["decisionStatus"] == "MATCH"
+    assert result["filter"] is False
+    assert world["fake"].calls == []

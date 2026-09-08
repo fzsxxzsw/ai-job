@@ -26,7 +26,16 @@ const WEAK_TECHNICAL_KEYWORDS = new Set([
     '技术',
 ])
 
-const CLEAR_NON_TECHNICAL_TITLE = /(?:主播|直播带货|美妆|调解|催收|销售|客服|招聘|人事|行政|文员|商务拓展|渠道拓展|课程顾问|电话邀约|市场开发|业务开发|客户开发|产品经理|产品运营)/i
+const CLEAR_NON_TECHNICAL_TITLE = /(?:主播|直播带货|美妆|调解|催收|销售|客服|招聘|人事|行政|文员|商务拓展|商务推广|商务bd|渠道拓展|课程顾问|电话邀约|市场开发|业务开发|客户开发|产品经理|产品运营|内容运营|用户运营|直播运营|数据标注|模型训练)/i
+
+// The current search targets AI application engineering, AI/full-stack work
+// and Python backend work. A copied experience range is not evidence against a
+// candidate, but an explicit role family in the title is reliable enough to
+// stop obvious cross-track delivery even when configurable keyword matching is off.
+const APPLICATION_ROLE_OVERRIDE = /(?:ai应用|人工智能应用|aigc|agent|智能体|全栈)/i
+const CLEAR_PURE_FRONTEND_TITLE = /(?:前端|web前端)/i
+const CLEAR_PURE_JAVA_TITLE = /java.*(?:后端|开发|研发|工程师|程序员)|(?:后端|开发|研发|工程师|程序员).*java/i
+const CLEAR_TRAINING_ALGORITHM_TITLE = /(?:算法(?:训练|工程师|研发|开发)|模型训练)/i
 
 const TECHNICAL_TITLE_EVIDENCE = /(?:全栈|前端|后端|软件(?:开发)?|程序员|测试开发|客户端开发|服务端开发|数据开发|大数据|机器学习|深度学习|算法工程师|python|java|golang|go语言|c\+\+|\.net|php|node(?:\.js)?|web开发|移动端|android|ios|嵌入式|架构师|devops|运维开发|ai应用|aigc|agent|智能体)/i
 
@@ -59,6 +68,15 @@ function jdTechnicalEvidenceCount(postDescription: string): number {
     )
 }
 
+function clearNonTargetReason(jobName: string): string | null {
+    if (CLEAR_NON_TECHNICAL_TITLE.test(jobName)) return '岗位名称明确属于非技术或非研发方向'
+    if (APPLICATION_ROLE_OVERRIDE.test(jobName)) return null
+    if (CLEAR_PURE_FRONTEND_TITLE.test(jobName)) return '岗位名称明确为纯前端方向，不属于当前投递方向'
+    if (CLEAR_PURE_JAVA_TITLE.test(jobName)) return '岗位名称明确为纯 Java 方向，不属于当前投递方向'
+    if (CLEAR_TRAINING_ALGORITHM_TITLE.test(jobName)) return '岗位名称明确为算法训练方向，不属于当前投递方向'
+    return null
+}
+
 /**
  * Deterministic title gate for rules-only applications.
  *
@@ -83,6 +101,11 @@ export function evaluateJobTitleRule(input: JobTitleRuleInput): JobTitleRuleDeci
         }
     }
 
+    const nonTargetReason = clearNonTargetReason(jobName)
+    if (nonTargetReason) {
+        return {status: 'SKIP', reason: nonTargetReason, matchedKeywords: []}
+    }
+
     if (mode === 'off') {
         return {status: 'PASS', reason: '岗位名规则已关闭', matchedKeywords: []}
     }
@@ -100,17 +123,6 @@ export function evaluateJobTitleRule(input: JobTitleRuleInput): JobTitleRuleDeci
     }
 
     const included = matchingKeywords(jobName, includeKeywords)
-    // Explicit non-technical semantics outrank incidental technology words.
-    // “Java课程顾问” and “AI产品运营” must not pass only because one token
-    // happens to look technical.
-    if (CLEAR_NON_TECHNICAL_TITLE.test(jobName)) {
-        return {
-            status: mode === 'required' ? 'SKIP' : 'ADVISORY',
-            reason: '岗位名称明确属于非技术方向',
-            matchedKeywords: included,
-        }
-    }
-
     const strongMatches = included.filter(keyword => !WEAK_TECHNICAL_KEYWORDS.has(keyword))
     if (strongMatches.length > 0) {
         return {

@@ -147,17 +147,17 @@ test('actual legacy retry and exchange exits are held in enabled mode', async ()
 })
 test('actual matchJob preserves hard filters and captures graph FilterInput without legacy model call', async () => {
     const env=environment()
-    const job={encryptJobId:'JobA',encryptBossId:'BossA',securityId:'SecA',lid:'LidA',brandName:'合成公司',jobName:'Java开发',salaryDesc:'10-15K',cityName:'测试市'}
-    env.platform.obtainBossJobDetailExt=async()=>({postDescription:'Java 和 MySQL',friendStatus:0,activeTimeDesc:'今日活跃'})
+    const job={encryptJobId:'JobA',encryptBossId:'BossA',securityId:'SecA',lid:'LidA',brandName:'合成公司',jobName:'Python后端开发',salaryDesc:'10-15K',cityName:'测试市'}
+    env.platform.obtainBossJobDetailExt=async()=>({postDescription:'Python、FastAPI 和 MySQL',friendStatus:0,activeTimeDesc:'今日活跃'})
     await env.platform.matchJob(job)
-    assert.equal(env.legacy.length,0);assert.match(env.platform.unifiedFilterInputs.get('JobA').jobExtInfo,/Java 和 MySQL/)
+    assert.equal(env.legacy.length,0);assert.match(env.platform.unifiedFilterInputs.get('JobA').jobExtInfo,/Python、FastAPI 和 MySQL/)
     await assert.rejects(env.platform.matchJob({...job,brandName:'潮一'}))
     env.platform.pushStatus='PUSHING'
 })
 test('actual startPush reaches APPLICATION job then original success/snapshot handler without legacy greeting', async () => {
     const env=environment()
-    const job={encryptJobId:'JobA',encryptBossId:'BossA',securityId:'SecA',lid:'LidA',brandName:'合成公司',jobName:'Java开发',salaryDesc:'10-15K',cityName:'测试市'}
-    env.platform.obtainBossJobDetailExt=async()=>({postDescription:'Java 和 MySQL',friendStatus:0,activeTimeDesc:'今日活跃'})
+    const job={encryptJobId:'JobA',encryptBossId:'BossA',securityId:'SecA',lid:'LidA',brandName:'合成公司',jobName:'Python后端开发',salaryDesc:'10-15K',cityName:'测试市'}
+    env.platform.obtainBossJobDetailExt=async()=>({postDescription:'Python、FastAPI 和 MySQL',friendStatus:0,activeTimeDesc:'今日活跃'})
     env.platform.waitForDeliveryGate=async()=>{};env.platform.startPreHandler=()=>{};env.platform.preMatchJob=()=>{}
     env.platform.getJobList=()=>[job];env.platform.next=async()=>false;env.platform.isLimit=()=>({limit:false})
     env.fixture.getJob=async()=>({jobId:'graph-job',status:'WAITING_EXECUTION',actions:[{kind:'CONTACT_JOB',status:'ACKNOWLEDGED'},{kind:'SEND_GREETING',status:'QUEUED'}],decision:{code:'CONTACT'}})

@@ -28,7 +28,6 @@ test('passes strong target software titles without AI', () => {
     for (const title of [
         'AIGC应用全栈工程师',
         'Python开发工程师',
-        'Java后端开发',
         'Agent智能体研发工程师',
         '软件工程师',
     ]) {
@@ -69,4 +68,28 @@ test('custom title exclusions always win', () => {
 test('required mode with no keywords fails safely while off mode passes', () => {
     assert.equal(evaluateJobTitleRule({jobName: '任意岗位', mode: 'required'}).status, 'SKIP')
     assert.equal(evaluateJobTitleRule({jobName: '任意岗位', mode: 'off'}).status, 'PASS')
+})
+
+test('clear non-target roles are blocked even when configurable keyword matching is off', () => {
+    for (const title of [
+        'AI产品运营',
+        '商务推广专员',
+        '大模型数据标注',
+        '前端开发工程师',
+        'Java后端开发',
+        '算法训练工程师',
+    ]) {
+        assert.equal(evaluateJobTitleRule({jobName: title, mode: 'off'}).status, 'SKIP', title)
+    }
+    for (const title of ['AI应用全栈工程师', 'Python后端开发', 'Agent智能体研发工程师']) {
+        assert.equal(evaluateJobTitleRule({jobName: title, mode: 'off'}).status, 'PASS', title)
+    }
+})
+
+test('experience wording remains advisory and never becomes a title gate', () => {
+    assert.equal(evaluateJobTitleRule({
+        jobName: 'Python后端开发',
+        postDescription: '要求3-5年工作经验，熟悉Python和FastAPI',
+        mode: 'off',
+    }).status, 'PASS')
 })

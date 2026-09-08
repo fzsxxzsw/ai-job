@@ -19,6 +19,7 @@ import {appendRejectionMessage} from "../platform/boss/rejectionAnalysis";
 import {makeConversationKey} from "../platform/deliveryAudit";
 import {observeOutcomeAcknowledgement, observeOutcomeMessage} from '../platform/boss/outcomeRuntime';
 import {acknowledgeUnifiedAutomation} from '../platform/unifiedRuntime';
+import {classifyBossMessage, isOutcomeMessage} from '../platform/boss/messageClassifier';
 
 const WS_HOOK_LOCK_KEY = '__AI_JOB_HELPER_WS_HOOK_V2__'
 const existingHookStatus = Tools.window[WS_HOOK_LOCK_KEY]
@@ -498,11 +499,16 @@ async function handleSingleReceivedChatMessage(wsData: TechwolfChatProtocol): Pr
     }
     const message = wsData.messages[0] as any
     let msgBody = String(getMsgBody(wsData) || '');
+    const classification = classifyBossMessage(message, Tools.window._PAGE?.uid)
+    if (!isOutcomeMessage(classification.kind)) {
+        logger.debug(`忽略${classification.reason}：`, message)
+        return
+    }
     let fromUid = normalizeNumber(message.from.uid);
     if (!fromUid) {
         return;
     }
-    const ownMessage = normalizeNumber(Tools.window._PAGE?.uid) === fromUid
+    const ownMessage = classification.kind === 'USER_TEXT'
     observeOutcomeMessage(message, msgBody, Tools.window._PAGE?.uid)
     try {
         const peerUid = ownMessage ? normalizeNumber(message.to?.uid) : fromUid

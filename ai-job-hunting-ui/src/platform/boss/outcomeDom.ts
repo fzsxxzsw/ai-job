@@ -1,4 +1,5 @@
 import {exactPlatformId} from './outcomeCollector.ts'
+import {classifyBossMessage, isOutcomeMessage} from './messageClassifier.ts'
 
 function source(element: any): any {
     return element?.__vue__?.source || element?.__vue__?._props?.source
@@ -34,8 +35,11 @@ function rowFacts(row: Element, own: string, peer: string) {
     const text = typeof raw?.body?.text === 'string' ? raw.body.text : null
     const visible = row.querySelector('.text, .message-text, .text-content')?.textContent
     if (text === null || visible == null || text.trim() !== visible.trim()) return null
+    const classification = classifyBossMessage(raw, own)
+    if (!isOutcomeMessage(classification.kind)) return null
     return {mid, cmid: exactPlatformId(raw.cmid), from: {uid: from}, to: {uid: to}, time: raw.time ?? null,
-        text, encryptJobId: raw.encryptJobId ?? null, conversationKey: raw.conversationKey ?? null}
+        text, kind: classification.kind, encryptJobId: raw.encryptJobId ?? null,
+        conversationKey: raw.conversationKey ?? null}
 }
 
 /** A selection is not a chat-panel identity. Missing panel/message-owned data withholds HR evidence. */
@@ -90,7 +94,8 @@ export function captureCurrentReplyCandidate(root: ParentNode, ownAccount: unkno
         .at(-1)
     const row = finalRow()
     const message = row ? rowFacts(row, own, current.bossId) : null
-    if (!message || message.from.uid !== current.bossId || message.to.uid !== own || !message.text.trim()
+    if (!message || message.kind !== 'RECRUITER_TEXT' || message.from.uid !== current.bossId
+        || message.to.uid !== own || !message.text.trim()
         || message.encryptJobId && message.encryptJobId !== current.encryptJobId
         || message.conversationKey && message.conversationKey !== current.conversationKey
         || !panelBinding && (message.encryptJobId !== current.encryptJobId || message.conversationKey !== current.conversationKey)) return null

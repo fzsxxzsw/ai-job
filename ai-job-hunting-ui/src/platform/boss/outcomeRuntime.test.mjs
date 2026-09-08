@@ -17,7 +17,8 @@ function environment({selected = A, panelSource = A, messagePeer = '81', message
     let now = 1788757200000
     const listeners = new Set(), events = [], views = []
     const selectedElement = {__vue__: {source: selected}, parentElement: null}
-    const raw = {mid: '90071992547409933', time: null, from: {uid: messagePeer}, to: {uid: '40'}, body: {text: 'A 公司：很抱歉，暂不合适'}}
+    const raw = {mid: '90071992547409933', time: null, type: 1, from: {uid: messagePeer}, to: {uid: '40'},
+        body: {type: 1, text: 'A 公司：很抱歉，暂不合适'}}
     const row = {className: 'item-friend', __vue__: messageOwned ? {message: raw} : {}, closest: () => null,
         getAttribute: key => key === 'data-mid' ? raw.mid : null, querySelector: () => ({textContent: raw.body.text})}
     const panel = {__vue__: {source: panelSource}, querySelectorAll: () => {
