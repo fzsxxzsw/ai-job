@@ -40,7 +40,7 @@ class OutcomeProjection(ProtocolModel):
     asOf: Annotated[int, Field(ge=1)]
     analysisKind: AnalysisKind
     policyVersion: OpaqueId
-    graphVersion: Literal["outcome-graph-v1"]
+    graphVersion: Literal["outcome-graph-v1", "outcome-graph-v2"]
 
 
 class HumanFeedback(ProtocolModel):
@@ -360,25 +360,24 @@ class OutcomeAPIClient:
         if result.jobId != claim.jobId or result.reportId != report_id:
             raise OutcomeAPIError("INVALID_RESPONSE")
 
-    async def complete(self, claim: OutcomeClaim, artifact_id: str) -> Completion:
-        if claim.humanFeedback is None:
-            raise OutcomeAPIError("MISSING_HUMAN_FEEDBACK")
+    async def complete(
+        self, claim: OutcomeClaim, artifact_id: str, report_id: str
+    ) -> Completion:
+        payload = {**claim.lease_payload(), "artifactId": artifact_id}
+        if claim.humanFeedback is not None:
+            payload["feedbackId"] = claim.humanFeedback.feedbackId
         result = self._parse(
             Completion,
             await self._post(
                 self._path(claim, "complete"),
-                {
-                    **claim.lease_payload(),
-                    "artifactId": artifact_id,
-                    "feedbackId": claim.humanFeedback.feedbackId,
-                },
+                payload,
             ),
         )
         if (result.jobId, result.caseId, result.caseRevision, result.reportId) != (
             claim.jobId,
             claim.caseId,
             claim.revision,
-            claim.humanFeedback.reportId,
+            report_id,
         ):
             raise OutcomeAPIError("INVALID_RESPONSE")
         return result

@@ -5,7 +5,7 @@ import {createRequire} from 'node:module'
 import {build, transformSync} from 'esbuild'
 import {parse, compileScript} from 'vue/compiler-sfc'
 import * as Vue from 'vue'
-import {modelAssistanceLabel, metricRateLabel, previewMatchesSelection} from './careerProtocol.ts'
+import {modelAssistanceLabel, metricRateLabel, progressRateLabel, previewMatchesSelection} from './careerProtocol.ts'
 
 const require = createRequire(import.meta.url)
 const apiBundle = await build({entryPoints:[new URL('./careerApi.ts',import.meta.url).pathname.replace(/^\/([A-Z]:)/,'$1')],bundle:true,write:false,format:'cjs',platform:'node',plugins:[{name:'local-boundaries',setup(builder){
@@ -28,7 +28,7 @@ function view(client) {
         '../../platform/careerApi':{scopedCareerClient:async()=>({scope,client})},
         '../../platform/unifiedRuntime':{captureAutomationScope:()=>scope},
         '../../platform/automationPresentation':{automationJobLabel:()=>'',automationPhaseLabel:()=>''},
-        '../../platform/careerProtocol':{CAREER_EVENT_TYPES:[],metricRateLabel,previewMatchesSelection},
+        '../../platform/careerProtocol':{CAREER_EVENT_TYPES:[],metricRateLabel,progressRateLabel,previewMatchesSelection},
     }
     new Function('require','module','exports',compiled)(name=>mocks[name]||require(name),module,module.exports)
     module.exports.default.setup({}, {expose:value=>{state=value}})
@@ -50,7 +50,7 @@ function backend() {
         if(path.endsWith('/events')){if(!requests.has(body.requestId)){application.events.push({...body,eventId:'event-'+(++next)});requests.set(body.requestId,{})}return {}}
         if(path.endsWith('/applications/application-A'))return structuredClone(application)
         if(path.includes('/applications?'))return [structuredClone(application)]
-        if(path.includes('/analytics?'))return {metrics:{replyRate:emptyMetric}}
+        if(path.includes('/analytics?'))return {windowDays:14,sampleSize:0,progressCounts:{contacted:1,replied:0,interviewed:0,offers:0},progressSampleIds:{contacted:['application-A'],replied:[],interviewed:[],offers:[]},metrics:{replyRate:emptyMetric,interviewRate:emptyMetric,resumeInterviewRate:emptyMetric,offerRate:emptyMetric},excludedCounts:{immature:1,unverifiedContact:0,unknownExposure:1,mixedExposure:0},uncertainties:[]}
         if(path.includes('/strategies?')||path.includes('/automation/jobs?'))return []
         throw Error('Unexpected '+path)
     })
@@ -94,7 +94,18 @@ test('actual scope guard clears drafts and prevents an old-view mutation after a
 })
 test('zero denominator is unknown; changed patch choice invalidates exact preview',()=>{
     assert.equal(metricRateLabel(emptyMetric),'暂无可计算比例')
+    assert.equal(progressRateLabel(13,368),'3.5%')
+    assert.equal(progressRateLabel(0,0),'暂无记录')
     assert.equal(previewMatchesSelection({proposalId:'p',baseVersionId:'v',selectedPatchIds:['a']},{proposalId:'p',baseVersionId:'v'},['b']),false)
+})
+
+test('career workspace leads with plain-language results and folds technical evidence',()=>{
+    assert.match(source,/求职进展/)
+    assert.match(source,/数据不足时只保存记录/)
+    assert.match(source,/查看统计依据和历史记录/)
+    assert.match(source,/等待确认投递时的简历版本/)
+    assert.match(source,/当前比例用于跟踪真实进展/)
+    assert.doesNotMatch(source,/>分子 \/ 分母</)
 })
 
 test('model source presentation distinguishes independently validated assistance from rule fallback',()=>{

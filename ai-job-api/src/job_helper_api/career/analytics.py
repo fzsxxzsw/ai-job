@@ -186,6 +186,32 @@ def cohort_metrics(
         )
     }
     matched = [(app, active) for app, active, _, reason in cases if reason is None]
+    progress_sample_ids = {
+        "contacted": sorted(
+            app["id"]
+            for app, active in matched
+            if any(event["event_type"] == "CONTACT_INITIATED" for event in active)
+        ),
+        "replied": sorted(
+            app["id"]
+            for app, active in matched
+            if any(event["event_type"] == "HR_REPLIED" for event in active)
+        ),
+        "interviewed": sorted(
+            app["id"]
+            for app, active in matched
+            if any(
+                event["event_type"] in {"INTERVIEW_INVITED", "INTERVIEW_COMPLETED"}
+                for event in active
+            )
+        ),
+        "offers": sorted(
+            app["id"]
+            for app, active in matched
+            if any(event["event_type"] == "OFFER_RECEIVED" for event in active)
+        ),
+    }
+    progress_counts = {name: len(ids) for name, ids in progress_sample_ids.items()}
     withdrawn = sorted(
         app["id"]
         for app, active in matched
@@ -223,6 +249,8 @@ def cohort_metrics(
             "missingEvidence": ["verifiedJobFamily", "verifiedLevel", "verifiedChannel"],
         },
         "metrics": metrics,
+        "progressCounts": progress_counts,
+        "progressSampleIds": progress_sample_ids,
         "withdrawnCount": len(withdrawn),
         "everInterviewedCount": len(interviewed),
         "withdrawnSampleIds": withdrawn,

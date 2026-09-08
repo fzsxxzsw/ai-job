@@ -228,6 +228,32 @@ class Applications(Versions):
             )
         return row
 
+    async def ensure_legacy_contact(self, c, uid, app, snapshot) -> bool:
+        """Treat a persisted application snapshot as observed contact evidence once."""
+        events = await self.timeline(uid, app["id"], c)
+        if any(
+            event["event_type"] == "CONTACT_INITIATED" and event["confirmation"] != "INFERRED"
+            for event in effective_events(events)
+        ):
+            return False
+        occurred_at = snapshot["applied_at"] or snapshot["created_at"]
+        if not occurred_at:
+            return False
+        await self.insert_event(
+            c,
+            uid,
+            app,
+            "CONTACT_INITIATED",
+            occurred_at,
+            {
+                "source": "LEGACY_APPLICATION_SNAPSHOT",
+                "referenceId": str(snapshot["id"]),
+                "quote": "已保存投递完成时的岗位与简历快照",
+            },
+            "OBSERVED",
+        )
+        return True
+
     async def add_event(self, uid, app_id, payload):
         async with self.transaction(uid) as c:
             app = await self.row(self.applications, uid, app_id, c)
@@ -253,6 +279,8 @@ class Applications(Versions):
             return self.event_view(event)
 
     async def import_legacy(self, uid, payload):
+        from .legacy_sessions import import_legacy_sessions
+
         async with self.transaction(uid) as c:
             raw = payload.model_dump()
             prior = await self.request(c, uid, payload.requestId, "IMPORT_LEGACY", raw)
@@ -264,7 +292,12 @@ class Applications(Versions):
                     select(snapshots).where(snapshots.c.user_id == uid).order_by(snapshots.c.id)
                 )
             ).mappings()
-            counts = {"importedApplications": 0, "importedVersions": 0, "reusedApplications": 0}
+            counts = {
+                "importedApplications": 0,
+                "importedVersions": 0,
+                "reusedApplications": 0,
+                "importedContacts": 0,
+            }
             for snapshot in rows:
                 content = str(snapshot["resume_content"] or "")
                 version_id = None
@@ -298,7 +331,7 @@ class Applications(Versions):
                     "capturedAt": snapshot["applied_at"],
                     "exposureNote": "历史快照不证明附件发送",
                 }
-                _, reused = await self.insert_application(
+                app, reused = await self.insert_application(
                     c,
                     uid,
                     "UNKNOWN",
@@ -310,5 +343,8 @@ class Applications(Versions):
                     created_at=snapshot["created_at"] or snapshot["applied_at"],
                 )
                 counts["reusedApplications" if reused else "importedApplications"] += 1
+                if await self.ensure_legacy_contact(c, uid, app, snapshot):
+                    counts["importedContacts"] += 1
+            counts.update(await import_legacy_sessions(c, uid, self))
             await self.request(c, uid, payload.requestId, "IMPORT_LEGACY", raw, counts)
             return counts

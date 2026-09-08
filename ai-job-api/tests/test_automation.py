@@ -106,6 +106,55 @@ def executor(client, job, capability="SEND_TEXT"):
     return scope, action
 
 
+def test_only_one_live_browser_executor_can_claim_actions(auto, world):
+    job = response(auto.post(BASE + "/jobs", json=reply_input()))
+    worker(auto, job)
+
+    def heartbeat(executor_id):
+        return response(
+            auto.post(
+                BASE + "/executors/heartbeat",
+                json={
+                    "executorId": executor_id,
+                    "platformAccount": "boss-owner",
+                    "capabilities": ["SEND_TEXT"],
+                    "replyEnabled": True,
+                    "deliveryEnabled": False,
+                },
+            )
+        )
+
+    assert heartbeat("first-page")["ownsExecution"] is True
+    assert heartbeat("second-page")["ownsExecution"] is False
+    blocked = auto.post(
+        BASE + "/actions/claim",
+        json={
+            "executorId": "second-page",
+            "platformAccount": "boss-owner",
+            "jobId": job["jobId"],
+        },
+    )
+    assert blocked.status_code == 409
+
+    with sqlite3.connect(world["path"]) as c:
+        c.execute(
+            "UPDATE py_api_control SET value_json = ? WHERE control_key = ?",
+            (json.dumps({"lastSeenAt": 1}), "automation:executor-owner"),
+        )
+    assert heartbeat("second-page")["ownsExecution"] is True
+    claimed = response(
+        auto.post(
+            BASE + "/actions/claim",
+            json={
+                "executorId": "second-page",
+                "platformAccount": "boss-owner",
+                "jobId": job["jobId"],
+            },
+        )
+    )
+    assert claimed["kind"] == "SEND_TEXT"
+
+
 def dispatch(client, scope, action, mid="12345"):
     body = {
         **scope,

@@ -22,7 +22,8 @@ test('personal toolbar and payment actions are guarded without removing AI reply
     }
     assert.match(page, /@change="handlerAISeatStatusChange"/)
 })
-test('personal menu hides invitation sales and shows the personal guide', () => {
-    assert.match(read('./components/ui/Panel.vue'), /if \(!IS_PERSONAL_MODE\) componentMap.set\('5'/)
-    assert.match(read('./components/ui/UseDocument.vue'), /<PersonalDocument v-if="IS_PERSONAL_MODE"/)
+test('personal menu hides invitation sales and removes the obsolete guide tab', () => {
+    const panel = read('./components/ui/Panel.vue')
+    assert.match(panel, /if \(!IS_PERSONAL_MODE\) componentMap.set\('5'/)
+    assert.doesNotMatch(panel, /使用文档|UseDocument/)
 })

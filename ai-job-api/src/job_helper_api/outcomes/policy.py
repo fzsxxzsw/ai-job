@@ -11,7 +11,7 @@ from ..rejection_engine.rules import affirmed, analyze_rules
 from .contracts import Observation
 
 POLICY_VERSION = "outcome-policy-v1"
-GRAPH_VERSION = "outcome-graph-v1"
+GRAPH_VERSION = "outcome-graph-v2"
 REJECTION = (
     r"不予录用|决定不录用|拒绝.{0,6}(?:申请|应聘)"
     r"|(?:不能|无法|没法|不再|不会|暂不).{0,6}录用"

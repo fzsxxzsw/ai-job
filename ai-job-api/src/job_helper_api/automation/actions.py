@@ -15,6 +15,9 @@ def same(left, right):
 
 
 class Actions(Storage):
+    EXECUTOR_OWNER_KEY = "automation:executor-owner"
+    EXECUTOR_OWNER_TTL_MS = 15000
+
     async def heartbeat(self, uid, payload):
         async with self.transaction(uid) as c:
             await self.account(uid, payload.platformAccount, c)
@@ -22,15 +25,44 @@ class Actions(Storage):
             previous = await self.db.control(uid, key, {}, c)
             scope = await self.scope(uid, c)
             raw = payload.model_dump()
+            timestamp = now_ms()
             changed = previous.get("scopeHash") != scope or previous.get("input") != raw
             revision = max(1, previous.get("authorizationRevision", 0) + int(changed))
             value = {
                 "input": raw,
                 "scopeHash": scope,
                 "authorizationRevision": revision,
-                "lastSeenAt": now_ms(),
+                "lastSeenAt": timestamp,
             }
             await self.db.set_control(c, uid, key, value)
+
+            owner = await self.db.control(uid, self.EXECUTOR_OWNER_KEY, {}, c)
+            owner_enabled = bool(owner.get("replyEnabled") or owner.get("deliveryEnabled"))
+            owner_live = (
+                owner_enabled
+                and owner.get("lastSeenAt", 0) + self.EXECUTOR_OWNER_TTL_MS >= timestamp
+                and owner.get("scopeHash") == scope
+            )
+            caller_enabled = bool(raw.get("replyEnabled") or raw.get("deliveryEnabled"))
+            caller_is_owner = same(owner.get("executorId"), payload.executorId)
+            delivery_preempts_reply = bool(
+                raw.get("deliveryEnabled") and not owner.get("deliveryEnabled")
+            )
+            owns_execution = caller_enabled and (
+                caller_is_owner or not owner_live or delivery_preempts_reply
+            )
+            if owns_execution:
+                owner = {
+                    "executorId": payload.executorId,
+                    "scopeHash": scope,
+                    "replyEnabled": bool(raw.get("replyEnabled")),
+                    "deliveryEnabled": bool(raw.get("deliveryEnabled")),
+                    "lastSeenAt": timestamp,
+                }
+                await self.db.set_control(c, uid, self.EXECUTOR_OWNER_KEY, owner)
+            elif caller_is_owner and not caller_enabled:
+                owner = {}
+                await self.db.set_control(c, uid, self.EXECUTOR_OWNER_KEY, owner)
             await self.db.set_control(
                 c, uid, "automation:executor-latest", {"lastSeenAt": value["lastSeenAt"]}
             )
@@ -38,6 +70,7 @@ class Actions(Storage):
                 "executorId": payload.executorId,
                 "authorizationRevision": revision,
                 "leaseUntil": value["lastSeenAt"] + 60000,
+                "ownsExecution": owns_execution,
             }
 
     async def authority(self, uid, job, payload, c):
@@ -50,6 +83,13 @@ class Actions(Storage):
         if executor.get("lastSeenAt", 0) + 60000 < now_ms() or executor.get(
             "scopeHash"
         ) != await self.scope(uid, c):
+            raise ApiError("AUTHORIZATION_CHANGED", 409)
+        owner = await self.db.control(uid, self.EXECUTOR_OWNER_KEY, {}, c)
+        if (
+            not same(owner.get("executorId"), payload.executorId)
+            or owner.get("lastSeenAt", 0) + self.EXECUTOR_OWNER_TTL_MS < now_ms()
+            or owner.get("scopeHash") != executor.get("scopeHash")
+        ):
             raise ApiError("AUTHORIZATION_CHANGED", 409)
         raw = executor.get("input", {})
         if raw.get("platformAccount") != payload.platformAccount:

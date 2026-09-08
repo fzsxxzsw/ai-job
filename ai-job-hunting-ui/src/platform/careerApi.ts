@@ -21,7 +21,7 @@ export function createCareerClient(request: Request) {
         applications: (offset = 0) => request(path(`/applications?limit=20&offset=${offset}`)) as Promise<CareerApplication[]>,
         application: (applicationId: string) => request(path(`/applications/${id(applicationId)}`)) as Promise<CareerApplication>,
         appendEvent: (applicationId: string, event: CareerEventInput) => request(path(`/applications/${id(applicationId)}/events`), event),
-        importLegacy: async (requestId: string = crypto.randomUUID()) => request(path('/imports/legacy'), {requestId}) as Promise<{importedApplications: number; importedVersions: number; reusedApplications: number}>,
+        importLegacy: async (requestId: string = crypto.randomUUID()) => request(path('/imports/legacy'), {requestId}) as Promise<{importedApplications: number; importedVersions: number; reusedApplications: number; importedContacts: number; importedSessionApplications: number; importedSessionContacts: number; importedSessionReplies: number; importedSessionOutcomes: number; ambiguousSessions: number}>,
         analytics: (windowDays: 7 | 14 | 30, cutoff: number, resumeVersionId = '', strategyPlanId = '') => {
             const query = new URLSearchParams({windowDays: String(windowDays), cutoff: String(cutoff)})
             if (resumeVersionId) query.set('resumeVersionId', resumeVersionId)

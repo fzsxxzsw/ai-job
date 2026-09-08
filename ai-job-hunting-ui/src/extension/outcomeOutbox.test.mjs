@@ -110,12 +110,12 @@ test('all requested result classes and real graph waiting/failed/retry phases ar
     assert.equal(outcomeLabel({outcome: 'POSITIVE', readState: 'READ'}), '积极回应')
     assert.equal(outcomeLabel({outcome: 'NO_REPLY', readState: 'READ'}), '已读不回')
     assert.equal(outcomeLabel({outcome: 'NO_REPLY', readState: 'UNREAD'}), '未读不回')
-    assert.equal(outcomePhaseLabel('WAITING_CONFIRMATION'), '等待你确认')
+    assert.equal(outcomePhaseLabel('WAITING_CONFIRMATION'), '旧任务正在自动收尾')
     assert.equal(outcomePhaseLabel('RETRY'), '等待重试')
     assert.equal(outcomePhaseLabel('FAILED'), '处理失败')
     assert.equal(outcomeTaskLabel({status: 'READY', phase: 'COLLECTING'}), '等待 LangGraph 领取')
     assert.equal(outcomeTaskLabel({status: 'RUNNING', phase: 'SAVED'}), '报告已保存')
-    assert.equal(outcomeTaskLabel({status: 'CONFIRMATION_READY', phase: 'WAITING_CONFIRMATION'}), '反馈已保存，等待恢复')
+    assert.equal(outcomeTaskLabel({status: 'CONFIRMATION_READY', phase: 'WAITING_CONFIRMATION'}), '反馈已保存，正在收尾')
 })
 
 test('read evidence is submitted only after its exact ACK is accepted; restored outbox returns durable same-scope anchors', async () => {

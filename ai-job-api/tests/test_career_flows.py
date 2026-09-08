@@ -249,11 +249,17 @@ def test_import_preserves_captured_resume_and_unknown_actual_exposure(career, wo
         )
     first = response(career.post(CAREER + "/imports/legacy", json={"requestId": "import-1"}))
     again = response(career.post(CAREER + "/imports/legacy", json={"requestId": "import-2"}))
-    assert first["importedApplications"] == 1 and again["reusedApplications"] == 1
+    assert (
+        first["importedApplications"] == 1
+        and first["importedContacts"] == 1
+        and again["reusedApplications"] == 1
+        and again["importedContacts"] == 0
+    )
     app = response(career.get(CAREER + "/applications"))[0]
     assert (
         app["platformAccount"] == "UNKNOWN"
-        and app["contactedAt"] is None
+        and app["contactedAt"] == 1
+        and app["currentStage"] == "CONTACT_INITIATED"
         and app["resumeExposure"]["state"] == "UNKNOWN"
     )
     assert (
@@ -262,3 +268,40 @@ def test_import_preserves_captured_resume_and_unknown_actual_exposure(career, wo
         ]
         == "旧履历原文"
     )
+
+
+def test_import_recovers_exact_legacy_ai_session_replies_once(career, world):
+    history = json.dumps(
+        [
+            {"role": "user", "content": "您好，想约您明天下午参加面试"},
+            {"role": "assistant", "content": "好的，可以参加。"},
+            {"role": "user", "content": "面试时间定在三点"},
+        ],
+        ensure_ascii=False,
+    )
+    with sqlite3.connect(world["path"]) as c:
+        c.execute(
+            "INSERT INTO msg_session(msg_context,ai_type,status,user_id,session_key,is_active,created_id,created_date,updated_id,updated_date) VALUES(?,1,1,3,'legacy-chat-job:765172874',1,3,'2026-09-01 10:00:00',3,'2026-09-01 10:05:00')",
+            (history,),
+        )
+    first = response(career.post(CAREER + "/imports/legacy", json={"requestId": "sessions-1"}))
+    again = response(career.post(CAREER + "/imports/legacy", json={"requestId": "sessions-2"}))
+    assert first["importedSessionApplications"] == 1
+    assert first["importedSessionContacts"] == 1
+    assert first["importedSessionReplies"] == 2
+    assert first["importedSessionOutcomes"] == 2
+    assert again["importedSessionApplications"] == 0
+    assert again["importedSessionContacts"] == 0
+    assert again["importedSessionReplies"] == 0
+    assert again["importedSessionOutcomes"] == 0
+    app = response(career.get(CAREER + "/applications"))[0]
+    assert app["encryptJobId"] == "legacy-chat-job"
+    assert app["platformAccount"] == "765172874"
+    assert app["currentStage"] == "INTERVIEW_INVITED"
+    assert [event["eventType"] for event in app["events"]] == [
+        "CONTACT_INITIATED",
+        "HR_REPLIED",
+        "INTERVIEW_INVITED",
+        "HR_REPLIED",
+        "INTERVIEW_INVITED",
+    ]

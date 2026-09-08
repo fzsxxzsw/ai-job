@@ -73,6 +73,8 @@ import {
 import {makeGreetingTaskKey, migrateAndDedupeGreetingTasks} from "./greetingIdentity";
 import {findBossMountTarget} from "../runtime/routeHost";
 import {isSalaryWithinConfiguredRange} from "./salaryPolicy";
+import {serializableBossJobDetail} from './boss/automationJob';
+import {weekendBenefitStatus} from './weekendPolicy';
 
 let pushResultCounter: any;
 let userStore: any;
@@ -982,14 +984,14 @@ class BossPlatform extends AbsPlatform {
                 // This hook runs once per persisted ACK. Contact success is already recorded;
                 // a failed bounded lookup neither retries contact nor starts a polling loop.
                 try {
-                    const result = await this.requestBossData(context.job)
+                    const result = await this.requestBossData(context.job as BossJobDetail)
                     const bossId = exactPlatformId(result?.data?.bossId)
                     if (!bossId || !capturedScope || capturedScope !== captureAutomationScope() || context.account !== String(Tools.window._PAGE?.uid || '')) return
                     const conversationKey = makeConversationKey(context.job.encryptBossId, context.job.securityId)
                     await bindAutomationContact(action.actionId, bossId, conversationKey)
                     context.bossId = bossId; context.conversationKey = conversationKey
                     context.contact = {bossId, encryptBossId: context.job.encryptBossId, securityId: context.job.securityId,
-                        encryptJobId: context.job.encryptJobId, jobTitle: this.getJobKey(context.job)} as unknown as BossUserInfo
+                        encryptJobId: context.job.encryptJobId, jobTitle: this.getJobKey(context.job as BossJobDetail)} as unknown as BossUserInfo
                     observeOutcomeContacts([{uid: bossId, encryptJobId: context.job.encryptJobId,
                         encryptBossId: context.job.encryptBossId, securityId: context.job.securityId}], context.account, captureOutcomeContext())
                 } catch { holdUnifiedAutomation('沟通已成功，招呼等待可靠联系人关联；不会重新发起沟通') }
@@ -1001,7 +1003,7 @@ class BossPlatform extends AbsPlatform {
         const job = context.job
         if (!job || !browserAutomationReady(context, action) || this.pushStatus !== PushStatus.PUSHING || this._pushMock
             || Tools.isHardBlockedCompany(job.brandName) || matchEmploymentExclusion(userStore.user.preference, job)
-            || this.isLimit(job).limit || String(job.encryptJobId) !== action.payload.encryptJobId) return false
+            || this.isLimit(job as BossJobDetail).limit || String(job.encryptJobId) !== action.payload.encryptJobId) return false
         if (action.kind === 'CONTACT_JOB') return true
         return action.kind === 'SEND_GREETING' && !!context.contact && !!action.payload.bossId
             && String(context.contact.bossId) === action.payload.bossId
@@ -1217,12 +1219,11 @@ class BossPlatform extends AbsPlatform {
     }
 
     private hasWeekendBenefit(text: string): boolean {
-        const negativeOnly = /(大小周|单双休|单休)/.test(text)
-        const strongPositive = /(周末双休|固定双休|标准双休|周休(?:二|2)日|做五休二|五天工作制|周一至周五)/.test(text)
-        if (negativeOnly && !strongPositive) {
-            return false
-        }
-        return strongPositive || /双休/.test(text)
+        return this.weekendBenefitStatus(text) === 'POSITIVE'
+    }
+
+    private weekendBenefitStatus(text: string): 'POSITIVE' | 'NEGATIVE' | 'UNKNOWN' {
+        return weekendBenefitStatus(text)
     }
 
     private hasInsuranceBenefit(text: string): boolean {
@@ -1553,8 +1554,12 @@ class BossPlatform extends AbsPlatform {
         }
 
         const benefitText = this.buildBenefitText(jobDetail, jobDetailExt)
-        if (userStore.user.preference.weekendMode === 'required' && !this.hasWeekendBenefit(benefitText)) {
-            throw new NotMatchException(jobTitle, '岗位未明确标注双休', '不满足周末双休要求')
+        const weekendStatus = this.weekendBenefitStatus(benefitText)
+        if (userStore.user.preference.weekendMode === 'required' && weekendStatus === 'NEGATIVE') {
+            throw new NotMatchException(jobTitle, '岗位明确标注单休、大小周或不保证双休', '不满足周末双休要求')
+        }
+        if (userStore.user.preference.weekendMode === 'required' && weekendStatus === 'UNKNOWN') {
+            this.logRecorder.info(`工作【${jobTitle}】未明确说明休息制度，保留投递并降低优先级`)
         }
         if (userStore.user.preference.insuranceMode === 'required' && !this.hasInsuranceBenefit(benefitText)) {
             throw new NotMatchException(jobTitle, '岗位未明确标注五险一金', '不满足五险一金要求')
@@ -1769,7 +1774,7 @@ class BossPlatform extends AbsPlatform {
                     localAssessment: {passed: true, reason: '本轮岗位已通过浏览器硬过滤'},
                     greeting: {enabled: customGreetingEnabled(mode), text: String(userStore.user.preference.cg || '')},
                     preparedResumeVersionId: selection.preparedResumeVersionId, strategyPlanId: selection.strategyPlanId}},
-                {kind: 'APPLICATION', account, runId, policy: currentAutomationPolicy(), job: structuredClone(jobDetail),
+                {kind: 'APPLICATION', account, runId, policy: currentAutomationPolicy(), job: serializableBossJobDetail(jobDetail),
                     encryptJobId: String(jobDetail.encryptJobId), bossId: null, conversationKey: null,
                     snapshot: this.applicationSnapshotContexts.get(String(jobDetail.encryptJobId)), greetingEnabled: customGreetingEnabled(mode)})
             for (;;) {

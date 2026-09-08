@@ -97,7 +97,7 @@ def save(client, job):
     return artifact, committed.json()["data"]
 
 
-def test_positive_question_real_stages_and_human_confirmation(outcome_client, world):
+def test_positive_question_auto_completes_and_feedback_stays_optional(outcome_client, world):
     client = outcome_client
     case_id = ingest(client, observation())["cases"][0]["caseId"]
     job = claim(client)
@@ -107,33 +107,19 @@ def test_positive_question_real_stages_and_human_confirmation(outcome_client, wo
     assert world["fake"].calls == []
     parked = operation(client, job, "park", artifactId=artifact, interruptId="sqlite-interrupt-id")
     assert parked.json()["data"]["status"] == "WAITING_CONFIRMATION"
-    assert claim(client) is None
+    resumed = claim(client)
+    assert resumed["jobId"] == job["jobId"] and resumed["executionMode"] == "START"
+    assert resumed["context"]["graphVersion"] == "outcome-graph-v2"
+    assert resumed["leaseToken"] != job["leaseToken"]
+    completed = operation(client, resumed, "complete", artifactId=artifact)
+    assert completed.json()["data"]["status"] == "COMPLETED"
+    case = client.get(f"/api/job/outcomes/cases/{case_id}").json()["data"]
+    assert case["report"]["feedbackStatus"] == "OPTIONAL"
     response = client.post(
         f"/api/job/outcomes/reports/{saved['reportId']}/feedback",
         json={"requestId": "feedback-1", "action": "CONFIRM"},
     )
     assert response.status_code == 200
-    resumed = claim(client)
-    assert resumed["jobId"] == job["jobId"] and resumed["executionMode"] == "RESUME_CONFIRMATION"
-    assert resumed["leaseToken"] != job["leaseToken"]
-    completed = operation(
-        client,
-        resumed,
-        "complete",
-        artifactId=artifact,
-        feedbackId=resumed["humanFeedback"]["feedbackId"],
-    )
-    assert completed.json()["data"]["status"] == "COMPLETED"
-    assert (
-        operation(
-            client,
-            resumed,
-            "complete",
-            artifactId=artifact,
-            feedbackId=resumed["humanFeedback"]["feedbackId"],
-        ).status_code
-        == 200
-    )
     case = client.get(f"/api/job/outcomes/cases/{case_id}").json()["data"]
     assert case["report"]["feedbackStatus"] == "CONFIRMED"
     assert case["status"] == "READY"

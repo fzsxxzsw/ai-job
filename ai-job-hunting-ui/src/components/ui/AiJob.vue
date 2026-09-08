@@ -104,11 +104,6 @@
                 </el-button>
             </div>
         </div>
-        <el-alert v-else-if="dailyLimitReason"
-                  class="runtime-alert"
-                  title="今日新增沟通已暂停"
-                  :description="dailyLimitReason"
-                  type="warning" :closable="false" show-icon/>
         <el-alert v-else-if="pendingSendCount > 0"
                   class="runtime-alert"
                   :title="`发送队列正在处理 ${pendingSendCount} 条消息`"
@@ -130,7 +125,6 @@
             </el-button>
         </el-tooltip>
 
-        <el-tag v-if="IS_PERSONAL_MODE" type="success" effect="plain">个人自用版 · 无需购买坐席</el-tag>
         <el-button v-if="!IS_PERSONAL_MODE" type="warning" :icon="Collection as any" color="#626aef"
                    @click.stop="handlerAISeatClick" :disabled="!serverStore.isOnline">产品列表</el-button>
         <el-tooltip effect="dark" content="服务器在线且消息通道连接时，AI 会处理招聘方发来的消息" placement="bottom">
@@ -308,7 +302,6 @@ import {GM_getValue, GM_info} from "$";
 import {readDeliveryAudit} from "../../platform/deliveryAudit";
 import {countBlockingDeliveries, type RetryQueueEntry} from "../../platform/deliveryQueue";
 import {clearBossRiskCircuit, getBossRiskStop} from "../../platform/bossRiskControl";
-import {isLegacyLocalDailyLimit, makeBossDailyLimitKey} from "../../platform/bossDailyLimit";
 import {
     SAFE_MIN_NEXT_PAGE_INTERVAL_SECONDS,
     SAFE_MIN_PUSH_INTERVAL_SECONDS,
@@ -391,7 +384,6 @@ const aiReplyReceiptCount = ref(0)
 const todayPushSuccessCount = ref(0)
 const todayPushFailCount = ref(0)
 const riskStopReason = ref('')
-const dailyLimitReason = ref('')
 const runtimeStatus = Tools.window.__AI_JOB_HELPER_RUNTIME_STATUS__
 const runtimeScriptVersion = [
     runtimeStatus?.version || GM_info?.script?.version || '未知版本',
@@ -1033,14 +1025,6 @@ onMounted(() => {
             pushResultCounter.failCount,
         )) || 0
         riskStopReason.value = getBossRiskStop()?.reason || ''
-        const storedDailyLimit = TampermonkeyApi.GmGetValue(makeBossDailyLimitKey(), false)
-        if (isLegacyLocalDailyLimit(storedDailyLimit)) {
-            TampermonkeyApi.GmSetValue(makeBossDailyLimitKey(), false)
-        }
-        const activeDailyLimit = isLegacyLocalDailyLimit(storedDailyLimit) ? false : storedDailyLimit
-        dailyLimitReason.value = activeDailyLimit === true
-            ? 'BOSS 已标记今日沟通达到平台上限'
-            : typeof activeDailyLimit === 'string' ? activeDailyLimit : ''
     }
     refreshAiSeatHealth()
     aiSeatHealthTimer = window.setInterval(refreshAiSeatHealth, 1000)

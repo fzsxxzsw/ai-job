@@ -55,8 +55,8 @@ export type OutcomeTask = {
 }
 export function outcomePhaseLabel(phase: string): string {
     return ({COLLECTING: '收集事实', ANALYZING: '分析', VALIDATING: '校验证据', SAVING: '保存报告', SAVED: '报告已保存',
-        WAITING_CONFIRMATION: '等待你确认', COMPLETED: '已完成', RETRY: '等待重试', FAILED: '处理失败',
-        CONFIRMATION_READY: '反馈已保存，等待恢复', SUPERSEDED: '已由新观察替代'} as Record<string, string>)[phase] || '等待处理'
+        WAITING_CONFIRMATION: '旧任务正在自动收尾', COMPLETED: '已完成', RETRY: '等待重试', FAILED: '处理失败',
+        CONFIRMATION_READY: '反馈已保存，正在收尾', SUPERSEDED: '已由新观察替代'} as Record<string, string>)[phase] || '等待处理'
 }
 export function outcomeTaskLabel(task: Pick<OutcomeTask, 'status' | 'phase'>): string {
     if (task.status === 'READY' || task.status === 'QUEUED') return '等待 LangGraph 领取'

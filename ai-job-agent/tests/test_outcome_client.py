@@ -211,3 +211,43 @@ def test_claim_rejects_projection_identity_or_rejection_branch_mismatch():
     data["context"]["analysisKind"] = "REJECTION_CAUSES"
     with pytest.raises(ValidationError):
         OutcomeClaim.model_validate(data)
+
+
+def test_completion_uses_the_report_created_after_the_job_was_claimed():
+    async def scenario():
+        claim = OutcomeClaim.model_validate(claim_data())
+
+        def handle(request):
+            assert request.url == "http://api:9100/internal/outcomes/jobs/job-1/complete"
+            assert json.loads(request.content) == {
+                "leaseToken": LEASE,
+                "revision": 1,
+                "inputHash": "a" * 64,
+                "artifactId": "artifact-1",
+            }
+            return httpx.Response(
+                200,
+                json=envelope(
+                    {
+                        "jobId": "job-1",
+                        "caseId": "case-1",
+                        "caseRevision": 1,
+                        "reportId": "report-created-during-this-run",
+                        "status": "COMPLETED",
+                        "isCurrent": True,
+                    }
+                ),
+            )
+
+        client = OutcomeAPIClient(
+            "http://api:9100", SecretStr(TOKEN), transport=httpx.MockTransport(handle)
+        )
+        try:
+            completed = await client.complete(
+                claim, "artifact-1", "report-created-during-this-run"
+            )
+            assert completed.reportId == "report-created-during-this-run"
+        finally:
+            await client.close()
+
+    asyncio.run(scenario())

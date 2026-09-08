@@ -182,12 +182,12 @@
 
             <div class="rejection-card-actions">
                 <el-button type="success" :loading="rejectionFeedbackLoading" @click="handleRejectionFeedback('CONFIRM')">
-                    确认
+                    结果准确
                 </el-button>
                 <el-button type="warning" plain :loading="rejectionFeedbackLoading" @click="handleRejectionFeedback('CORRECT')">
-                    纠正原因
+                    有误，纠正
                 </el-button>
-                <el-button :loading="rejectionFeedbackLoading" @click="handleRejectionFeedback('IGNORE')">忽略</el-button>
+                <el-button :loading="rejectionFeedbackLoading" @click="handleRejectionFeedback('IGNORE')">不采用</el-button>
             </div>
             <small class="rejection-completeness">当前页对话可能不完整；结论不会自动修改简历或投递策略。</small>
         </aside>
@@ -339,10 +339,11 @@ function rejectionStatusLabel(status: string): string {
         CONFIRMED: '已确认',
         CORRECTED: '已纠正',
         IGNORED: '已忽略',
-        PENDING: '待确认',
-        ANALYZED: '待确认',
+        PENDING: '分析处理中',
+        OPTIONAL: '分析已完成，可选反馈',
+        ANALYZED: '分析已完成，可选反馈',
     }
-    return labels[String(status || '').toUpperCase()] || '待确认'
+    return labels[String(status || '').toUpperCase()] || '分析已完成'
 }
 
 const refreshRejectionDiagnostics = () => {

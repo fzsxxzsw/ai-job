@@ -28,10 +28,10 @@ test('live state updates without any report and never substitutes a saved report
     assert.equal(outcomeLivePresentation({report}).status, '下一步未知 · 阅读状态未知')
 })
 
-test('report UI wires live case state separately from explicitly dated report state', () => {
+test('chat report UI keeps only the current conversation summary and hides backend details', () => {
     const source = readFileSync(new URL('./OutcomeReports.vue', import.meta.url), 'utf8')
-    assert.match(source, /当前状态：\{\{ outcomeLivePresentation\(item\)\.status \}\}/)
-    assert.match(source, /报告生成时：\{\{ waitingLabel\(item\.report\.waitingOn\) \}\}/)
-    assert.match(source, /报告观察截至 \{\{ formatTime\(item\.report\.asOf\) \}\}/)
-    assert.doesNotMatch(source, /outcomeLivePresentation\(item\.report\)/)
+    assert.match(source, /当前会话：\{\{ currentReport\.summary \}\}/)
+    assert.match(source, /后台会自动识别回复、面试、Offer 和拒绝/)
+    assert.doesNotMatch(source, /v-for="item in state\.items"/)
+    assert.doesNotMatch(source, /phaseHistory/)
 })

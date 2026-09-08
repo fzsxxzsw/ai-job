@@ -28,11 +28,11 @@ test('public evidence renders HR, job, resume and positive quotes with their rea
     assert.equal(html.includes('undefined'), false)
     assert.match(source, /:key="item.evidenceId"/)
 })
-test('superseded report has an explicit previous-version notice and feedback never claims to resume a different task', () => {
+test('superseded report remains explicit while chat UI leaves report details to the backend', () => {
     assert.equal(outcomeReportNotice({revision: 2, report: {revision: 1, isCurrent: false}}), '上一版报告，新分析处理中')
     assert.equal(outcomeReportNotice({revision: 2, report: {revision: 2, isCurrent: true}}), '当前版本报告')
     const reports = readFileSync(new URL('./OutcomeReports.vue', import.meta.url), 'utf8')
-    assert.match(reports, /outcomeReportNotice\(item\)/)
-    assert.match(reports, /本版本报告的反馈已保存/)
-    assert.equal(reports.includes('任务将从确认阶段继续'), false)
+    assert.doesNotMatch(reports, /OutcomeEvidenceList/)
+    assert.doesNotMatch(reports, /sendOutcomeFeedback/)
+    assert.doesNotMatch(reports, /任务将从确认阶段继续/)
 })

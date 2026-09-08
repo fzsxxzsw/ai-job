@@ -76,3 +76,29 @@ export function captureCurrentOutcomePanel(root: ParentNode, ownAccount: unknown
     return {panel, binding: current, recheck, messages: rows.map(({message}) => ({...message!,
         encryptJobId: current.encryptJobId, conversationKey: current.conversationKey}))}
 }
+
+/** Recover only the exact final row so an older inbound is never answered. */
+export function captureCurrentReplyCandidate(root: ParentNode, ownAccount: unknown) {
+    const own = exactPlatformId(ownAccount)
+    const selected = selectedBinding(root)
+    const panel = root.querySelector('.chat-conversation')
+    const panelBinding = binding(source(panel))
+    if (!own || !selected || !panel || panelBinding && JSON.stringify(selected) !== JSON.stringify(panelBinding)) return null
+    const current = panelBinding || selected
+    const finalRow = () => Array.from(panel.querySelectorAll('[data-mid], [data-message-id]'))
+        .filter(row => !row.closest('#ai-job, [contenteditable="true"]'))
+        .at(-1)
+    const row = finalRow()
+    const message = row ? rowFacts(row, own, current.bossId) : null
+    if (!message || message.from.uid !== current.bossId || message.to.uid !== own || !message.text.trim()
+        || message.encryptJobId && message.encryptJobId !== current.encryptJobId
+        || message.conversationKey && message.conversationKey !== current.conversationKey
+        || !panelBinding && (message.encryptJobId !== current.encryptJobId || message.conversationKey !== current.conversationKey)) return null
+    const fingerprint = JSON.stringify(message)
+    const recheck = () => root.querySelector('.chat-conversation') === panel
+        && JSON.stringify(selectedBinding(root)) === JSON.stringify(selected)
+        && JSON.stringify(binding(source(panel))) === JSON.stringify(panelBinding)
+        && finalRow() === row && JSON.stringify(rowFacts(row!, own, current.bossId)) === fingerprint
+    return recheck() ? {binding: current, message: {...message, encryptJobId: current.encryptJobId,
+        conversationKey: current.conversationKey}, recheck} : null
+}

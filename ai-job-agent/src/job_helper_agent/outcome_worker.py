@@ -89,7 +89,8 @@ class OutcomeWorker:
                 await asyncio.sleep(min(60, max(self.scan_seconds, 2**failures)))
 
     async def _drive_graph(self, claim: OutcomeClaim) -> None:
-        config = {"configurable": {"thread_id": f"outcome:{claim.jobId}"}}
+        thread_prefix = "outcome" if claim.context.graphVersion == "outcome-graph-v1" else "outcome:v2"
+        config = {"configurable": {"thread_id": f"{thread_prefix}:{claim.jobId}"}}
         try:
             snapshot = await self.graph.aget_state(config)
         except Exception:
@@ -100,6 +101,7 @@ class OutcomeWorker:
             "revision": claim.revision,
             "input_hash": claim.inputHash,
             "analysis_kind": claim.context.analysisKind,
+            "graph_version": claim.context.graphVersion,
             "artifact_id": claim.artifactId,
             "status": "PENDING",
         }
@@ -110,9 +112,12 @@ class OutcomeWorker:
                 initial = None
             elif snapshot.values.get("status") == "COMPLETED":
                 artifact = snapshot.values.get("artifact_id")
-                if not artifact:
+                report = snapshot.values.get("report_id")
+                if not artifact or not report:
                     raise OutcomeAPIError("INVALID_CHECKPOINT")
-                await bounded_request(lambda: self.client.complete(claim, artifact))
+                await bounded_request(
+                    lambda: self.client.complete(claim, artifact, report)
+                )
                 return
             elif snapshot.values.get("status") in {"SUPERSEDED", "FAILED"}:
                 raise OutcomeAPIError("REVISION_SUPERSEDED", superseded=True)

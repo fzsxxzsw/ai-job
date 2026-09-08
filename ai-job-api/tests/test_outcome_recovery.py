@@ -51,21 +51,15 @@ def test_save_before_interrupt_crash_reclaims_same_artifact_and_report(
         client, resumed, "park", artifactId=artifact, interruptId="durable-interrupt"
     )
     protocol.ParkReceipt.model_validate(parked.json()["data"])
-    assert claim(client) is None
+    automatic = claim(client)
+    assert automatic["context"]["graphVersion"] == "outcome-graph-v2"
+    completion = operation(client, automatic, "complete", artifactId=artifact)
+    protocol.Completion.model_validate(completion.json()["data"])
     client.post(
         f"/api/job/outcomes/reports/{saved['reportId']}/feedback",
         json={"requestId": "human", "action": "CONFIRM"},
     )
-    confirmed = claim(client)
-    protocol.OutcomeClaim.model_validate(confirmed)
-    completion = operation(
-        client,
-        confirmed,
-        "complete",
-        artifactId=artifact,
-        feedbackId=confirmed["humanFeedback"]["feedbackId"],
-    )
-    protocol.Completion.model_validate(completion.json()["data"])
+    assert claim(client) is None
     with sqlite3.connect(world["path"]) as db:
         assert db.execute("SELECT COUNT(*) FROM outcome_report").fetchone() == (1,)
 

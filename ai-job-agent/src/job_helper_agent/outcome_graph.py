@@ -23,6 +23,7 @@ class OutcomeState(TypedDict, total=False):
     revision: int
     input_hash: str
     analysis_kind: AnalysisKind
+    graph_version: Literal["outcome-graph-v1", "outcome-graph-v2"]
     artifact_id: str | None
     report_id: str
     feedback_id: str
@@ -43,12 +44,14 @@ def matches_claim(state: OutcomeState, claim: OutcomeClaim) -> bool:
         state.get("revision"),
         state.get("input_hash"),
         state.get("analysis_kind"),
+        state.get("graph_version", "outcome-graph-v1"),
     ) == (
         claim.jobId,
         claim.caseId,
         claim.revision,
         claim.inputHash,
         claim.context.analysisKind,
+        claim.context.graphVersion,
     )
 
 
@@ -157,7 +160,32 @@ async def finish_confirmation(
         raise OutcomeAPIError("INVALID_HUMAN_FEEDBACK")
     try:
         completed = await bounded_request(
-            lambda: context.client.complete(context.claim, state["artifact_id"])
+            lambda: context.client.complete(
+                context.claim, state["artifact_id"], state["report_id"]
+            )
+        )
+    except OutcomeAPIError as error:
+        if error.superseded:
+            return {"status": "SUPERSEDED", "artifact_id": None}
+        raise
+    return {"status": "COMPLETED", "report_id": completed.reportId}
+
+
+async def finish_analysis(
+    state: OutcomeState, runtime: Runtime[OutcomeRuntime]
+) -> dict:
+    """Finish a validated report without turning optional feedback into a blocker."""
+    context = runtime.context
+    if not matches_claim(state, context.claim):
+        raise OutcomeAPIError("CHECKPOINT_MISMATCH")
+    artifact_id = state.get("artifact_id")
+    if not artifact_id:
+        raise OutcomeAPIError("INVALID_CHECKPOINT")
+    try:
+        completed = await bounded_request(
+            lambda: context.client.complete(
+                context.claim, artifact_id, state["report_id"]
+            )
         )
     except OutcomeAPIError as error:
         if error.superseded:
@@ -185,7 +213,9 @@ def publication_route(state: OutcomeState) -> str:
 
 
 def confirmation_route(state: OutcomeState) -> str:
-    return END if state.get("status") == "SUPERSEDED" else "await_human"
+    if state.get("status") == "SUPERSEDED":
+        return END
+    return "await_human" if state.get("graph_version") == "outcome-graph-v1" else "finish_analysis"
 
 
 def build_outcome_graph(checkpointer):
@@ -197,6 +227,7 @@ def build_outcome_graph(checkpointer):
     graph.add_node("publish_report", publish_report)
     graph.add_node("await_human", await_human)
     graph.add_node("finish_confirmation", finish_confirmation)
+    graph.add_node("finish_analysis", finish_analysis)
     graph.add_edge(START, "load_projection")
     graph.add_conditional_edges("load_projection", analysis_route)
     graph.add_conditional_edges("facts_only", validation_route)
@@ -205,4 +236,5 @@ def build_outcome_graph(checkpointer):
     graph.add_conditional_edges("publish_report", confirmation_route)
     graph.add_edge("await_human", "finish_confirmation")
     graph.add_edge("finish_confirmation", END)
+    graph.add_edge("finish_analysis", END)
     return graph.compile(checkpointer=checkpointer, name="application_outcomes")

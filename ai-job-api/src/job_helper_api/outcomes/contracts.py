@@ -131,7 +131,7 @@ class Park(Artifact):
 
 
 class Complete(Artifact):
-    feedbackId: str = Field(min_length=1, max_length=36)
+    feedbackId: str | None = Field(default=None, min_length=1, max_length=36)
 
 
 class Retry(Lease):

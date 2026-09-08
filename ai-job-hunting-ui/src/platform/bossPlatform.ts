@@ -7,6 +7,7 @@ import {captureAutomationScope, observeUnifiedContacts} from './unifiedRuntime';
 import {performUnifiedText, performUnifiedExchange, prepareUnifiedChat} from './unifiedBossActions';
 import {exactPlatformId, platformMessageTime} from './boss/outcomeCollector';
 import {advanceInboundWatermark, type InboundWatermark} from './inboundGeneration';
+import {captureCurrentReplyCandidate} from './boss/outcomeDom';
 import {replyNoticeText, UI_FEEDBACK_Z_INDEX} from "../ui/feedback";
 import {Message, MessageRead, TechwolfChatProtocol} from "../webSocket/protobuf";
 import {MessageCache, Tools} from "./utils";
@@ -744,12 +745,9 @@ export class BossOption {
     }
 
     /**
-     * BOSS 聊天页在网络抖动、标签切换或自身重载期间，WebSocket Hook 可能错过一条
-     * 已经落到联系人列表里的 HR 消息。仅依赖实时 WS 会导致该消息永远没有 AI 回复。
-     *
-     * 这里周期检查带未读角标的联系人预览，并用最近联系人缓存恢复 bossId。它只处理
-     * 纯文本预览；简历附件、系统状态、草稿和本人的送达状态全部跳过。正常 WS 已处理
-     * 的消息会被 MessageCache 去重，不会重复请求模型。
+     * Recover a missed WebSocket packet from the selected conversation only when
+     * the page-owned message, its MID, both participants and visible text agree.
+     * The final-row requirement avoids replying after a later manual response.
      */
     private static startDomCatchUpWorker(): void {
         if (this.domCatchUpTimer !== null) {
@@ -860,25 +858,20 @@ export class BossOption {
             }
 
             this.domCatchUpRunning = true
-            const unreadRows = Array.from(document.querySelectorAll('li')).filter(row =>
-                row.querySelector('.notice-badge, [class*="notice-badge"], [class*="unread"]')
-            ) as HTMLElement[]
             const option = new BossOption()
-            for (const row of unreadRows.slice(0, 10)) {
-                const rowText = (row.innerText || row.textContent || '').trim()
-                const preview = (row.querySelector('.last-msg-text')?.textContent || '').trim()
-                if (!this.isRecoverableUnreadPreview(preview)) {
-                    continue
-                }
-                const contact = this.findContactByRowText(rowText)
-                if (!contact) {
-                    continue
-                }
-                if (Tools.isHardBlockedCompany(contact.jobTitle, rowText)) {
-                    this.logRecorder.warn(`【硬屏蔽】${contact.jobTitle}：跳过未读消息追赶`)
-                    continue
-                }
-                await option.handlerRecoveredTextMessage(contact, preview)
+            const ownAccount = exactPlatformId(Tools.window._PAGE?.uid)
+            const candidate = captureCurrentReplyCandidate(document, ownAccount)
+            if (candidate?.recheck()) {
+                const bossId = Number(candidate.binding.bossId)
+                const raw = candidate.message
+                await option.handlerBossMessage({messages: [{
+                    mid: raw.mid,
+                    time: raw.time,
+                    type: 1,
+                    from: {uid: bossId},
+                    to: {uid: Number(ownAccount)},
+                    body: {type: 1, text: raw.text},
+                }]} as unknown as TechwolfChatProtocol, bossId, raw.text)
             }
         } catch (error) {
             this.logRecorder.warn('AI坐席未读消息追赶失败，将继续重试', error)

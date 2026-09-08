@@ -61,7 +61,7 @@ class OutcomeWorkflow(OutcomeStorage):
                 facts["projection"] = projection
                 await self.queue(case, facts, projection, connection, now)
             condition = or_(
-                jobs.c.status.in_(["READY", "RETRY", "CONFIRMATION_READY"]),
+                jobs.c.status.in_(["READY", "RETRY", "CONFIRMATION_READY", "WAITING_CONFIRMATION"]),
                 (jobs.c.status == "RUNNING") & (jobs.c.lease_until <= now),
             )
             candidates = (
@@ -77,6 +77,7 @@ class OutcomeWorkflow(OutcomeStorage):
                 .all()
             )
             for job in candidates:
+                claimed_status = job["status"]
                 case = await self.row("outcome_case", uid, job["case_id"], connection)
                 if case["revision"] != job["revision"]:
                     await self.update(
@@ -132,6 +133,10 @@ class OutcomeWorkflow(OutcomeStorage):
                         "graphVersion",
                     )
                 }
+                # Reports created by graph v1 used human feedback as a mandatory
+                # workflow gate. Reclaim them through v2 when no feedback exists.
+                if claimed_status == "WAITING_CONFIRMATION" and not feedback:
+                    public_context["graphVersion"] = "outcome-graph-v2"
                 public_context.update(
                     schemaVersion=1,
                     caseId=case["id"],
@@ -376,12 +381,9 @@ class OutcomeWorkflow(OutcomeStorage):
     async def complete(self, job_id: str, payload: Complete) -> dict:
         async with self.transaction(self.settings.owner_user_id) as connection:
             job, case = await self.checked(job_id, payload, connection, allow_completed=True)
-            if (
-                not job["report_id"]
-                or job["artifact_id"] != payload.artifactId
-                or not job["feedback_id"]
-                or job["feedback_id"] != payload.feedbackId
-            ):
+            if not job["report_id"] or job["artifact_id"] != payload.artifactId:
+                raise ApiError("ARTIFACT_MISMATCH", 409)
+            if payload.feedbackId is not None and job["feedback_id"] != payload.feedbackId:
                 raise ApiError("ARTIFACT_MISMATCH", 409)
             if job["status"] != "COMPLETED":
                 job = await self.update(
@@ -403,6 +405,22 @@ class OutcomeWorkflow(OutcomeStorage):
                         "updated_at": now_ms(),
                     },
                     connection,
+                )
+            report = await self.row(
+                "outcome_report", self.settings.owner_user_id, job["report_id"], connection
+            )
+            if report and report["feedback_status"] == "PENDING":
+                report = await self.update(
+                    "outcome_report",
+                    report,
+                    {"feedback_status": "OPTIONAL", "updated_at": now_ms()},
+                    connection,
+                )
+            if report:
+                from ..career.observations import record_outcome_report
+
+                await record_outcome_report(
+                    self, connection, self.settings.owner_user_id, case, report
                 )
             result = self.commit_response(job, case)
             result.pop("phase")

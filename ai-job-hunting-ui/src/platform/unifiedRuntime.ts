@@ -7,10 +7,12 @@ import {Message} from '../webSocket/protobuf'
 import {getBossRiskStop} from './bossRiskControl'
 import {exactPlatformId} from './boss/outcomeCollector'
 import {ACTION_KINDS, automationRequestId, createUnifiedAutomation, type AutomationAction, type AutomationExecution, type AutomationJob, type AutomationSubmission} from './unifiedAutomation'
+import type {SerializableBossJobDetail} from './boss/automationJob'
+import {deliveryRunAuthorized} from './automationReadiness'
 
 export type BrowserAutomationContext = {
     kind: 'REPLY' | 'APPLICATION'; account: string; policy: string; encryptJobId: string; conversationKey: string | null
-    bossId: string | null; contact?: BossUserInfo; job?: BossJobDetail; runId?: string
+    bossId: string | null; contact?: BossUserInfo; job?: SerializableBossJobDetail; runId?: string
     inboundMessageId?: string; inboundMessageMid?: string; question?: string
     snapshot?: {encryptJobId: string; jobBaseInfo: string; jobExtInfo: string; preMatchResult: unknown}
     greetingEnabled?: boolean
@@ -36,15 +38,15 @@ async function ensureIdentity() {
 function flags() {
     const push = PushRunStore()
     const continuationStopped = !!localStorage.getItem('ai-job-unified-stop:' + scope + ':' + push.runId)
-    return {replyEnabled: !!UserStore().user.aiSeatStatus && !getBossRiskStop(),
-        deliveryEnabled: (push.isActive || push.status === 'completed') && !continuationStopped && !push.stopRequested && !getBossRiskStop()}
+    const riskStopped = !!getBossRiskStop()
+    return {replyEnabled: !!UserStore().user.aiSeatStatus && !riskStopped,
+        deliveryEnabled: deliveryRunAuthorized(push, continuationStopped, riskStopped)}
 }
 export function browserAutomationReady(context: BrowserAutomationContext, action: AutomationAction): boolean {
     if (context.account !== account() || context.policy !== currentAutomationPolicy() || getBossRiskStop()
         || String(action.payload.encryptJobId) !== context.encryptJobId) return false
     const enabled = flags()
     if (context.kind === 'REPLY' ? !enabled.replyEnabled : !enabled.deliveryEnabled || context.runId !== PushRunStore().runId) return false
-    if (context.kind === 'APPLICATION' && action.kind === 'CONTACT_JOB' && !PushRunStore().isActive) return false
     if (action.payload.bossId && context.bossId && action.payload.bossId !== context.bossId) return false
     if (action.payload.conversationKey && context.conversationKey && action.payload.conversationKey !== context.conversationKey) return false
     if (['SEND_RESUME', 'ACCEPT_RESUME', 'ACCEPT_PHONE', 'ACCEPT_WECHAT'].includes(action.kind)) {
@@ -58,7 +60,7 @@ function getRuntime() {
     if (runtime) return runtime
     runtime = createUnifiedAutomation<BrowserAutomationContext>({
         scope: () => rawIdentity === identity() ? scope : '', account, executorId: crypto.randomUUID(), flags, storage: localStorage,
-        capabilities: () => ACTION_KINDS.filter(kind => kind !== 'CONTACT_JOB' || PushRunStore().isActive),
+        capabilities: () => ACTION_KINDS.filter(kind => kind !== 'CONTACT_JOB' || flags().deliveryEnabled),
         clientMid: () => Message.createClientMid(),
         acknowledgement: mid => Tools.window.AIJobHelperChatBridge?.getAcknowledgement?.(mid) || null,
         async request(path, body) {

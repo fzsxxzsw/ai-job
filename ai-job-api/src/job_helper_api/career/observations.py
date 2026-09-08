@@ -1,5 +1,7 @@
 """Facts derived from authenticated ACKs and exact, unambiguous conversation observations."""
 
+import re
+
 from sqlalchemy import select
 
 from ..automation.storage import digest
@@ -21,7 +23,41 @@ async def matched_application(store, c, uid, encrypt_job_id, conversation, boss,
         conditions.append(store.db.exact(table.c.platform_account, account))
     rows = (await c.execute(select(table).where(*conditions).limit(2))).mappings().all()
     # Multiple application cycles require a human association, never a latest-row guess.
-    return dict(rows[0]) if len(rows) == 1 else None
+    if len(rows) == 1:
+        return dict(rows[0])
+    if rows:
+        return None
+
+    # Contact ACKs can precede the first reliable BOSS conversation binding. Bind
+    # a later observation only when exactly one contacted application can own it.
+    fallback = [
+        table.c.user_id == uid,
+        store.db.exact(table.c.encrypt_job_id, encrypt_job_id),
+    ]
+    if account is not None:
+        fallback.append(store.db.exact(table.c.platform_account, account))
+    candidates = (await c.execute(select(table).where(*fallback).limit(3))).mappings().all()
+    eligible = []
+    for candidate in candidates:
+        if candidate["conversation_key"] not in {None, conversation} or candidate[
+            "boss_id"
+        ] not in {None, boss}:
+            continue
+        timeline = await store.timeline(uid, candidate["id"], c)
+        if any(
+            event["event_type"] == "CONTACT_INITIATED" and event["confirmation"] != "INFERRED"
+            for event in effective_events(timeline)
+        ):
+            eligible.append(dict(candidate))
+    if len(eligible) != 1:
+        return None
+    app = eligible[0]
+    await c.execute(
+        table.update()
+        .where(table.c.id == app["id"], table.c.user_id == uid)
+        .values(conversation_key=conversation, boss_id=boss)
+    )
+    return {**app, "conversation_key": conversation, "boss_id": boss}
 
 
 async def record_ack(service, c, uid, job, action, occurred_at):
@@ -149,3 +185,100 @@ async def record_observations(service, c, uid, observations):
                 "OBSERVED",
             )
             await service.db.set_control(c, uid, key, True)
+
+
+INTERVIEW_SIGNAL = re.compile(
+    r"面试|笔试|测评|到公司|来公司|现场聊|线下面谈|视频面谈|面谈时间|面试时间"
+)
+OFFER_SIGNAL = re.compile(
+    r"(?:发|给|收到|确认).{0,8}offer|录用通知|决定录用|办理入职|入职时间", re.I
+)
+
+
+async def _insert_once(service, store, c, uid, app, event_type, occurred_at, message):
+    identity = digest([app["id"], event_type, message["messageId"]])
+    key = "career:outcome:" + identity
+    if await service.db.control(uid, key, False, c):
+        return
+    await store.insert_event(
+        c,
+        uid,
+        app,
+        event_type,
+        occurred_at,
+        {
+            "source": "OUTCOME_REPORT",
+            "referenceId": message["messageId"],
+            "quote": message["text"],
+        },
+        "OBSERVED",
+    )
+    await service.db.set_control(c, uid, key, True)
+
+
+async def record_outcome_report(service, c, uid, case, report):
+    """Project a validated LangGraph report into the career timeline idempotently."""
+    if not service.settings.career_enabled:
+        return
+    store = Applications(service.db, service.settings)
+    app = await matched_application(
+        store,
+        c,
+        uid,
+        case["encrypt_job_id"],
+        case["conversation_key"],
+        case["boss_id"],
+    )
+    if not app:
+        return
+    events = effective_events(
+        [
+            event
+            for event in await store.timeline(uid, app["id"], c)
+            if event["confirmation"] != "INFERRED"
+        ]
+    )
+    contacts = [
+        event["occurred_at"] for event in events if event["event_type"] == "CONTACT_INITIATED"
+    ]
+    if not contacts:
+        return
+    contact_at = min(contacts)
+    facts = loads(case["facts_json"], {})
+    messages = sorted(
+        (
+            message
+            for message in facts.get("messages", [])
+            if message.get("role") == "HR"
+            and message.get("text")
+            and (message.get("sentAt") or message.get("observedAt") or 0) >= contact_at
+        ),
+        key=lambda message: (
+            message.get("sentAt") or message.get("observedAt") or 0,
+            message["messageId"],
+        ),
+    )
+    for message in messages:
+        occurred_at = message.get("sentAt") or message.get("observedAt")
+        await _insert_once(service, store, c, uid, app, "HR_REPLIED", occurred_at, message)
+
+    result = loads(report["report_json"], {})
+    evidence_ids = {
+        item.get("messageId")
+        for item in result.get("evidence", [])
+        if item.get("role") == "HR" and item.get("messageId")
+    }
+    evidence = [message for message in messages if message["messageId"] in evidence_ids]
+    if not evidence:
+        return
+    message = evidence[-1]
+    occurred_at = message.get("sentAt") or message.get("observedAt")
+    if result.get("outcome") == "REJECTED":
+        await _insert_once(service, store, c, uid, app, "REJECTED", occurred_at, message)
+    elif result.get("outcome") == "POSITIVE":
+        if OFFER_SIGNAL.search(message["text"]):
+            await _insert_once(service, store, c, uid, app, "OFFER_RECEIVED", occurred_at, message)
+        elif INTERVIEW_SIGNAL.search(message["text"]):
+            await _insert_once(
+                service, store, c, uid, app, "INTERVIEW_INVITED", occurred_at, message
+            )

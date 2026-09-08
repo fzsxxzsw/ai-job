@@ -24,6 +24,8 @@ export type CareerMetric = {numerator: number; denominator: number; rate: number
 export type CareerAnalytics = {metricVersion: 'career-cohort-v1'; windowDays: 7 | 14 | 30; cutoff: number
     comparability: {status: 'UNVERIFIED'; sampleThresholdMet: boolean; missingEvidence: string[]}
     cohortFilters: CareerMetric['cohortFilters']; sampleSize: number; descriptiveOnly: boolean; noCausalClaim: true
+    progressCounts: {contacted: number; replied: number; interviewed: number; offers: number}
+    progressSampleIds: {contacted: string[]; replied: string[]; interviewed: string[]; offers: string[]}
     metrics: {replyRate: CareerMetric; interviewRate: CareerMetric; offerRate: CareerMetric; resumeInterviewRate: CareerMetric}; withdrawnCount: number; everInterviewedCount: number
     excludedCounts: {immature: number; unverifiedContact: number; unknownExposure: number; mixedExposure: number}; uncertainties: string[]}
 export type CareerPatch = {patchId: string; sectionId: string; originalText: string; proposedText: string; reasonType: string
@@ -51,6 +53,7 @@ export type CareerDeletion = {jobId: string; status: 'DELETING' | 'DELETED'; che
 export type CareerPreview = {proposalId: string; baseVersionId: string; selectedPatchIds: string[]; content: string; previewHash: string}
 export type CareerSelection = {preparedResumeVersionId: string | null; strategyPlanId: string | null}
 export const metricRateLabel = (metric: Pick<CareerMetric, 'denominator' | 'rate'>) => metric.denominator === 0 || metric.rate === null ? '暂无可计算比例' : `${(metric.rate * 100).toFixed(1)}%`
+export const progressRateLabel = (numerator: number, denominator: number) => denominator === 0 ? '暂无记录' : `${(numerator / denominator * 100).toFixed(1)}%`
 export const previewMatchesSelection = (preview: CareerPreview | null, proposal: CareerProposal, selected: string[]) =>
     !!preview && preview.proposalId === proposal.proposalId && preview.baseVersionId === proposal.baseVersionId
     && JSON.stringify([...preview.selectedPatchIds].sort()) === JSON.stringify([...selected].sort())

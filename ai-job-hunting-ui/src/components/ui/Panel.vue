@@ -21,7 +21,6 @@ import RunRecord from "./RunRecord.vue";
 import {shallowRef} from "vue";
 import {isProdEnv} from "../../utils/tools";
 import Test from "../test/Test.vue";
-import ReadMe from "./UseDocument.vue";
 import InvitationExchange from "./InvitationExchange.vue";
 import AiConfig from "./AiConfig.vue";
 import CareerWorkspace from './CareerWorkspace.vue';
@@ -43,7 +42,6 @@ componentMap.set('3', {component: RunRecord, name: '运行记录'});
 componentMap.set('4', {component: AiConfig, name: 'AI 配置'});
 componentMap.set('8', {component: CareerWorkspace, name: '求职复盘'});
 if (!IS_PERSONAL_MODE) componentMap.set('5', {component: InvitationExchange, name: '邀请兑换'});
-componentMap.set('6', {component: ReadMe, name: '使用文档'});
 if (!isProdEnv()) {
     componentMap.set('7', {component: Test, name: '调试测试'});
 }

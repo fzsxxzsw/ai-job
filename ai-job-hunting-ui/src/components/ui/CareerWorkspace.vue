@@ -1,11 +1,11 @@
 <template>
     <section class="career-workspace" aria-label="求职复盘与简历策略">
-        <h3>求职记录与复盘</h3>
-        <p class="career-note">历史事实用于复盘。准备或选择简历版本，不代表附件已发送；应用策略不会开始投递，也不会更改现有硬筛选。</p>
+        <h3>求职进展</h3>
+        <p class="career-note">这里帮你看哪些投递收到了回复、面试或 Offer，并根据已确认的记录准备下一轮建议。数据不足时只保存记录，不会草率调整策略。</p>
         <p v-if="error" class="career-warning" role="status">{{ error }}</p>
         <el-button size="small" :loading="busy === 'load'" :disabled="!!busy" @click="load">刷新记录</el-button>
         <el-tabs v-model="tab">
-            <el-tab-pane label="投递记录与统计" name="records">
+            <el-tab-pane label="结果概览" name="records">
                 <div class="career-controls">
                     <label>观察窗口 <el-select v-model="windowDays" style="width:110px"><el-option v-for="days in [7,14,30]" :key="days" :label="`${days} 天`" :value="days"/></el-select></label>
                     <label>简历版本 <el-select v-model="metricVersionId" clearable placeholder="全部版本" style="width:190px"><el-option v-for="version in versions" :key="version.versionId" :value="version.versionId" :label="versionName(version)"/></el-select></label>
@@ -13,25 +13,38 @@
                     <el-button size="small" :disabled="!!busy" @click="importHistory">导入已有历史快照</el-button>
                 </div>
                 <template v-if="analytics">
-                    <p>截至 {{ formatTime(analytics.cutoff) }} · 成熟联系样本 {{ analytics.sampleSize }} · 曾进入面试／受邀 {{ analytics.everInterviewedCount }} · 已撤回 {{ analytics.withdrawnCount }}</p>
-                    <p class="career-note">这里只描述现有记录。同一观察窗口不代表岗位方向和级别已核实可比，这些比例不能证明某个简历版本或策略导致了结果。</p>
-                    <table class="career-table"><thead><tr><th>指标</th><th>分子 / 分母</th><th>比例</th><th>排除</th><th>记录</th></tr></thead>
-                        <tbody><tr v-for="row in metricRows" :key="row.key"><td>{{ row.label }}</td><td>{{ row.metric.numerator }} / {{ row.metric.denominator }}</td><td>{{ metricRateLabel(row.metric) }}</td><td>{{ row.metric.excludedCount }}</td><td><el-button size="small" :disabled="!!busy" @click="drilldown(row.metric)">查看样本</el-button></td></tr></tbody>
-                    </table>
-                    <p>未满观察窗口 {{ analytics.excludedCounts.immature }} · 沟通未核实 {{ analytics.excludedCounts.unverifiedContact }} · 附件版本未知 {{ analytics.excludedCounts.unknownExposure }} · 混合版本 {{ analytics.excludedCounts.mixedExposure }}</p>
-                    <ul><li v-for="item in analytics.uncertainties" :key="item">{{ item }}</li></ul>
+                    <div class="career-summary">
+                        <article><strong>{{ analytics.progressCounts.contacted }}</strong><span>已发起沟通</span></article>
+                        <article><strong>{{ analytics.progressCounts.replied }}</strong><span>收到 HR 回复</span></article>
+                        <article><strong>{{ analytics.progressCounts.interviewed }}</strong><span>获得面试机会</span></article>
+                        <article><strong>{{ analytics.progressCounts.offers }}</strong><span>收到 Offer</span></article>
+                    </div>
+                    <p v-if="analytics.sampleSize < 20" class="career-guidance">已有 {{ analytics.sampleSize }} 条记录完成观察周期。继续积累到 20 条后，再判断简历或投递策略是否需要调整。</p>
+                    <p v-else class="career-guidance">已有足够记录用于初步复盘。比例只反映已保存的结果，最终建议仍需结合岗位方向和真实反馈确认。</p>
                 </template>
-                <p v-if="!applications.length">当前页没有投递记录。导入历史快照会保留当时资料，附件发送版本仍按证据标记。</p>
-                <details v-for="application in applications" :key="application.applicationId">
-                    <summary>{{ application.jobTitle || application.encryptJobId }} · 已到达：{{ eventLabel(application.currentStage) }} · 结果：{{ eventLabel(application.outcome) }}</summary>
-                    <p>轮次 {{ application.cycleKey }} · 发起沟通 {{ formatTime(application.contactedAt) }} · 附件版本证明：{{ exposureLabel(application.resumeExposure) }}</p>
-                    <p>准备版本 {{ application.preparedResumeVersionId || '未选择' }} · 策略 {{ application.strategyPlanId || '未选择' }}</p>
-                    <ol><li v-for="event in application.events" :key="event.eventId">{{ formatTime(event.occurredAt) }} · {{ eventLabel(event.eventType) }} · {{ confirmationLabel(event.confirmation) }}<blockquote v-if="event.evidence.quote">{{ event.evidence.quote }}</blockquote><small v-if="event.supersedesEventId">纠正原事件 {{ event.supersedesEventId }}，原记录保留。</small><el-button size="small" :disabled="!!busy" @click="openEvent(application, event.eventId)">追加纠正</el-button></li></ol>
-                    <el-button size="small" :disabled="!!busy" @click="openEvent(application)">确认结果或实际附件版本</el-button>
+                <details class="career-basis">
+                    <summary>查看统计依据和历史记录</summary>
+                    <template v-if="analytics">
+                        <p>统计截至 {{ formatTime(analytics.cutoff) }}。以下内容用于核对数据来源，不需要日常查看。</p>
+                        <table class="career-table"><thead><tr><th>结果</th><th>截至当前</th><th>当前比例</th><th>用于智能优化</th><th>依据</th></tr></thead>
+                            <tbody><tr v-for="row in metricRows" :key="row.key"><td>{{ row.label }}</td><td>{{ row.numerator }} / {{ row.denominator }}</td><td>{{ row.rateLabel }}</td><td>{{ row.readiness }}</td><td><el-button size="small" :disabled="!!busy" @click="drilldown(row)">查看记录</el-button></td></tr></tbody>
+                        </table>
+                        <p>当前比例用于跟踪真实进展；满 {{ analytics.windowDays }} 天且证据完整的记录才进入稳定复盘，供智能体调整投递方向、简历版本和回复建议。</p>
+                        <p>尚未到观察时间 {{ analytics.excludedCounts.immature }} · 沟通记录未确认 {{ analytics.excludedCounts.unverifiedContact }} · 发送的简历版本未知 {{ analytics.excludedCounts.unknownExposure }} · 同一投递出现多个版本 {{ analytics.excludedCounts.mixedExposure }}</p>
+                        <ul><li v-for="item in analytics.uncertainties" :key="item">{{ item }}</li></ul>
+                    </template>
+                    <p v-if="!applications.length">当前页没有投递记录。导入历史记录后，系统会保留当时资料；无法确认的附件版本会明确标为未知。</p>
+                    <details v-for="application in applications" :key="application.applicationId">
+                        <summary>{{ application.jobTitle || application.encryptJobId }} · 当前进展：{{ eventLabel(application.currentStage) }} · 最终结果：{{ eventLabel(application.outcome) }}</summary>
+                        <p>发起沟通 {{ formatTime(application.contactedAt) }} · 实际发送的简历：{{ exposureLabel(application.resumeExposure) }}</p>
+                        <p>准备版本 {{ application.preparedResumeVersionId || '未选择' }} · 下一轮策略 {{ application.strategyPlanId || '未选择' }}</p>
+                        <ol><li v-for="event in application.events" :key="event.eventId">{{ formatTime(event.occurredAt) }} · {{ eventLabel(event.eventType) }} · {{ confirmationLabel(event.confirmation) }}<blockquote v-if="event.evidence.quote">{{ event.evidence.quote }}</blockquote><small v-if="event.supersedesEventId">纠正原事件 {{ event.supersedesEventId }}，原记录保留。</small><el-button size="small" :disabled="!!busy" @click="openEvent(application, event.eventId)">追加纠正</el-button></li></ol>
+                        <el-button size="small" :disabled="!!busy" @click="openEvent(application)">确认结果或实际附件版本</el-button>
+                    </details>
+                    <div class="career-controls"><el-button size="small" :disabled="!!busy || applicationOffset === 0" @click="pageApplications(-20)">上一页</el-button><span>第 {{ applicationOffset / 20 + 1 }} 页</span><el-button size="small" :disabled="!!busy || applications.length < 20" @click="pageApplications(20)">下一页</el-button></div>
                 </details>
-                <div class="career-controls"><el-button size="small" :disabled="!!busy || applicationOffset === 0" @click="pageApplications(-20)">上一页</el-button><span>第 {{ applicationOffset / 20 + 1 }} 页</span><el-button size="small" :disabled="!!busy || applications.length < 20" @click="pageApplications(20)">下一页</el-button></div>
             </el-tab-pane>
-            <el-tab-pane label="简历版本与改稿" name="resumes">
+            <el-tab-pane label="简历与改稿" name="resumes">
                 <p>下一轮准备版本：{{ selection.preparedResumeVersionId || '未选择' }}。平台附件仍由原附件配置控制；此处不会上传附件。</p>
                 <label>新增简历文本<el-input v-model="resumeText" type="textarea" :rows="7" maxlength="60000" placeholder="粘贴你要保存的真实简历内容"/></label>
                 <label>可核验事实（每行一项，可选）<el-input v-model="resumeFacts" type="textarea" :rows="3" maxlength="10000" placeholder="填写简历中已有、可核验的经历或能力；不会补造数字、公司或技能"/></label>
@@ -62,7 +75,7 @@
                     </article>
                 </template>
             </el-tab-pane>
-            <el-tab-pane label="复盘与下一轮策略" name="strategy">
+            <el-tab-pane label="下一轮计划" name="strategy">
                 <div class="career-controls"><label>本轮目标 <el-input v-model="objective" maxlength="500" placeholder="例如：优先获得 Java 后端面试"/></label><label>下一轮投递预算 <el-input-number v-model="budget" :min="1" :max="1000" :precision="0"/></label></div>
                 <p class="career-note">复盘使用所选 {{ windowDays }} 天窗口和下一轮准备版本，冻结服务器当前的薪资、地点、排除项等真实硬筛选。这里不会放宽它们。</p>
                 <el-button type="primary" size="small" :disabled="!!busy || !objective.trim() || !budget" @click="createReview">创建复盘任务</el-button>
@@ -127,7 +140,7 @@ import {ElMessage} from '../../utils/tools'
 import {scopedCareerClient} from '../../platform/careerApi'
 import {captureAutomationScope} from '../../platform/unifiedRuntime'
 import {automationJobLabel, automationPhaseLabel} from '../../platform/automationPresentation'
-import {CAREER_EVENT_TYPES, modelAssistanceLabel, metricRateLabel, previewMatchesSelection, type CareerEventInput, type ResumeVersion, type CareerApplication, type CareerAnalytics, type CareerMetric,
+import {CAREER_EVENT_TYPES, modelAssistanceLabel, metricRateLabel, progressRateLabel, previewMatchesSelection, type CareerEventInput, type ResumeVersion, type CareerApplication, type CareerAnalytics,
     type CareerProposal, type CareerPreview, type CareerReview, type CareerDeletion, type CareerSelection, type CareerStrategy} from '../../platform/careerProtocol'
 import type {AutomationJob} from '../../platform/unifiedAutomation'
 const tab = ref('records'), busy = ref(''), error = ref(''), windowDays = ref<7 | 14 | 30>(14), metricVersionId = ref('')
@@ -147,7 +160,27 @@ let currentReviewId = '', reviewRequest: Parameters<Awaited<ReturnType<typeof sc
 const pendingIntent = new Map<string, string>()
 const intentId = (name: string) => { const id = pendingIntent.get(name) || crypto.randomUUID(); pendingIntent.set(name, id); return id }
 const allStrategies = computed(() => { const result = [...strategies.value]; const current = review.value?.review?.strategy; if (current && !result.some(item => item.strategyId === current.strategyId)) result.unshift(current); return result })
-const metricRows = computed(() => (['replyRate', 'interviewRate', 'resumeInterviewRate', 'offerRate'] as const).flatMap(key => analytics.value?.metrics[key] ? [{key, metric: analytics.value.metrics[key], label: ({replyRate: '沟通后回复率', interviewRate: '沟通后面试邀约率', resumeInterviewRate: '附件发送后面试邀约率', offerRate: 'Offer 率'})[key]}] : []))
+type MetricRow = {key: string; label: string; numerator: number; denominator: number; rateLabel: string; readiness: string
+    sampleIds: {numerator: string[]; denominator: string[]; excluded: string[]}; currentProgress: boolean}
+const metricRows = computed<MetricRow[]>(() => {
+    const stats = analytics.value
+    if (!stats) return []
+    const progress = (key: 'replied' | 'interviewed' | 'offers', label: string): MetricRow => ({
+        key, label, numerator: stats.progressCounts[key], denominator: stats.progressCounts.contacted,
+        rateLabel: progressRateLabel(stats.progressCounts[key], stats.progressCounts.contacted),
+        readiness: stats.sampleSize ? `${stats.sampleSize} 条已满 ${stats.windowDays} 天，持续积累` : `记录已保存，等待满 ${stats.windowDays} 天`,
+        sampleIds: {numerator: stats.progressSampleIds[key], denominator: stats.progressSampleIds.contacted, excluded: []}, currentProgress: true,
+    })
+    const resume = stats.metrics.resumeInterviewRate
+    return [
+        progress('replied', '收到回复'),
+        progress('interviewed', '获得面试邀请'),
+        {key: 'resumeInterviewRate', label: '发送简历后获得面试', numerator: resume.numerator, denominator: resume.denominator,
+            rateLabel: metricRateLabel(resume), readiness: resume.denominator ? '已按确认的投递简历版本记录' : '等待确认投递时的简历版本',
+            sampleIds: resume.sampleIds, currentProgress: false},
+        progress('offers', '收到 Offer'),
+    ]
+})
 const formatTime = (value: number | null) => value ? new Date(value).toLocaleString() : '无已确认记录'
 const versionName = (version: ResumeVersion) => `${formatTime(version.createdAt)} · ${version.versionId.slice(0, 10)}`
 const exposureLabel = (exposure: CareerApplication['resumeExposure']) => exposure.state === 'MIXED' ? '混合版本' : exposure.state === 'VERIFIED' && exposure.verificationKind === 'USER_CONFIRMED' ? '你已确认版本' : '未知'
@@ -183,7 +216,7 @@ async function load() {
 const refreshAnalytics = () => operate('analytics', async client => { analytics.value = await client.analytics(windowDays.value, Date.now(), metricVersionId.value) })
 const pageApplications = (delta: number) => operate('applications', async client => { const next = Math.max(0, applicationOffset.value + delta); applications.value = await client.applications(next); applicationOffset.value = next })
 const pageVersions = (delta: number) => operate('versions', async client => { const next = Math.max(0, versionOffset.value + delta); versions.value = await client.versions(next); versionOffset.value = next })
-const importHistory = () => operate('import', async client => { const result = await client.importLegacy(intentId('import')); applications.value = await client.applications(0); applicationOffset.value = 0; versions.value = await client.versions(0); versionOffset.value = 0; ElMessage.success(`本次导入 ${result.importedApplications} 条历史投递，复用 ${result.reusedApplications} 条已有记录`) })
+const importHistory = () => operate('import', async client => { const result = await client.importLegacy(intentId('import')); applications.value = await client.applications(0); applicationOffset.value = 0; versions.value = await client.versions(0); versionOffset.value = 0; ElMessage.success(`已导入 ${result.importedApplications + result.importedSessionApplications} 条历史投递，补齐 ${result.importedContacts + result.importedSessionContacts} 次沟通和 ${result.importedSessionReplies} 条 HR 回复`) })
 const createVersion = () => operate('create-version', async client => { const facts = resumeFacts.value.split('\n').map(value => value.trim()).filter(Boolean).map((text, index) => ({factId: `F${index + 1}`, text, verificationStatus: 'SOURCE_PRESENT' as const})); await client.createVersion(resumeText.value.trim(), facts); versions.value = await client.versions(0); versionOffset.value = 0; resumeText.value = ''; resumeFacts.value = ''; ElMessage.success('新准备版本已保存，尚未自动选择或发送') })
 const selectVersion = (version: ResumeVersion) => { const name = `select:${version.versionId}:${selection.value.preparedResumeVersionId}`; return operate(name, async client => { await client.selectVersion(version.versionId, selection.value.preparedResumeVersionId, intentId(name)); selection.value = await client.selection(); ElMessage.success('下一轮准备版本已选择；平台附件未更换') }) }
 async function copyVersion(version: ResumeVersion) { try { await navigator.clipboard.writeText(version.content); ElMessage.success('已复制文本') } catch { ElMessage.warning('复制不可用，可以在展开的文本中手动选择复制') } }
@@ -205,7 +238,7 @@ const confirmReview = (decision: 'CONFIRM' | 'IGNORE') => operate('review-confir
 async function deleteReview() { if (!review.value || busy.value) return; const jobId = review.value.job.jobId; try { await ElMessageBox.confirm('删除这次私密复盘、草稿和流程检查点？历史投递事实及被引用的版本会保留。', '删除复盘', {confirmButtonText: '删除本次复盘', cancelButtonText: '取消', type: 'warning'}) } catch { return }; await operate('delete-review', async client => { deletion.value = await client.deleteReview(jobId); review.value = null; currentReviewId = deletion.value.checkpointDeleted ? '' : jobId; reviewJobs.value = reviewJobs.value.filter(job => job.jobId !== jobId) }) }
 const approveStrategy = (strategy: CareerStrategy) => operate('approve-strategy', async client => { const result = await client.approveStrategy(strategy); Object.assign(strategy, result); ElMessage.success('策略已批准，尚未应用') })
 const applyStrategy = (strategy: CareerStrategy) => { const name = `apply:${strategy.strategyId}`; return operate(name, async client => { const result = await client.applyStrategy(strategy, intentId(name)); Object.assign(strategy, result); selection.value = await client.selection(); ElMessage.success('已选择下一轮策略；投递与自动回复开关保持原状态') }) }
-const drilldown = (metric: CareerMetric) => operate('samples', async client => { const ids = [...new Set([...metric.sampleIds.denominator, ...metric.sampleIds.excluded])]; sampleLabel.value = `分子 ${metric.numerator}，分母 ${metric.denominator}，排除 ${metric.excludedCount}；本次展开前 ${Math.min(50, ids.length)} 条样本。`; sampleMembership.value = Object.fromEntries(ids.map(id => [id, metric.sampleIds.excluded.includes(id) ? '排除样本' : metric.sampleIds.numerator.includes(id) ? '计入分子及分母' : '仅计入分母'])); sampleApplications.value = await Promise.all(ids.slice(0, 50).map(id => client.application(id))); showSamples.value = true })
+const drilldown = (row: MetricRow) => operate('samples', async client => { const ids = [...new Set([...row.sampleIds.denominator, ...row.sampleIds.excluded])]; sampleLabel.value = row.currentProgress ? `共 ${ids.length} 条已发起沟通记录，其中 ${row.numerator} 条达到这项结果。最多显示前 ${Math.min(50, ids.length)} 条。` : `共找到 ${ids.length} 条简历版本相关记录：${row.numerator} 条达到这项结果，${row.denominator} 条证据完整。最多显示前 ${Math.min(50, ids.length)} 条。`; sampleMembership.value = Object.fromEntries(ids.map(id => [id, row.sampleIds.excluded.includes(id) ? '等待确认投递时的简历版本' : row.sampleIds.numerator.includes(id) ? '达到这项结果' : row.currentProgress ? '持续观察中' : '版本证据已确认'])); sampleApplications.value = await Promise.all(ids.slice(0, 50).map(id => client.application(id))); showSamples.value = true })
 function openEvent(application: CareerApplication, supersedes: string | null = null) {
     eventApplication.value = application; eventSupersedes.value = supersedes; eventRequest = null
     eventType.value = supersedes ? 'CORRECTION' : 'HR_REPLIED'; eventTime.value = null; eventQuote.value = ''; eventVersionId.value = ''
@@ -230,5 +263,6 @@ onUnmounted(() => { disposed = true; if (timer) clearInterval(timer) })
 </script>
 <style scoped>
 .career-workspace{color:#243b33;font-size:14px;min-width:0;overflow-wrap:anywhere}.career-note{color:#52655d;line-height:1.6}.career-warning{color:#87551a}.career-controls{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin:12px 0}.career-controls label{display:flex;gap:8px;align-items:center;max-width:100%}
+.career-summary{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin:14px 0}.career-summary article{display:flex;flex-direction:column;gap:4px;padding:12px;border:1px solid #d9e5df;border-radius:7px;background:#f8fbfa}.career-summary strong{font-size:20px}.career-summary span{color:#52655d}.career-guidance{padding:10px 12px;border-left:3px solid #67b587;background:#f4faf6;line-height:1.6}.career-basis{margin-top:16px}
 .career-workspace details{border-top:1px solid #d9e5df;margin:12px 0;padding:12px 0}.career-workspace summary{font-weight:600;cursor:pointer;overflow-wrap:anywhere}.career-workspace pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#f4f7f5;padding:12px;font:inherit;line-height:1.6}.career-workspace blockquote{margin:8px 0;padding:8px 12px;border-left:3px solid #9bbaac;background:#f6f8f7;white-space:pre-wrap;overflow-wrap:anywhere}.career-workspace label{display:block;margin:10px 0}.career-table{width:100%;border-collapse:collapse;font-size:13px}.career-table th,.career-table td{border-bottom:1px solid #d9e5df;text-align:left;padding:8px;overflow-wrap:anywhere}.career-proposal{padding:12px;margin:12px 0;border:1px solid #d9e5df;border-radius:6px}.career-patch{border-top:1px solid #e2e9e5;padding:12px 0}.career-comparison{display:grid;grid-template-columns:1fr 1fr;gap:12px}.career-comparison>div{min-width:0}@media(max-width:600px){.career-comparison{grid-template-columns:1fr}.career-table th,.career-table td{padding:5px}.career-controls label{display:block;width:100%}}
 </style>

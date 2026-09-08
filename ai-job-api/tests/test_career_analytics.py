@@ -343,6 +343,32 @@ def test_sample_threshold_does_not_establish_comparability_or_causality(size):
     assert actual["comparability"]["sampleThresholdMet"] is (size >= 20)
     assert actual["noCausalClaim"] is True
     assert actual["metrics"]["replyRate"]["rate"] == (0 if size else None)
+    assert actual["progressCounts"]["contacted"] == size
+
+
+def test_progress_counts_include_real_immature_results_without_changing_rates():
+    actual = result(
+        [
+            event("CONTACT_INITIATED", 25),
+            event("HR_REPLIED", 26),
+            event("INTERVIEW_INVITED", 27),
+            event("OFFER_RECEIVED", 28),
+        ]
+    )
+    assert actual["sampleSize"] == 0
+    assert actual["metrics"]["replyRate"]["rate"] is None
+    assert actual["progressCounts"] == {
+        "contacted": 1,
+        "replied": 1,
+        "interviewed": 1,
+        "offers": 1,
+    }
+    assert actual["progressSampleIds"] == {
+        "contacted": ["app"],
+        "replied": ["app"],
+        "interviewed": ["app"],
+        "offers": ["app"],
+    }
 
 
 @pytest.mark.parametrize(
