@@ -80,7 +80,14 @@ def test_legacy_education_fact_is_explicit_and_preferred_degree_is_not_hard_gate
 
 
 def test_clear_non_target_role_is_rejected_even_when_browser_title_rule_is_off(client, world):
-    for title in ("AI产品运营", "商务推广专员", "大模型数据标注", "前端开发工程师", "Java后端开发", "算法训练工程师"):
+    for title in (
+        "AI产品运营",
+        "商务推广专员",
+        "大模型数据标注",
+        "前端开发工程师",
+        "Java后端开发",
+        "算法训练工程师",
+    ):
         result = client.post(
             "/api/job/filter/one",
             json=browser_payload(

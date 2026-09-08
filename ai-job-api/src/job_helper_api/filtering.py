@@ -70,7 +70,9 @@ NON_TECHNICAL_ROLE = re.compile(
 )
 APPLICATION_ROLE_OVERRIDE = re.compile(r"ai应用|人工智能应用|aigc|agent|智能体|全栈", re.I)
 PURE_FRONTEND_ROLE = re.compile(r"前端|web前端", re.I)
-PURE_JAVA_ROLE = re.compile(r"java.*(?:后端|开发|研发|工程师|程序员)|(?:后端|开发|研发|工程师|程序员).*java", re.I)
+PURE_JAVA_ROLE = re.compile(
+    r"java.*(?:后端|开发|研发|工程师|程序员)|(?:后端|开发|研发|工程师|程序员).*java", re.I
+)
 TRAINING_ALGORITHM_ROLE = re.compile(r"算法(?:训练|工程师|研发|开发)|模型训练", re.I)
 
 
@@ -162,7 +164,9 @@ def local_match(payload: FilterInput, resume: str) -> dict[str, Any]:
 
 def target_role_mismatch(payload: FilterInput) -> str | None:
     base = parse_object(payload.jobBaseInfo)
-    title = re.sub(r"\s+", "", unicodedata.normalize("NFKC", str(base.get("jobName") or ""))).lower()
+    title = re.sub(
+        r"\s+", "", unicodedata.normalize("NFKC", str(base.get("jobName") or ""))
+    ).lower()
     if NON_TECHNICAL_ROLE.search(title):
         return "岗位名称明确属于非技术或非研发方向"
     if APPLICATION_ROLE_OVERRIDE.search(title):
