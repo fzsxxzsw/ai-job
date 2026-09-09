@@ -76,11 +76,11 @@ function environment() {
     const storage = new Map()
     const noop = () => {}
     const fixture = {executors:new Map(), policy:'policy-A',scope:'scope-A',enabled:true,allowed:true,risk:null,offline:false,
-        submissions:[], legacy:[],holds:[],processed:[],sends:[],reads:[],audits:[],contacts:[],naturalContacts:[],associations:[],appObservations:[],snapshots:[],bindings:[],cancels:[],requests:[],ack:'90071992547409999',
+        submissions:[], legacy:[],holds:[],processed:[],sends:[],reads:[],audits:[],contacts:[],naturalContacts:[],associations:[],appObservations:[],snapshots:[],bindings:[],cancels:[],requests:[],infos:[],ack:'90071992547409999',
         store:{user:{aiSeatStatus:1,resumeId:'resume-A',preference:{fhE:false,employmentExcludeE:false,resumeMatchE:true,resumeMatchMinScore:40,drE:false,cgE:true,cg:'您好，这是合成招呼',greetingDeliveryMode:'required',jti:[],jtiE:false}}},
         push:{runId:'run-A',isActive:true,stopRequested:false},
         counter:{clearOnceSuccessCount:noop,successIncr:noop,failIncr:noop,notMatchIncr:noop},
-        log:{debug:noop,trace:noop,info:noop,warn:noop,error:noop,getLogLevel:()=>0},
+        log:{debug:noop,trace:noop,info:(...args)=>fixture.infos.push(args),warn:noop,error:noop,getLogLevel:()=>0},
         gm:{GmGetValue:(k,d)=>storage.has(k)?storage.get(k):d,GmSetValue:(k,v)=>storage.set(k,v)},
         http:async config=>{fixture.requests.push(config);if(config.url.includes('getGeekFriendList'))return {data:{code:0,zpData:{result:[peer]}}};return {data:{code:0,message:'Success',zpData:{data:{bossId:'81'}}}}},
         getJob:async()=>({jobId:'graph-job',status:'COMPLETED',actions:[{kind:'CONTACT_JOB',status:'ACKNOWLEDGED'}],decision:{code:'CONTACT'}}),
@@ -136,10 +136,9 @@ test('actual registered sensitive executor holds unapproved actions and sends on
     const request=env.requests.find(r=>r.url.endsWith('/exchange/accept'))
     assert.equal(request.data.type,2);assert.equal(request.data.mid,'90071992547409941');assert.equal(request.data.securityId,'SecA')
 })
-test('actual legacy retry and exchange exits are held in enabled mode', async () => {
+test('actual legacy reply and exchange exits remain held in enabled mode', async () => {
     const env=environment()
     assert.equal(await env.option.deliverPendingAiReplyLocked({}),false)
-    assert.equal(await env.platform.deliverPendingGreetingLocked({},false),false)
     assert.equal(await env.option.sendResumeFile(81),false)
     assert.equal(await env.option.sendMsg(81,'hello',undefined),null)
     await env.option.preReplyMsg(raw(),{},'交换微信')
@@ -154,21 +153,25 @@ test('actual matchJob preserves hard filters and captures graph FilterInput with
     await assert.rejects(env.platform.matchJob({...job,brandName:'潮一'}))
     env.platform.pushStatus='PUSHING'
 })
-test('actual startPush reaches APPLICATION job then original success/snapshot handler without legacy greeting', async () => {
+test('actual startPush performs the BOSS contact directly instead of leaving an APPLICATION action queued', async () => {
     const env=environment()
     const job={encryptJobId:'JobA',encryptBossId:'BossA',securityId:'SecA',lid:'LidA',brandName:'合成公司',jobName:'Python后端开发',salaryDesc:'10-15K',cityName:'测试市'}
     env.platform.obtainBossJobDetailExt=async()=>({postDescription:'Python、FastAPI 和 MySQL',friendStatus:0,activeTimeDesc:'今日活跃'})
     env.platform.waitForDeliveryGate=async()=>{};env.platform.startPreHandler=()=>{};env.platform.preMatchJob=()=>{}
     env.platform.getJobList=()=>[job];env.platform.next=async()=>false;env.platform.isLimit=()=>({limit:false})
-    env.fixture.getJob=async()=>({jobId:'graph-job',status:'WAITING_EXECUTION',actions:[{kind:'CONTACT_JOB',status:'ACKNOWLEDGED'},{kind:'SEND_GREETING',status:'QUEUED'}],decision:{code:'CONTACT'}})
+    env.fixture.Tools.window.AIJobHelperChatBridge.isReady=()=>true
     await env.platform.startPush()
-    assert.equal(env.submissions.length,1);assert.equal(env.submissions[0].body.kind,'APPLICATION')
-    assert.equal(env.submissions[0].body.input.localAssessment.passed,true)
-    assert.equal(env.submissions[0].body.input.preparedResumeVersionId,'prepared-A')
-    assert.equal(env.submissions[0].body.input.strategyPlanId,'strategy-A')
-    assert.equal(env.submissions[0].context.snapshot.encryptJobId,'JobA')
-    assert.equal(env.snapshots.length,0,'snapshot waits for the receipt hook, not the overall job result')
-    assert.equal(env.sends.length,0);assert.equal(env.legacy.length,0)
+    assert.equal(env.submissions.length,0)
+    assert.equal(env.requests.filter(request=>request.url.includes('/friend/add.json')).length,1)
+    assert.equal(env.snapshots.length,1)
+    assert.equal(job.contact,true)
+    assert.equal(env.sends.length,1);assert.equal(env.sends[0].content,'您好，这是合成招呼');assert.equal(env.legacy.length,0)
+})
+test('actual next reports the safety wait before loading another batch', async () => {
+    const env=environment()
+    env.platform.acquireDataPre=async()=>false
+    assert.equal(await env.platform.next(),false)
+    assert.match(env.infos.flat().join('\n'),/安全等待 90 秒后加载下一批职位/)
 })
 test('actual contact action ACK precedes lookup; snapshot uses the receipt time independently of greeting', async () => {
     const env=environment();env.platform.pushStatus=1;env.platform.isLimit=()=>({limit:false})

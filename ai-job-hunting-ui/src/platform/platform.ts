@@ -12,8 +12,8 @@ import {scrollElementToBottom, simulateScrollToEnd, TampermonkeyApi, Tools} from
 import logger, {LogLevel} from '../logging'
 import axiosOriginal from "axios";
 import {captureOutcomeContext, observeOutcomeApplication, observeOutcomeContacts} from './boss/outcomeRuntime';
-import {automationRequestId, type AutomationAction, type FilterInput, type ActionReceipt} from './unifiedAutomation';
-import {unifiedAutomationEnabled, registerAutomationExecutor, submitAutomation, getAutomationJob, bindAutomationContact, cancelAutomationJob, unresolvedAutomationApplication, captureAutomationScope, saveAutomationSnapshot,
+import {type AutomationAction, type FilterInput, type ActionReceipt} from './unifiedAutomation';
+import {unifiedAutomationEnabled, registerAutomationExecutor, bindAutomationContact, captureAutomationScope, saveAutomationSnapshot,
     holdUnifiedAutomation, currentAutomationPolicy, browserAutomationReady, type BrowserAutomationContext} from './unifiedRuntime';
 import {performUnifiedText, prepareUnifiedChat, unknownPlatformReceipt} from './unifiedBossActions';
 import {PushRunStore} from '../stores/pushRun';
@@ -73,7 +73,6 @@ import {
 import {makeGreetingTaskKey, migrateAndDedupeGreetingTasks} from "./greetingIdentity";
 import {findBossMountTarget} from "../runtime/routeHost";
 import {isSalaryWithinConfiguredRange} from "./salaryPolicy";
-import {serializableBossJobDetail} from './boss/automationJob';
 import {weekendBenefitStatus} from './weekendPolicy';
 
 let pushResultCounter: any;
@@ -222,6 +221,7 @@ export abstract class AbsPlatform implements Platform {
             SAFE_MIN_NEXT_PAGE_INTERVAL_SECONDS,
             Number(userStore.user.preference.npi) || 0,
         )
+        this.logRecorder.info(`当前批次已处理完，安全等待 ${nextPageInterval} 秒后加载下一批职位`)
         await Tools.sleep(nextPageInterval * 1000)
         const next = await this.acquireDataPre();
         if (!next) {
@@ -530,7 +530,6 @@ class BossPlatform extends AbsPlatform {
     }
 
     private async deliverPendingGreetingLocked(entry: PendingGreeting, waitForChannel: boolean): Promise<boolean> {
-        if (await unifiedAutomationEnabled()) { holdUnifiedAutomation('旧招呼队列等待核对，不会与 LangGraph 重复发送'); return false }
         if (getBossRiskStop()) return false
         if (this.greetingSendingKeys.has(entry.key)) {
             return false
@@ -1758,41 +1757,10 @@ class BossPlatform extends AbsPlatform {
     }
 
     async doPush(jobDetail: BossJobDetail): Promise<any> {
-        if (await unifiedAutomationEnabled()) {
-            const filterInput = this.unifiedFilterInputs.get(String(jobDetail.encryptJobId))
-            if (!filterInput) throw new AiDecisionUnknownExp(this.getJobKey(jobDetail), '缺少已通过硬过滤的岗位资料')
-            const account = exactPlatformId(Tools.window._PAGE?.uid), runId = PushRunStore().runId
-            if (!account || !runId) throw new PublishStopExp('缺少本轮投递授权')
-            const previous = await unresolvedAutomationApplication(String(jobDetail.encryptJobId))
-            if (previous) throw new AiDecisionUnknownExp(this.getJobKey(jobDetail), '同一岗位已有已派发或待核实任务，请先核对原任务；不会新建重复沟通')
-            const {client: career} = await (await import('./careerApi')).scopedCareerClient()
-            const selection = await career.selection()
-            const cycleKey = await automationRequestId(['application-cycle', account, runId, String(jobDetail.encryptJobId)])
-            const mode = normalizeGreetingDeliveryMode(userStore.user.preference.greetingDeliveryMode, !!userStore.user.preference.cgE, userStore.user.preference.cg)
-            const job = await submitAutomation({requestId: cycleKey, kind: 'APPLICATION', platformAccount: account,
-                conversationKey: null, bossId: null, encryptJobId: String(jobDetail.encryptJobId), input: {cycleKey, filterInput,
-                    localAssessment: {passed: true, reason: '本轮岗位已通过浏览器硬过滤'},
-                    greeting: {enabled: customGreetingEnabled(mode), text: String(userStore.user.preference.cg || '')},
-                    preparedResumeVersionId: selection.preparedResumeVersionId, strategyPlanId: selection.strategyPlanId}},
-                {kind: 'APPLICATION', account, runId, policy: currentAutomationPolicy(), job: serializableBossJobDetail(jobDetail),
-                    encryptJobId: String(jobDetail.encryptJobId), bossId: null, conversationKey: null,
-                    snapshot: this.applicationSnapshotContexts.get(String(jobDetail.encryptJobId)), greetingEnabled: customGreetingEnabled(mode)})
-            for (;;) {
-                if (this.pushStatus !== PushStatus.PUSHING || PushRunStore().stopRequested) {
-                    await cancelAutomationJob(job.jobId).catch(() => undefined)
-                    throw new PublishStopExp('用户已暂停；未派发动作已请求取消，已有回执保留')
-                }
-                const current = await getAutomationJob(job.jobId)
-                const contact = current.actions.find(action => action.kind === 'CONTACT_JOB')
-                if (contact?.status === 'ACKNOWLEDGED') return {code: 0, message: 'Success', automationJobId: job.jobId}
-                if (['COMPLETED', 'FAILED', 'UNCERTAIN', 'CANCELLED', 'SUPERSEDED'].includes(current.status)) {
-                    if (current.decision?.code === 'REJECT' || current.decision?.code === 'STOP') throw new NotMatchException(this.getJobKey(jobDetail), current.decision.reason, 'LangGraph 岗位决策')
-                    if (contact?.status === 'UNKNOWN' || contact?.status === 'FAILED') throw new PushReqException(this.getJobKey(jobDetail), '沟通动作未确认成功，请查看统一任务分项回执')
-                    throw new AiDecisionUnknownExp(this.getJobKey(jobDetail), current.decision?.reason || '统一任务尚未获得可执行结论')
-                }
-                await Tools.sleep(1500)
-            }
-        }
+        // 岗位投递必须在当前已授权的 Chrome 运行中直接完成。此前把 APPLICATION
+        // 转成统一任务后再等待浏览器领取，会在执行器未领取时永久停在
+        // WAITING_EXECUTION，既没有平台副作用，也没有可见进度。回复任务仍由
+        // 统一自动化处理；首次沟通继续使用下方已有的锁、冷却、风控和回执逻辑。
         const jobTitle = this.getJobKey(jobDetail)
         const activeRiskStop = getBossRiskStop()
         if (activeRiskStop) throw new PublishLimitExp(`BOSS风控熔断：${activeRiskStop.reason}`)
@@ -1803,6 +1771,7 @@ class BossPlatform extends AbsPlatform {
         }
 
         logger.debug("正在投递：" + jobTitle)
+        this.logRecorder.info(`工作【${jobTitle}】已通过筛选，正在向 BOSS 发起沟通`)
 
         // 投递请求url
         let publishUrl = `https://www.zhipin.com/wapi/zpgeek/friend/add.json?securityId=` +
@@ -1958,7 +1927,6 @@ class BossPlatform extends AbsPlatform {
      * 投递后发送自定义消息
      */
     async pushAfterSendMsg(jobDetail: BossJobDetail) {
-        if (await unifiedAutomationEnabled()) return
         const greetingMode = normalizeGreetingDeliveryMode(
             userStore.user.preference.greetingDeliveryMode,
             !!userStore.user.preference.cgE,
