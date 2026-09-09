@@ -102,6 +102,20 @@ def test_clear_non_target_role_is_rejected_even_when_browser_title_rule_is_off(c
     assert world["fake"].calls == []
 
 
+def test_algorithm_engineer_is_not_mistaken_for_an_explicit_training_role(client, world):
+    result = client.post(
+        "/api/job/filter/one",
+        json=browser_payload(
+            jobBaseInfo=json.dumps({"jobName": "AI算法工程师", "skills": ["Python", "AI"]}),
+            titleRuleStatus=None,
+            titleMatchedKeywords=[],
+        ),
+    ).json()["data"]
+    assert result["decisionStatus"] == "MATCH"
+    assert result["filter"] is False
+    assert world["fake"].calls == []
+
+
 def test_experience_range_is_advisory_for_a_target_role(client, world):
     result = client.post(
         "/api/job/filter/one",

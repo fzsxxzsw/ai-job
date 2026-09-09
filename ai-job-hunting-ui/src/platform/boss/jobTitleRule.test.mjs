@@ -81,7 +81,7 @@ test('clear non-target roles are blocked even when configurable keyword matching
     ]) {
         assert.equal(evaluateJobTitleRule({jobName: title, mode: 'off'}).status, 'SKIP', title)
     }
-    for (const title of ['AI应用全栈工程师', 'Python后端开发', 'Agent智能体研发工程师']) {
+    for (const title of ['AI应用全栈工程师', 'AI算法工程师', 'Python后端开发', 'Agent智能体研发工程师']) {
         assert.equal(evaluateJobTitleRule({jobName: title, mode: 'off'}).status, 'PASS', title)
     }
 })

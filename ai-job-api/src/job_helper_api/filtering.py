@@ -73,7 +73,7 @@ PURE_FRONTEND_ROLE = re.compile(r"前端|web前端", re.I)
 PURE_JAVA_ROLE = re.compile(
     r"java.*(?:后端|开发|研发|工程师|程序员)|(?:后端|开发|研发|工程师|程序员).*java", re.I
 )
-TRAINING_ALGORITHM_ROLE = re.compile(r"算法(?:训练|工程师|研发|开发)|模型训练", re.I)
+TRAINING_ALGORITHM_ROLE = re.compile(r"算法训练|训练算法|模型训练", re.I)
 
 
 def parse_object(value: str) -> dict[str, Any]:
