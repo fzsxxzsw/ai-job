@@ -60,8 +60,9 @@
 </template>
 
 <script setup lang="ts">
-import {ref, onMounted, watch} from 'vue';
+import {ref, onMounted, onUnmounted, watch} from 'vue';
 import {LogRecorder} from '../../logging/record';
+import {resolveLiveLogPage} from './runRecordPaging';
 
 // 创建日志记录器实例
 const logRecorder = new LogRecorder();
@@ -71,6 +72,7 @@ const logs = ref([]); // 当前页面显示的日志数据
 const currentPage = ref(1); // 当前页码
 const pageSize = ref(10); // 每页显示条数
 const totalLogs = ref(0); // 日志总条数
+let refreshTimer: ReturnType<typeof setInterval> | null = null;
 
 // 筛选条件
 const filter = ref({
@@ -106,6 +108,14 @@ const fetchLogs = () => {
         allLogs = allLogs.filter((log) => log.message.toLowerCase().includes(keyword));
     }
 
+    // 停留在末页时跟随新增日志；查看历史页时不打断用户。
+    currentPage.value = resolveLiveLogPage(
+        currentPage.value,
+        pageSize.value,
+        totalLogs.value,
+        allLogs.length,
+    );
+
     // 分页
     totalLogs.value = allLogs.length;
     const startIndex = (currentPage.value - 1) * pageSize.value;
@@ -133,6 +143,14 @@ const clearLogs = () => {
 // 组件挂载时初始化获取一次日志
 onMounted(() => {
     fetchLogs();
+    refreshTimer = setInterval(fetchLogs, 1000);
+});
+
+onUnmounted(() => {
+    if (refreshTimer !== null) {
+        clearInterval(refreshTimer);
+        refreshTimer = null;
+    }
 });
 </script>
 
