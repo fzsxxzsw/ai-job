@@ -10,6 +10,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from httpx import AsyncBaseTransport
+from sqlalchemy import select
 from starlette.exceptions import HTTPException
 
 from . import audit, conversation, filtering, prompts, rejections, users
@@ -26,7 +27,7 @@ from .contracts import (
     RejectionInput,
     SnapshotInput,
 )
-from .database import Database, now_ms
+from .database import Database, dumps, loads, now_ms
 from .errors import ApiError, envelope
 from .execution_authority import bump_authority
 from .middleware import RequestSizeLimitMiddleware
@@ -45,6 +46,56 @@ ALLOWED_ORIGINS = [
     "chrome-extension://dkogipipnemadnlpchlgpphagpboekmm",
 ]
 log = logging.getLogger("job_helper_api")
+LEGACY_SESSION_PAUSE_MARKER = "migration:legacy-session-pauses-v1"
+LEGACY_SESSION_RESUME_MARKER = "migration:legacy-session-resumed-v1"
+
+
+async def _resume_legacy_session_stops(db, connection, uid: int, authority_epoch: int) -> None:
+    if not await db.control(uid, LEGACY_SESSION_PAUSE_MARKER, False, connection):
+        return
+    if await db.control(uid, LEGACY_SESSION_RESUME_MARKER, False, connection):
+        return
+
+    controls = db.table("py_api_control")
+    session_stop_condition = (
+        (controls.c.user_id == uid)
+        & controls.c.control_key.like("stop:%")
+        & (controls.c.control_key != "stop:*")
+    )
+    stop_values = (
+        (
+            await connection.execute(
+                select(controls.c.value_json).where(session_stop_condition).with_for_update()
+            )
+        )
+        .scalars()
+        .all()
+    )
+    resumed_count = sum(loads(value, False) is True for value in stop_values)
+    updated_at = now_ms()
+    await connection.execute(
+        controls.update()
+        .where(session_stop_condition)
+        .values(value_json=dumps(False), updated_at=updated_at)
+    )
+    await connection.execute(
+        controls.update()
+        .where(
+            controls.c.user_id == uid,
+            controls.c.control_key.like("chat-rounds:%"),
+        )
+        .values(value_json=dumps(0), updated_at=updated_at)
+    )
+    await db.set_control(
+        connection,
+        uid,
+        LEGACY_SESSION_RESUME_MARKER,
+        {
+            "completed": True,
+            "authorityEpoch": authority_epoch,
+            "resumedControlCount": resumed_count,
+        },
+    )
 
 
 def create_app(
@@ -292,7 +343,9 @@ def create_app(
             async with app.state.db.engine.begin() as c:
                 epoch = await bump_authority(app.state.db, c, uid)
                 await app.state.db.set_control(c, uid, key, stop)
-                if not stop and jobKey != "globalJobKey":
+                if not stop and jobKey == "globalJobKey":
+                    await _resume_legacy_session_stops(app.state.db, c, uid, epoch)
+                elif not stop:
                     await app.state.db.set_control(c, uid, "chat-rounds:" + jobKey, 0)
                     await app.state.db.set_control(c, uid, "graph-round-reset:" + jobKey, epoch)
         return envelope(True)

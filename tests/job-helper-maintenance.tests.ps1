@@ -73,9 +73,25 @@ Assert-Equal -Actual $emptyOutput.Count -Expected 0 -Name "empty successful prob
 
 $repositoryRoot = Split-Path -Parent $PSScriptRoot
 $buildScript = Get-Content -Raw -LiteralPath (Join-Path $repositoryRoot "build-job-helper.ps1")
+$debugScript = Get-Content -Raw -LiteralPath (Join-Path $repositoryRoot "debug-job-helper.ps1")
 $startScript = Get-Content -Raw -LiteralPath (Join-Path $repositoryRoot "start-job-helper.ps1")
 $releaseScript = Get-Content -Raw -LiteralPath (Join-Path $repositoryRoot "release-job-helper.ps1")
 $composeScript = Get-Content -Raw -LiteralPath (Join-Path $repositoryRoot "docker-compose.local.yml")
+foreach ($expectedDiagnostic in @(
+        "migration:legacy-session-pauses-v1",
+        "migration:legacy-session-resumed-v1",
+        "legacy_pending_session_stop",
+        "legacy_session_resume migration_marker=",
+        "LEGACY_SESSION_STOPS_PENDING"
+    )) {
+    if (-not $debugScript.Contains($expectedDiagnostic)) {
+        throw "Legacy-session diagnostic contract missing: $expectedDiagnostic"
+    }
+}
+$legacySummary = [regex]::Match($debugScript, 'legacy_session_resume[^\r\n]*').Value
+if ($legacySummary -match '(?i)jobkey|message|prompt|token|payload') {
+    throw "Legacy-session diagnostic summary exposes a sensitive or per-session field."
+}
 $expectedFrontendHealthLine = 'test: ["CMD-SHELL", "tmp=$$(mktemp) || exit 1; trap ''rm -f \"$$tmp\"'' EXIT; wget -qO \"$$tmp\" http://127.0.0.1/healthz || exit 1; hex=$$(od -An -tx1 \"$$tmp\" | tr -d '' \\n''); case \"$$hex\" in 6f6b|6f6b0a|6f6b0d0a) exit 0 ;; *) exit 1 ;; esac"]'
 if (-not $composeScript.Contains($expectedFrontendHealthLine)) {
     throw "Frontend healthcheck must use the exact byte whitelist and cleanup-safe temporary-file probe."

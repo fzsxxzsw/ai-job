@@ -589,6 +589,54 @@ UNION ALL
 SELECT 'session_stop_true', COUNT(*) FROM py_api_control
 WHERE control_key LIKE 'stop:%' AND control_key <> 'stop:*' AND value_json = 'true'
 UNION ALL
+SELECT 'legacy_pause_marker', COUNT(*) FROM py_api_control
+WHERE control_key = 'migration:legacy-session-pauses-v1' AND value_json = 'true'
+UNION ALL
+SELECT 'legacy_resume_marker', COUNT(*) FROM py_api_control
+WHERE control_key = 'migration:legacy-session-resumed-v1'
+  AND JSON_VALID(value_json)
+  AND JSON_UNQUOTE(JSON_EXTRACT(value_json, '$.completed')) = 'true'
+UNION ALL
+SELECT 'legacy_resume_count', COALESCE(MAX(
+    CAST(JSON_UNQUOTE(JSON_EXTRACT(value_json, '$.resumedControlCount')) AS UNSIGNED)
+), 0)
+FROM py_api_control
+WHERE control_key = 'migration:legacy-session-resumed-v1' AND JSON_VALID(value_json)
+UNION ALL
+SELECT 'legacy_resume_epoch', COALESCE(MAX(
+    CAST(JSON_UNQUOTE(JSON_EXTRACT(value_json, '$.authorityEpoch')) AS UNSIGNED)
+), 0)
+FROM py_api_control
+WHERE control_key = 'migration:legacy-session-resumed-v1' AND JSON_VALID(value_json)
+UNION ALL
+SELECT 'legacy_pending_session_stop', COUNT(*)
+FROM py_api_control AS session_stop
+JOIN user_info
+  ON user_info.id = session_stop.user_id
+ AND user_info.ai_seat_status = 1
+JOIN py_api_control AS pause_marker
+  ON pause_marker.user_id = session_stop.user_id
+ AND pause_marker.control_key = 'migration:legacy-session-pauses-v1'
+ AND pause_marker.value_json = 'true'
+LEFT JOIN py_api_control AS resume_marker
+  ON resume_marker.user_id = session_stop.user_id
+ AND resume_marker.control_key = 'migration:legacy-session-resumed-v1'
+LEFT JOIN py_api_control AS global_stop
+  ON global_stop.user_id = session_stop.user_id
+ AND global_stop.control_key = 'stop:*'
+WHERE session_stop.control_key LIKE 'stop:%'
+  AND session_stop.control_key <> 'stop:*'
+  AND session_stop.value_json = 'true'
+  AND COALESCE(global_stop.value_json, 'false') <> 'true'
+  AND CASE
+          WHEN resume_marker.user_id IS NULL THEN 1
+          WHEN NOT JSON_VALID(resume_marker.value_json) THEN 1
+          ELSE COALESCE(
+              JSON_UNQUOTE(JSON_EXTRACT(resume_marker.value_json, '$.completed')),
+              'false'
+          ) <> 'true'
+      END
+UNION ALL
 SELECT 'enabled_seat_global_stop', COUNT(DISTINCT user_info.id)
 FROM user_info
 JOIN py_api_control
@@ -648,6 +696,11 @@ WHERE control_key = 'automation:executor-latest' AND JSON_VALID(value_json);
             "custom_model_ready",
             "global_stop_true",
             "session_stop_true",
+            "legacy_pause_marker",
+            "legacy_resume_marker",
+            "legacy_resume_count",
+            "legacy_resume_epoch",
+            "legacy_pending_session_stop",
             "enabled_seat_global_stop",
             "reply_job_total",
             "reply_job_7d",
@@ -689,6 +742,11 @@ WHERE control_key = 'automation:executor-latest' AND JSON_VALID(value_json);
             $metrics.global_stop_true,
             $metrics.session_stop_true,
             $metrics.enabled_seat_global_stop)
+        Write-Output ("legacy_session_resume migration_marker={0} completed={1} resumed={2} epoch={3}" -f `
+            $metrics.legacy_pause_marker,
+            $metrics.legacy_resume_marker,
+            $metrics.legacy_resume_count,
+            $metrics.legacy_resume_epoch)
         Write-Output ("reply_jobs total={0} last_7d={1} completed={2} with_action={3} completed_without_action={4}" -f `
             $metrics.reply_job_total,
             $metrics.reply_job_7d,
@@ -794,6 +852,11 @@ ORDER BY safe_status;
         if ($metrics.enabled_seat_global_stop -gt 0) {
             Write-Output ("pipeline_alert code=GLOBAL_REPLY_STOP_WITH_ENABLED_SEAT severity=error affected={0}" -f `
                 $metrics.enabled_seat_global_stop)
+            Set-DiagnosticExitCode -Code 1
+        }
+        if ($metrics.legacy_pending_session_stop -gt 0) {
+            Write-Output ("pipeline_alert code=LEGACY_SESSION_STOPS_PENDING severity=error affected={0}" -f `
+                $metrics.legacy_pending_session_stop)
             Set-DiagnosticExitCode -Code 1
         }
         if ($metrics.ai_seat_enabled -gt 0 -and
