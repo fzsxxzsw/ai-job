@@ -50,7 +50,7 @@ import {
 } from "./deliveryQueue";
 import {runWithOptionalDeliveryLock} from "./deliveryLock";
 import {CHAT_BRIDGE_READY_EVENT} from "../webSocket/chatDelivery";
-import {collectBossJobs} from "./boss/jobSourceAdapter";
+import {collectBossJobs, rankBossJobsForRecruitingLikelihood} from "./boss/jobSourceAdapter";
 import {BossContractError, buildBossJobCardQuery, parseBossJobCardResponse} from "./boss/bossApi";
 import {AiJobDecision, normalizeAiJobDecision} from "./boss/jobDecision";
 import {evaluateJobTitleRule} from "./boss/jobTitleRule";
@@ -1080,10 +1080,10 @@ class BossPlatform extends AbsPlatform {
 
     private sortJobsByPreference(jobList: BossJobDetail[]): BossJobDetail[] {
         const preference = userStore?.user?.preference
-        if (!preference) {
-            return jobList
-        }
-        return [...jobList].sort((left, right) => this.preferenceScore(right) - this.preferenceScore(left))
+        return rankBossJobsForRecruitingLikelihood(
+            jobList,
+            preference ? job => this.preferenceScore(job) : undefined,
+        )
     }
 
     private preferenceScore(jobDetail: BossJobDetail): number {

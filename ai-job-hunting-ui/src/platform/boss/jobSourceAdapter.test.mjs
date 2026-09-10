@@ -5,6 +5,7 @@ import {
     clearRememberedBossJobs,
     collectBossJobs,
     normalizeBossJob,
+    rankBossJobsForRecruitingLikelihood,
     rememberBossJobSearchResponse,
 } from './jobSourceAdapter.ts'
 
@@ -91,4 +92,41 @@ test('prefers the latest captured search API payload and avoids duplicate cards'
     assert.equal(result.jobs.length, 1)
     assert.equal(result.jobs[0].encryptJobId, 'api-job')
     assert.equal(result.diagnostics.find(item => item.source === 'search-api').accepted, 1)
+})
+
+test('prioritizes newly published jobs with an online boss without dropping fallbacks', () => {
+    const now = Date.UTC(2026, 8, 10)
+    const day = 24 * 60 * 60 * 1000
+    const jobs = [
+        rawJob({encryptJobId: 'unknown', lastModifyTime: 0, bossOnline: false}),
+        rawJob({encryptJobId: 'old-online', lastModifyTime: now - 45 * day, bossOnline: true}),
+        rawJob({encryptJobId: 'recent-offline', lastModifyTime: now - 2 * day, bossOnline: false}),
+        rawJob({encryptJobId: 'recent-online', lastModifyTime: now - day, bossOnline: true}),
+    ]
+
+    const ranked = rankBossJobsForRecruitingLikelihood(jobs, undefined, now)
+
+    assert.deepEqual(ranked.map(job => job.encryptJobId), [
+        'recent-online',
+        'recent-offline',
+        'old-online',
+        'unknown',
+    ])
+})
+
+test('uses job preference inside the same recruiting-signal tier and accepts Unix seconds', () => {
+    const now = Date.UTC(2026, 8, 10)
+    const day = 24 * 60 * 60 * 1000
+    const jobs = [
+        rawJob({encryptJobId: 'newer', lastModifyTime: now - day, bossOnline: true}),
+        rawJob({encryptJobId: 'preferred', lastModifyTime: Math.floor((now - 2 * day) / 1000), bossOnline: true}),
+    ]
+
+    const ranked = rankBossJobsForRecruitingLikelihood(
+        jobs,
+        job => job.encryptJobId === 'preferred' ? 10 : 0,
+        now,
+    )
+
+    assert.deepEqual(ranked.map(job => job.encryptJobId), ['preferred', 'newer'])
 })

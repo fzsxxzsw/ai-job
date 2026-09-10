@@ -17,7 +17,55 @@ type ElementLike = {
 
 const SEARCH_API_PATH = '/wapi/zpgeek/search/joblist.json'
 const MAX_CAPTURED_JOBS = 300
+const DAY_MS = 24 * 60 * 60 * 1000
 let capturedApiJobs: BossJobDetail[] = []
+
+function normalizeModifyTime(value: unknown): number {
+    const parsed = Number(value)
+    if (!Number.isFinite(parsed) || parsed <= 0) return 0
+    // BOSS payloads have used both Unix seconds and milliseconds.
+    return parsed < 10_000_000_000 ? parsed * 1000 : parsed
+}
+
+function recruitmentSignalTier(job: BossJobDetail, now: number): number {
+    const modifiedAt = normalizeModifyTime(job.lastModifyTime)
+    const ageDays = modifiedAt > 0 ? Math.max(0, now - modifiedAt) / DAY_MS : Number.POSITIVE_INFINITY
+    const recentlyPublished = ageDays <= 7
+    const publishedWithinMonth = ageDays <= 30
+
+    if (recentlyPublished && job.bossOnline) return 6
+    if (recentlyPublished) return 5
+    if (publishedWithinMonth && job.bossOnline) return 4
+    if (publishedWithinMonth) return 3
+    if (job.bossOnline) return 2
+    if (modifiedAt > 0) return 1
+    return 0
+}
+
+/**
+ * Prefer jobs that are both newly published and backed by an online recruiter.
+ * Old or incomplete records remain as fallback instead of being hard-filtered.
+ */
+export function rankBossJobsForRecruitingLikelihood(
+    jobs: BossJobDetail[],
+    preferenceScore: (job: BossJobDetail) => number = () => 0,
+    now: number = Date.now(),
+): BossJobDetail[] {
+    return jobs
+        .map((job, index) => ({
+            job,
+            index,
+            signalTier: recruitmentSignalTier(job, now),
+            preferenceScore: preferenceScore(job),
+            modifiedAt: normalizeModifyTime(job.lastModifyTime),
+        }))
+        .sort((left, right) =>
+            right.signalTier - left.signalTier
+            || right.preferenceScore - left.preferenceScore
+            || right.modifiedAt - left.modifiedAt
+            || left.index - right.index)
+        .map(item => item.job)
+}
 
 function asRecord(value: unknown): RecordLike {
     return value && typeof value === 'object' && !Array.isArray(value) ? value as RecordLike : {}
