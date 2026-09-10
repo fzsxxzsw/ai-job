@@ -314,6 +314,8 @@ import {
 
 import {userRemoteLoad} from "../../stores/remote";
 import {PushRunStore} from "../../stores/pushRun";
+import {AiPower} from "../../platform/aiPower";
+import {applyAiReplyToggle} from "../../runtime/aiReplyToggle";
 
 const platform = inject('$platform') as AbsPlatform;
 const axios = inject('$axios') as AxiosInstance
@@ -938,9 +940,13 @@ const handlerAISeatStatusChange = async (val: boolean) => {
         return;
     }
 
-    return axios.post("/api/user/save/preference", {
-        aiSeatStatus: val ? 1 : 0
-    }).then(resp => {
+    try {
+        const resp = await applyAiReplyToggle(val, {
+            saveSeatStatus: enabled => axios.post("/api/user/save/preference", {
+                aiSeatStatus: enabled ? 1 : 0
+            }),
+            setGlobalStop: stop => AiPower.updateAskStatus("globalJobKey", stop),
+        })
         firstAiSeatStatus.value = userStore.user.aiSeatStatus
         if (val && resp.data.message && resp.data.message !== "成功") {
             ElNotification({
@@ -949,9 +955,12 @@ const handlerAISeatStatusChange = async (val: boolean) => {
                 duration: 2000
             });
         }
-    }).catch(_ => {
+    } catch (_) {
         userStore.user.aiSeatStatus = firstAiSeatStatus.value ?? false
-    })
+        ElMessage.error(val
+            ? "AI 回复开启失败，已保持关闭；请运行后台诊断检查全局暂停与执行器状态"
+            : "AI 回复关闭失败，请检查服务器连接")
+    }
 }
 const handlerAISeatSwitchClick = async () => {
     if (firstAiSeatStatus.value == null) {

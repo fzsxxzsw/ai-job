@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [ValidateSet("all", "status", "runtime", "database", "rejections", "logs")]
+    [ValidateSet("all", "status", "runtime", "database", "pipeline", "rejections", "logs")]
     [string]$Action = "all",
 
     [ValidateRange(1, 1440)]
@@ -18,24 +18,22 @@ $runtimeFile = Join-Path $PSScriptRoot "ai-job-hunting-ui\public\ai-job-hunting-
 $runtimeUri = "http://127.0.0.1:5173/ai-job-hunting-runtime.js"
 $frontendHealthUri = "http://127.0.0.1:5173/healthz"
 $backendHealthUri = "http://127.0.0.1:9100/actuator/health"
-$backendImageName = "job-helper-backend:latest"
+$backendImageName = "job-helper-backend:current"
 $backendContainer = "job-helper-backend"
+$agentContainer = "job-helper-agent"
 $mysqlContainer = "job-helper-mysql"
 
 $containers = @(
     [ordered]@{ Name = "frontend"; Container = "job-helper-frontend" },
     [ordered]@{ Name = "mysql"; Container = $mysqlContainer },
-    [ordered]@{ Name = "backend"; Container = $backendContainer }
+    [ordered]@{ Name = "backend"; Container = $backendContainer },
+    [ordered]@{ Name = "agent"; Container = $agentContainer }
 )
 
-# Keep the executable script ASCII-compatible so Windows PowerShell 5.1 does
-# not reinterpret a UTF-8 source file without a BOM. The second value is the
-# Unicode marker for the rejection-analysis button text.
-$rejectionButtonMarker = -join ([char[]]@(0x5206, 0x6790, 0x8FD9, 0x6B21, 0x62D2, 0x7EDD))
 $runtimeMarkers = [ordered]@{
     runtime_status   = "__AI_JOB_HELPER_RUNTIME_STATUS__"
-    rejection_button = $rejectionButtonMarker
     rejection_debug = "__AI_JOB_HELPER_REJECTION_DEBUG__"
+    recruiting_ranker = "rankBossJobsForRecruitingLikelihood"
 }
 
 # The script rebuilds diagnostic log records from this list. Anything not on
@@ -62,6 +60,8 @@ $rejectionDiagnosticFields = @(
 
 $backendKeywordPatterns = [ordered]@{
     rejection_diag = "(?i)\bREJECTION_DIAG\b"
+    automation     = "(?i)\bAUTOMATION\b|/api/job/automation/"
+    reply_stop     = "(?i)\bAUTOMATION_PAUSED\b|\bGLOBAL_REPLY_STOP\b"
     error          = "(?i)\bERROR\b|\bOutOfMemoryError\b|\b[A-Za-z0-9_.]+Exception\b"
     warning        = "(?i)\bWARN(?:ING)?\b"
     timeout        = "(?i)\btimeout\b|timed\s+out"
@@ -491,6 +491,336 @@ FROM (
     }
 }
 
+function Show-PipelineDiagnostics {
+    Write-Section "Job and AI pipeline aggregates"
+
+    try {
+        $requiredTables = @(
+            "automation_action",
+            "automation_action_event",
+            "automation_job",
+            "job_application_snapshot",
+            "msg_session",
+            "py_api_control",
+            "user_ai_config",
+            "user_info"
+        )
+        $tableRows = Invoke-ReadOnlyMySqlQuery -Sql @'
+SELECT table_name, COUNT(*)
+FROM information_schema.tables
+WHERE table_schema = DATABASE()
+  AND table_name IN (
+      'automation_action',
+      'automation_action_event',
+      'automation_job',
+      'job_application_snapshot',
+      'msg_session',
+      'py_api_control',
+      'user_ai_config',
+      'user_info'
+  )
+GROUP BY table_name;
+'@
+        $tablePresence = @{}
+        foreach ($tableName in $requiredTables) {
+            $tablePresence[$tableName] = 0
+        }
+        foreach ($row in $tableRows) {
+            $columns = ([string]$row).Split("`t")
+            if ($columns.Count -eq 2 -and $tablePresence.ContainsKey($columns[0]) -and $columns[1] -match '^\d+$') {
+                $tablePresence[$columns[0]] = [int]$columns[1]
+            }
+        }
+
+        $missingTables = New-Object Collections.Generic.List[string]
+        foreach ($tableName in $requiredTables) {
+            $present = $tablePresence[$tableName] -eq 1
+            Write-Output ("pipeline_table name={0} present={1}" -f $tableName, $(if ($present) { "yes" } else { "no" }))
+            if (-not $present) {
+                $missingTables.Add($tableName)
+            }
+        }
+        if ($missingTables.Count -gt 0) {
+            Write-Output ("pipeline_alert code=REQUIRED_TABLE_MISSING severity=error count={0}" -f $missingTables.Count)
+            Set-DiagnosticExitCode -Code 1
+            return
+        }
+
+        $metricRows = Invoke-ReadOnlyMySqlQuery -Sql @'
+SELECT 'snapshot_total', COUNT(*) FROM job_application_snapshot
+UNION ALL
+SELECT 'snapshot_has_last_modify', COUNT(*) FROM job_application_snapshot
+WHERE job_base_info IS NOT NULL
+  AND JSON_VALID(job_base_info)
+  AND JSON_CONTAINS_PATH(job_base_info, 'one', '$.lastModifyTime')
+UNION ALL
+SELECT 'snapshot_has_boss_online', COUNT(*) FROM job_application_snapshot
+WHERE job_base_info IS NOT NULL
+  AND JSON_VALID(job_base_info)
+  AND JSON_CONTAINS_PATH(job_base_info, 'one', '$.bossOnline')
+UNION ALL
+SELECT 'snapshot_has_active_desc', COUNT(*) FROM job_application_snapshot
+WHERE job_ext_info IS NOT NULL
+  AND JSON_VALID(job_ext_info)
+  AND JSON_CONTAINS_PATH(job_ext_info, 'one', '$.activeTimeDesc')
+UNION ALL
+SELECT 'ai_session_total', COUNT(*) FROM msg_session WHERE ai_type = 1
+UNION ALL
+SELECT 'ai_session_7d', COUNT(*) FROM msg_session
+WHERE ai_type = 1 AND updated_date >= (NOW() - INTERVAL 7 DAY)
+UNION ALL
+SELECT 'ai_seat_enabled', COUNT(*) FROM user_info WHERE ai_seat_status = 1
+UNION ALL
+SELECT 'custom_model_active', COUNT(DISTINCT user_info.id)
+FROM user_info
+JOIN user_ai_config ON user_ai_config.user_id = user_info.id
+WHERE user_ai_config.is_active = b'1'
+UNION ALL
+SELECT 'custom_model_ready', COUNT(DISTINCT user_info.id)
+FROM user_info
+JOIN user_ai_config ON user_ai_config.user_id = user_info.id
+WHERE user_ai_config.is_active = b'1'
+  AND user_ai_config.status = 1
+  AND user_ai_config.test_passed = 1
+UNION ALL
+SELECT 'global_stop_true', COUNT(*) FROM py_api_control
+WHERE control_key = 'stop:*' AND value_json = 'true'
+UNION ALL
+SELECT 'session_stop_true', COUNT(*) FROM py_api_control
+WHERE control_key LIKE 'stop:%' AND control_key <> 'stop:*' AND value_json = 'true'
+UNION ALL
+SELECT 'enabled_seat_global_stop', COUNT(DISTINCT user_info.id)
+FROM user_info
+JOIN py_api_control
+  ON py_api_control.user_id = user_info.id
+ AND py_api_control.control_key = 'stop:*'
+ AND py_api_control.value_json = 'true'
+WHERE user_info.ai_seat_status = 1
+UNION ALL
+SELECT 'reply_job_total', COUNT(*) FROM automation_job WHERE kind = 'REPLY'
+UNION ALL
+SELECT 'reply_job_7d', COUNT(*) FROM automation_job
+WHERE kind = 'REPLY' AND updated_at >= (UNIX_TIMESTAMP(NOW() - INTERVAL 7 DAY) * 1000)
+UNION ALL
+SELECT 'reply_job_completed', COUNT(*) FROM automation_job
+WHERE kind = 'REPLY' AND status = 'COMPLETED'
+UNION ALL
+SELECT 'reply_job_with_action', COUNT(DISTINCT automation_job.id)
+FROM automation_job
+JOIN automation_action ON automation_action.job_id = automation_job.id
+WHERE automation_job.kind = 'REPLY'
+UNION ALL
+SELECT 'reply_send_text_total', COUNT(*)
+FROM automation_action
+JOIN automation_job ON automation_job.id = automation_action.job_id
+WHERE automation_job.kind = 'REPLY' AND automation_action.kind = 'SEND_TEXT'
+UNION ALL
+SELECT 'reply_action_event_total', COUNT(*)
+FROM automation_action_event
+JOIN automation_job ON automation_job.id = automation_action_event.job_id
+WHERE automation_job.kind = 'REPLY'
+UNION ALL
+SELECT 'executor_reply_enabled', COUNT(*) FROM py_api_control
+WHERE control_key = 'automation:executor-owner'
+  AND JSON_VALID(value_json)
+  AND JSON_UNQUOTE(JSON_EXTRACT(value_json, '$.replyEnabled')) = 'true'
+UNION ALL
+SELECT 'executor_delivery_enabled', COUNT(*) FROM py_api_control
+WHERE control_key = 'automation:executor-owner'
+  AND JSON_VALID(value_json)
+  AND JSON_UNQUOTE(JSON_EXTRACT(value_json, '$.deliveryEnabled')) = 'true'
+UNION ALL
+SELECT 'executor_latest_ms', COALESCE(MAX(
+    CAST(JSON_UNQUOTE(JSON_EXTRACT(value_json, '$.lastSeenAt')) AS UNSIGNED)
+), 0)
+FROM py_api_control
+WHERE control_key = 'automation:executor-latest' AND JSON_VALID(value_json);
+'@
+        $metricNames = @(
+            "snapshot_total",
+            "snapshot_has_last_modify",
+            "snapshot_has_boss_online",
+            "snapshot_has_active_desc",
+            "ai_session_total",
+            "ai_session_7d",
+            "ai_seat_enabled",
+            "custom_model_active",
+            "custom_model_ready",
+            "global_stop_true",
+            "session_stop_true",
+            "enabled_seat_global_stop",
+            "reply_job_total",
+            "reply_job_7d",
+            "reply_job_completed",
+            "reply_job_with_action",
+            "reply_send_text_total",
+            "reply_action_event_total",
+            "executor_reply_enabled",
+            "executor_delivery_enabled",
+            "executor_latest_ms"
+        )
+        $metrics = @{}
+        foreach ($metricName in $metricNames) {
+            $metrics[$metricName] = 0L
+        }
+        foreach ($row in $metricRows) {
+            $columns = ([string]$row).Split("`t")
+            if ($columns.Count -eq 2 -and $metrics.ContainsKey($columns[0]) -and $columns[1] -match '^\d+$') {
+                $metrics[$columns[0]] = [long]$columns[1]
+            }
+        }
+
+        $replyWithoutAction = [Math]::Max(0L, $metrics.reply_job_completed - $metrics.reply_job_with_action)
+        $executorAgeMs = if ($metrics.executor_latest_ms -gt 0) {
+            [Math]::Max(0L, [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() - $metrics.executor_latest_ms)
+        }
+        else {
+            0L
+        }
+
+        Write-Output ("job_signal_capture snapshots={0} last_modify_time={1} boss_online={2} active_time_desc={3}" -f `
+            $metrics.snapshot_total,
+            $metrics.snapshot_has_last_modify,
+            $metrics.snapshot_has_boss_online,
+            $metrics.snapshot_has_active_desc)
+        Write-Output ("ai_sessions total={0} last_7d={1}" -f $metrics.ai_session_total, $metrics.ai_session_7d)
+        Write-Output ("reply_controls seats_enabled={0} global_stop_true={1} session_stop_true={2} contradictions={3}" -f `
+            $metrics.ai_seat_enabled,
+            $metrics.global_stop_true,
+            $metrics.session_stop_true,
+            $metrics.enabled_seat_global_stop)
+        Write-Output ("reply_jobs total={0} last_7d={1} completed={2} with_action={3} completed_without_action={4}" -f `
+            $metrics.reply_job_total,
+            $metrics.reply_job_7d,
+            $metrics.reply_job_completed,
+            $metrics.reply_job_with_action,
+            $replyWithoutAction)
+        Write-Output ("reply_actions send_text={0} action_events={1}" -f `
+            $metrics.reply_send_text_total,
+            $metrics.reply_action_event_total)
+        Write-Output ("browser_executor reply_enabled={0} delivery_enabled={1} latest_ms={2} age_ms={3}" -f `
+            $metrics.executor_reply_enabled,
+            $metrics.executor_delivery_enabled,
+            $metrics.executor_latest_ms,
+            $executorAgeMs)
+        Write-Output ("model_config custom_active={0} custom_ready={1}" -f `
+            $metrics.custom_model_active,
+            $metrics.custom_model_ready)
+
+        $decisionRows = Invoke-ReadOnlyMySqlQuery -Sql @'
+SELECT CASE JSON_UNQUOTE(JSON_EXTRACT(result_json, '$.decision.code'))
+           WHEN 'SEND' THEN 'SEND'
+           WHEN 'STOP' THEN 'STOP'
+           WHEN 'MISSING_MATERIALS' THEN 'MISSING_MATERIALS'
+           ELSE 'NONE_OR_OTHER'
+       END AS safe_code,
+       CASE status
+           WHEN 'COMPLETED' THEN 'COMPLETED'
+           WHEN 'SUPERSEDED' THEN 'SUPERSEDED'
+           WHEN 'FAILED' THEN 'FAILED'
+           WHEN 'WAITING_EXECUTION' THEN 'WAITING_EXECUTION'
+           WHEN 'LEASED' THEN 'LEASED'
+           ELSE 'OTHER'
+       END AS safe_status,
+       COUNT(*),
+       SUM(updated_at >= (UNIX_TIMESTAMP(NOW() - INTERVAL 7 DAY) * 1000)),
+       COALESCE(MAX(updated_at), 0)
+FROM automation_job
+WHERE kind = 'REPLY'
+GROUP BY safe_code, safe_status
+ORDER BY safe_code, safe_status;
+'@
+        foreach ($row in $decisionRows) {
+            $columns = ([string]$row).Split("`t")
+            if ($columns.Count -ne 5 -or
+                -not (Test-FixedEnum -Value $columns[0] -Allowed @("SEND", "STOP", "MISSING_MATERIALS", "NONE_OR_OTHER")) -or
+                -not (Test-FixedEnum -Value $columns[1] -Allowed @("COMPLETED", "SUPERSEDED", "FAILED", "WAITING_EXECUTION", "LEASED", "OTHER")) -or
+                $columns[2] -notmatch '^\d+$' -or
+                $columns[3] -notmatch '^\d+$' -or
+                $columns[4] -notmatch '^\d+$') {
+                continue
+            }
+            Write-Output ("reply_decision code={0} status={1} total={2} last_7d={3} latest_ms={4}" -f `
+                $columns[0], $columns[1], $columns[2], $columns[3], $columns[4])
+        }
+
+        $actionRows = Invoke-ReadOnlyMySqlQuery -Sql @'
+SELECT CASE automation_action.status
+           WHEN 'QUEUED' THEN 'QUEUED'
+           WHEN 'LEASED' THEN 'LEASED'
+           WHEN 'DISPATCHING' THEN 'DISPATCHING'
+           WHEN 'ACKNOWLEDGED' THEN 'ACKNOWLEDGED'
+           WHEN 'FAILED' THEN 'FAILED'
+           WHEN 'CANCELLED' THEN 'CANCELLED'
+           ELSE 'OTHER'
+       END AS safe_status,
+       COUNT(*),
+       COALESCE(MAX(automation_action.updated_at), 0)
+FROM automation_action
+JOIN automation_job ON automation_job.id = automation_action.job_id
+WHERE automation_job.kind = 'REPLY' AND automation_action.kind = 'SEND_TEXT'
+GROUP BY safe_status
+ORDER BY safe_status;
+'@
+        foreach ($row in $actionRows) {
+            $columns = ([string]$row).Split("`t")
+            if ($columns.Count -ne 3 -or
+                -not (Test-FixedEnum -Value $columns[0] -Allowed @("QUEUED", "LEASED", "DISPATCHING", "ACKNOWLEDGED", "FAILED", "CANCELLED", "OTHER")) -or
+                $columns[1] -notmatch '^\d+$' -or
+                $columns[2] -notmatch '^\d+$') {
+                continue
+            }
+            Write-Output ("reply_send_text status={0} total={1} latest_ms={2}" -f `
+                $columns[0], $columns[1], $columns[2])
+        }
+
+        try {
+            $backend = Invoke-RestMethod -Uri $backendHealthUri -TimeoutSec 3
+            $defaultModelStatus = [string]$backend.checks.model
+            if (-not (Test-FixedEnum -Value $defaultModelStatus -Allowed @("configured", "not-configured"))) {
+                $defaultModelStatus = "unknown"
+            }
+            Write-Output ("default_model status={0}" -f $defaultModelStatus)
+            if ($defaultModelStatus -ne "configured") {
+                Write-Output "pipeline_alert code=DEFAULT_MODEL_NOT_CONFIGURED severity=error"
+                Set-DiagnosticExitCode -Code 1
+            }
+        }
+        catch {
+            Write-Output "default_model status=unavailable"
+            Set-DiagnosticExitCode -Code 1
+        }
+
+        if ($metrics.enabled_seat_global_stop -gt 0) {
+            Write-Output ("pipeline_alert code=GLOBAL_REPLY_STOP_WITH_ENABLED_SEAT severity=error affected={0}" -f `
+                $metrics.enabled_seat_global_stop)
+            Set-DiagnosticExitCode -Code 1
+        }
+        if ($metrics.ai_seat_enabled -gt 0 -and
+            ($metrics.executor_reply_enabled -eq 0 -or $metrics.executor_latest_ms -eq 0 -or $executorAgeMs -gt 120000)) {
+            Write-Output ("pipeline_alert code=REPLY_EXECUTOR_NOT_READY severity=warning age_ms={0}" -f $executorAgeMs)
+            Set-DiagnosticExitCode -Code 1
+        }
+        if ($metrics.snapshot_total -gt 0 -and
+            ($metrics.snapshot_has_last_modify -eq 0 -or $metrics.snapshot_has_boss_online -eq 0)) {
+            Write-Output "pipeline_alert code=JOB_PRIORITY_SIGNALS_NOT_CAPTURED severity=warning"
+            Set-DiagnosticExitCode -Code 1
+        }
+        if ($metrics.reply_job_total -gt 0 -and $metrics.reply_send_text_total -eq 0) {
+            Write-Output "pipeline_alert code=REPLY_SEND_ACTION_NEVER_CREATED severity=warning"
+            Set-DiagnosticExitCode -Code 1
+        }
+        if ($metrics.custom_model_active -gt $metrics.custom_model_ready) {
+            Write-Output ("model_advisory code=CUSTOM_MODEL_NOT_READY fallback=default affected={0}" -f `
+                ($metrics.custom_model_active - $metrics.custom_model_ready))
+        }
+    }
+    catch {
+        Write-Output "pipeline_aggregates=unavailable"
+        Set-DiagnosticExitCode -Code 1
+    }
+}
+
 function Show-RejectionDiagnostics {
     Write-Section "Rejection analysis aggregates"
 
@@ -754,6 +1084,9 @@ switch ($Action) {
     "database" {
         Show-DatabaseDiagnostics
     }
+    "pipeline" {
+        Show-PipelineDiagnostics
+    }
     "rejections" {
         Show-RejectionDiagnostics
     }
@@ -764,6 +1097,7 @@ switch ($Action) {
         Show-StatusDiagnostics
         Show-RuntimeDiagnostics
         Show-DatabaseDiagnostics
+        Show-PipelineDiagnostics
         Show-RejectionDiagnostics
         Show-BackendLogDiagnostics
     }
