@@ -396,8 +396,8 @@ export const simulateScrollToEnd = async (platform?: Platform) => {
             activeElement.dispatchEvent(upEvent);
         }
 
-        // 等待浏览器处理事件
-        await new Promise(resolve => requestAnimationFrame(resolve));
+        // 合成键盘事件会同步分发。后台标签页可能长期不执行
+        // requestAnimationFrame，不能让翻页流程在此无限等待。
     } catch (error) {
         console.warn('键盘事件触发失败，使用备选方案');
     }
@@ -415,13 +415,14 @@ export const simulateScrollToEnd = async (platform?: Platform) => {
         ) - window.innerHeight;
     };
 
-    // 平滑滚动到最底部（兼容模式）
+    // 直接滚动到最底部；后台标签页的平滑动画可能被暂停。
     const maxScroll = getMaxScroll();
     if (window.scrollY !== maxScroll) {
-        window.scrollTo({
-            top: maxScroll,
-            behavior: 'smooth'
-        });
+        if (document.scrollingElement) {
+            document.scrollingElement.scrollTop = maxScroll;
+        } else {
+            window.scrollTo(0, maxScroll);
+        }
     }
 };
 

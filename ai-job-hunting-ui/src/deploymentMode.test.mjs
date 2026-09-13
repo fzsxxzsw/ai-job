@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import {readFileSync} from 'node:fs'
 import {isPersonalMode, IS_PERSONAL_MODE} from './deploymentMode.ts'
-const read = path => readFileSync(new URL(path, import.meta.url), 'utf8')
+const read = path => readFileSync(new URL(path, import.meta.url), 'utf8').replace(/\r\n/g, '\n')
 
 test('personal UI is the default and commercial UI requires explicit false', () => {
     assert.equal(IS_PERSONAL_MODE, true)

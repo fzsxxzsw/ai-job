@@ -80,7 +80,7 @@
                                style="width: 150px; margin-right: 8px">
                         <el-option label="必须匹配（推荐）" value="required"/>
                         <el-option label="仅作为偏好" value="prefer"/>
-                        <el-option label="关闭规则" value="off"/>
+                        <el-option label="仅关闭关键词（仍过滤非开发岗）" value="off"/>
                     </el-select>
                     <el-select v-model="userStore.user.preference.jni"
                                multiple

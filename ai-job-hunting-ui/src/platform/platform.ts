@@ -61,7 +61,7 @@ import {CHAT_BRIDGE_READY_EVENT} from "../webSocket/chatDelivery";
 import {collectBossJobs, rankBossJobsForRecruitingLikelihood} from "./boss/jobSourceAdapter";
 import {BossContractError, buildBossJobCardQuery, parseBossJobCardResponse} from "./boss/bossApi";
 import {AiJobDecision, normalizeAiJobDecision} from "./boss/jobDecision";
-import {evaluateJobTitleRule} from "./boss/jobTitleRule";
+import {evaluateJobTitleRule, hasPotentialDeveloperTitle, isClearlyNonDeveloperTitle} from "./boss/jobTitleRule";
 import {ApplicationSnapshotPayload, saveApplicationSnapshotWithRetry} from "./boss/rejectionAnalysis";
 import {
     customGreetingEnabled,
@@ -1456,6 +1456,13 @@ class BossPlatform extends AbsPlatform {
         // 永久硬屏蔽优先级最高，不受可编辑偏好开关影响。
         if (Tools.isHardBlockedCompany(jobDetail.brandName)) {
             throw new NotMatchException(jobTitle, jobDetail.brandName, '命中本地永久硬屏蔽公司（潮一相关）')
+        }
+        // 标题已能确定方向不符时，直接跳过，避免为无关岗位请求详情或 AI。
+        if (isClearlyNonDeveloperTitle(jobDetail.jobName)) {
+            throw new NotMatchException(jobTitle, jobDetail.jobName, '岗位名称明确属于非开发方向')
+        }
+        if (!hasPotentialDeveloperTitle(jobDetail.jobName)) {
+            throw new NotMatchException(jobTitle, jobDetail.jobName, '岗位名称缺少开发岗位特征')
         }
         const baseExclusion = matchEmploymentExclusion(userStore.user.preference, jobDetail)
         if (baseExclusion) {
