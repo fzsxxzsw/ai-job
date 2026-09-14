@@ -2,7 +2,6 @@ import hmac
 
 from sqlalchemy import select
 
-from ..conversation import is_stopped
 from ..database import dumps, loads, now_ms
 from ..employment_exclusions import conversation_exclusion
 from ..errors import ApiError
@@ -96,12 +95,10 @@ class Actions(Storage):
             raise ApiError("AUTHORIZATION_CHANGED", 409)
         if executor["scopeHash"] != loads(job["context_json"], {}).get("scopeHash"):
             raise ApiError("AUTHORIZATION_CHANGED", 409)
+        failure = await self.authority_failure(c, uid, job, executor["scopeHash"])
+        if failure:
+            raise ApiError(failure, 409)
         if not raw.get("replyEnabled" if job["kind"] == "REPLY" else "deliveryEnabled"):
-            raise ApiError("AUTOMATION_PAUSED", 409)
-        input_ = loads(job["input_json"], {}).get("input", {})
-        if job["kind"] == "REPLY" and await is_stopped(self.db, uid, input_["jobKey"]):
-            raise ApiError("AUTOMATION_PAUSED", 409)
-        if await self.db.control(uid, "stop:*", False, c):
             raise ApiError("AUTOMATION_PAUSED", 409)
         return executor
 
@@ -377,6 +374,7 @@ class Actions(Storage):
                 expected = "APPROVED" if payload.decision == "APPROVE" else "DECLINED"
                 if (
                     action["approval_status"] not in {"PENDING", expected}
+                    or action["status"] != "QUEUED"
                     or job["status"] in TERMINAL
                 ):
                     raise ApiError("APPROVAL_STALE", 409)

@@ -50,6 +50,8 @@ export const PushRunStore = defineStore('push-run', () => {
     const status = ref<PushRunStatus>('idle')
     const reason = ref('')
     const startedAt = ref<number>()
+    // In-memory only: reloading a page never renews a completed delivery run.
+    const completedAt = ref<number>()
     const stopRequested = ref(false)
     const isActive = computed(() => ['preparing', 'running', 'stopping'].includes(status.value))
     let stopHandler: (() => void) | undefined
@@ -64,6 +66,7 @@ export const PushRunStore = defineStore('push-run', () => {
         status.value = 'preparing'
         reason.value = ''
         startedAt.value = Date.now()
+        completedAt.value = undefined
         stopRequested.value = false
         stopHandler = onStop
 
@@ -85,7 +88,10 @@ export const PushRunStore = defineStore('push-run', () => {
             reason.value = result?.reason || ''
             if (stopRequested.value || result?.status === 'stopped') status.value = 'stopped'
             else if (result?.status === 'blocked') status.value = 'blocked'
-            else status.value = 'completed'
+            else {
+                status.value = 'completed'
+                completedAt.value = Date.now()
+            }
             return execution
         } catch (error: any) {
             status.value = 'failed'
@@ -115,6 +121,7 @@ export const PushRunStore = defineStore('push-run', () => {
         status,
         reason,
         startedAt,
+        completedAt,
         stopRequested,
         isActive,
         run,

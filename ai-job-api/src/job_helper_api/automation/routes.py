@@ -54,9 +54,12 @@ def register_routes(app, require_user, writable):
         offset: int = Query(0, ge=0),
         kind: Literal["REPLY", "APPLICATION", "CAREER_REVIEW"] | None = None,
         conversationKey: str | None = Query(None, max_length=255),
+        activeOnly: bool = False,
         uid=Depends(require_user),
     ):
-        return envelope(await service().listing(uid, limit, offset, kind, conversationKey))
+        return envelope(
+            await service().listing(uid, limit, offset, kind, conversationKey, activeOnly)
+        )
 
     @app.get("/api/job/automation/jobs/{job_id}")
     async def detail(job_id: str, uid=Depends(require_user)):

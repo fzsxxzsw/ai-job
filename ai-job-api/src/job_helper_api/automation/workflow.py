@@ -1,4 +1,4 @@
-from sqlalchemy import or_, select
+from sqlalchemy import and_, or_, select
 
 from ..database import dumps, loads, now_ms
 from ..errors import ApiError
@@ -11,27 +11,110 @@ class Workflow(Storage):
         async with self.transaction(self.uid) as c:
             state = await self.db.control(self.uid, "automation:worker", {}, c)
             state.update(payload.model_dump(), lastSeenAt=now_ms())
-            await self.db.set_control(c, self.uid, "automation:worker", state)
-            pending = (
-                await c.execute(
-                    select(self.jobs)
-                    .where(
-                        self.jobs.c.user_id == self.uid,
-                        self.jobs.c.status.in_(
-                            ["WAITING_EXECUTION", "WAITING_CONFIRMATION", "UNCERTAIN"]
-                        ),
+            try:
+                scope = await self.scope(self.uid, c)
+            except ApiError:
+                # Invalid current model settings cannot revive frozen send authority.
+                scope = None
+            user = await self.db.user(self.uid, c)
+            controls = {}
+            active = self.jobs.c.status.in_(
+                [
+                    "READY",
+                    "RETRY",
+                    "RUNNING",
+                    "WAITING_EXECUTION",
+                    "EXECUTION_READY",
+                    "WAITING_CONFIRMATION",
+                    "CONFIRMATION_READY",
+                    "UNCERTAIN",
+                ]
+            )
+            cursor = state.get("reconcileCursor")
+            until = state.get("reconcileUntil")
+            if not isinstance(until, int) or isinstance(until, bool) or until <= 0:
+                until = now_ms()
+            query = select(self.jobs).where(
+                self.jobs.c.user_id == self.uid,
+                active,
+                self.jobs.c.created_at <= until,
+            )
+            if isinstance(cursor, list) and len(cursor) == 2:
+                query = query.where(
+                    or_(
+                        self.jobs.c.created_at > cursor[0],
+                        and_(self.jobs.c.created_at == cursor[0], self.jobs.c.id > cursor[1]),
                     )
-                    .limit(200)
                 )
-            ).mappings()
+            pending = (
+                (await c.execute(query.order_by(self.jobs.c.created_at, self.jobs.c.id).limit(25)))
+                .mappings()
+                .all()
+            )
+            if not pending and cursor:
+                until = now_ms()
+                pending = (
+                    (
+                        await c.execute(
+                            select(self.jobs)
+                            .where(
+                                self.jobs.c.user_id == self.uid,
+                                active,
+                                self.jobs.c.created_at <= until,
+                            )
+                            .order_by(self.jobs.c.created_at, self.jobs.c.id)
+                            .limit(25)
+                        )
+                    )
+                    .mappings()
+                    .all()
+                )
             for row in pending:
                 job = dict(row)
-                await self.expire_actions(c, self.uid, job)
-                await self.wake(c, job)
+                if job["status"] == "RUNNING" and (job["lease_until"] or 0) >= now_ms():
+                    continue
+                if job["compute_started"] and not job["artifact_id"] and job["status"] == "RUNNING":
+                    await self.update_job(
+                        c,
+                        job,
+                        status="UNCERTAIN",
+                        phase="UNCERTAIN",
+                        last_error_code="MODEL_RESULT_UNCERTAIN",
+                        lease_token=None,
+                        lease_until=None,
+                    )
+                    continue
+                if await self.acknowledged_reconciliation(c, self.uid, job):
+                    continue
+                reason = await self.authority_failure(
+                    c, self.uid, job, scope, user=user, controls=controls
+                )
+                if reason:
+                    await self.close_pending(c, self.uid, job, reason)
+                    continue
+                if await self.expire_actions(c, self.uid, job) or any(
+                    a["last_error_code"] == "ACTION_EXPIRED"
+                    for a in await self.action_rows(self.uid, job["id"], c)
+                ):
+                    await self.close_pending(c, self.uid, job, "ACTION_EXPIRED")
+                    continue
+                if job["status"] in {"WAITING_EXECUTION", "WAITING_CONFIRMATION", "UNCERTAIN"}:
+                    await self.wake(c, job)
+            state["reconcileCursor"] = (
+                [pending[-1]["created_at"], pending[-1]["id"]] if len(pending) == 25 else None
+            )
+            state["reconcileUntil"] = until if len(pending) == 25 else None
+            await self.db.set_control(c, self.uid, "automation:worker", state)
             return {key: state[key] for key in ("workerId", "graphVersion", "lastSeenAt")}
 
     async def claim(self, payload):
         async with self.transaction(self.uid) as c:
+            try:
+                scope = await self.scope(self.uid, c)
+            except ApiError:
+                scope = None
+            user = await self.db.user(self.uid, c)
+            controls = {}
             candidates = (
                 (
                     await c.execute(
@@ -69,7 +152,8 @@ class Workflow(Storage):
                 job = dict(row)
                 if await self.db.control(self.uid, "career:deleted:" + job["id"], None, c):
                     continue
-                if job["compute_started"] and not job["artifact_id"]:
+                terminal = job["status"] in {"COMPLETED", "FAILED"}
+                if not terminal and job["compute_started"] and not job["artifact_id"]:
                     await self.update_job(
                         c,
                         job,
@@ -79,6 +163,24 @@ class Workflow(Storage):
                         lease_token=None,
                         lease_until=None,
                     )
+                    continue
+                if terminal or await self.acknowledged_reconciliation(c, self.uid, job):
+                    reason = None
+                else:
+                    reason = await self.authority_failure(
+                        c, self.uid, job, scope, user=user, controls=controls
+                    )
+                if reason:
+                    await self.close_pending(c, self.uid, job, reason)
+                    continue
+                if not terminal and (
+                    await self.expire_actions(c, self.uid, job)
+                    or any(
+                        a["last_error_code"] == "ACTION_EXPIRED"
+                        for a in await self.action_rows(self.uid, job["id"], c)
+                    )
+                ):
+                    await self.close_pending(c, self.uid, job, "ACTION_EXPIRED")
                     continue
                 actions = await self.action_rows(self.uid, job["id"], c)
                 approvals = [
@@ -95,7 +197,6 @@ class Workflow(Storage):
                     for a in actions
                     if a["status"] in {"ACKNOWLEDGED", "FAILED", "UNKNOWN", "CANCELLED"}
                 ]
-                terminal = job["status"] in {"COMPLETED", "FAILED"}
                 execution = (
                     "RECONCILE_TERMINAL"
                     if terminal

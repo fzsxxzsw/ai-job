@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import {createPinia, setActivePinia} from 'pinia'
 
-import {runWithOptionalWebLock} from './pushRun.ts'
+import {PushRunStore, runWithOptionalWebLock} from './pushRun.ts'
 
 test('runs normally when Web Locks is unavailable', async () => {
     const execution = await runWithOptionalWebLock(undefined, async () => 'done')
@@ -41,4 +42,16 @@ test('holds the lock until the whole run executor completes', async () => {
         ['running'],
         ['released'],
     ])
+})
+
+test('natural completion records a memory-only finish time; a new run clears it', async () => {
+    setActivePinia(createPinia())
+    const store = PushRunStore()
+    const before = Date.now()
+    await store.run(async () => ({status: 'completed'}), () => {})
+    assert.equal(store.status, 'completed')
+    assert.ok(store.completedAt >= before && store.completedAt <= Date.now())
+    await store.run(async () => ({status: 'stopped'}), () => {})
+    assert.equal(store.status, 'stopped')
+    assert.equal(store.completedAt, undefined)
 })

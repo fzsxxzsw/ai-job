@@ -183,10 +183,14 @@ class ModelRouter(ModelClient):
                     for row in payload.models
                 ):
                     raise ApiError("没有可用的免费模型，请先导入额度并检查状态", 422)
-                doc["config"] = payload.model_dump()
-                doc["config"]["revision"] += 1
-                await bump_authority(self.db, c, self.uid)
-                await self.db.set_control(c, self.uid, quota_scope(config), doc)
+                proposed = payload.model_dump()
+                if {k: v for k, v in proposed.items() if k != "revision"} != {
+                    k: v for k, v in doc["config"].items() if k != "revision"
+                }:
+                    proposed["revision"] += 1
+                    doc["config"] = proposed
+                    await bump_authority(self.db, c, self.uid)
+                    await self.db.set_control(c, self.uid, quota_scope(config), doc)
         return await self.view(config)
 
     async def import_quota(self, config, payload):

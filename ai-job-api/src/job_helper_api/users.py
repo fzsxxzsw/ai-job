@@ -5,6 +5,8 @@ import sys
 from collections.abc import Mapping
 from typing import Any
 
+from sqlalchemy import select
+
 from .contracts import ConfigInput, PreferenceInput
 from .database import Database, dumps, loads, now_date, now_ms
 from .errors import ApiError
@@ -54,7 +56,17 @@ async def save_preference(db: Database, uid: int, payload: PreferenceInput) -> N
         values["ai_seat_status"] = int(payload.aiSeatStatus)
     t = db.table("user_info")
     async with db.engine.begin() as c:
-        await bump_authority(db, c, uid)
+        current = await db.one(
+            select(t).where(t.c.id == uid, t.c.is_active.is_(True)).with_for_update(), c
+        )
+        if not current:
+            raise ApiError("当前账号不存在", 401)
+        authorization_changed = (
+            "preference" in values
+            and loads(values["preference"], {}) != loads(current["preference"], {})
+        ) or ("ai_seat_status" in values and values["ai_seat_status"] != current["ai_seat_status"])
+        if authorization_changed:
+            await bump_authority(db, c, uid)
         await c.execute(t.update().where(t.c.id == uid, t.c.is_active.is_(True)).values(**values))
 
 
@@ -188,11 +200,18 @@ async def save_config(
             # A draft cannot silently replace an enabled, verified model.
             merged["test_passed"] = 0
             merged["status"] = 0
+        authorization_changed = bool(
+            not old
+            or changed
+            or old.get("status") != merged.get("status")
+            or (old.get("user_prompt") or "") != (merged.get("user_prompt") or "")
+        )
         values = {k: merged.get(k) for k in set(CONFIG_FIELDS.values()) if k in merged}
         values.update(test_passed=merged["test_passed"], updated_id=uid, updated_date=now_date())
         t = db.table("user_ai_config")
         async with db.engine.begin() as c:
-            await bump_authority(db, c, uid)
+            if authorization_changed:
+                await bump_authority(db, c, uid)
             if old:
                 await c.execute(
                     t.update().where(t.c.id == old["id"], t.c.user_id == uid).values(**values)

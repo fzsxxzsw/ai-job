@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {createUnifiedAutomation} from './unifiedAutomation.ts'
-import {automationActionLabel, automationJobLabel, outcomeSubscriptionLabel} from './automationPresentation.ts'
+import {automationActionLabel, automationApprovalAvailable, automationJobLabel, outcomeSubscriptionLabel} from './automationPresentation.ts'
 
 class MemoryStorage {
     values = new Map()
@@ -180,6 +180,29 @@ test('task presentation distinguishes no action, declined operation, failure and
     assert.match(automationActionLabel({...action('SEND_RESUME'), approvalStatus: 'DECLINED'}), /未发送/)
     assert.equal(outcomeSubscriptionLabel(null, 1, ''), '连接尚未确认')
     assert.equal(outcomeSubscriptionLabel({outcomes: {enabled: true}, agent: {state: 'OFFLINE'}}, 1, ''), '分析工作进程未就绪')
+})
+
+test('expired and revoked jobs explain unsent cancellation without erasing earlier ACKs', () => {
+    const sent = {...action('CONTACT_JOB', 'contact'), status: 'ACKNOWLEDGED'}
+    const cancelled = {...action('SEND_GREETING', 'greeting'), status: 'CANCELLED', lastErrorCode: 'AUTHORIZATION_CHANGED'}
+    const revoked = {...makeJob([sent, cancelled]), status: 'CANCELLED', lastErrorCode: 'AUTHORIZATION_CHANGED'}
+    assert.match(automationJobLabel(revoked), /授权已变化；部分已发送，剩余已取消（分项回执保留）/)
+    assert.doesNotMatch(automationJobLabel(revoked), /本轮未发送/)
+    assert.match(automationActionLabel(sent), /平台已确认/)
+    assert.match(automationActionLabel(cancelled), /授权变化，未发送/)
+    const expired = {...makeJob([{...cancelled, lastErrorCode: 'ACTION_EXPIRED'}]), status: 'CANCELLED', lastErrorCode: 'ACTION_EXPIRED'}
+    assert.match(automationJobLabel(expired), /等待执行已超时；未发动作已取消/)
+    assert.match(automationActionLabel(expired.actions[0]), /等待超时，未发送/)
+})
+
+test('cancelled pending approval stays visible but cannot be approved again', () => {
+    const pending = {...action('ACCEPT_PHONE'), approvalStatus: 'PENDING'}
+    const waiting = {...makeJob([pending]), status: 'WAITING_CONFIRMATION'}
+    assert.equal(automationApprovalAvailable(waiting, pending), true)
+    assert.equal(automationApprovalAvailable(waiting, {...pending, status: 'CANCELLED'}), false)
+    assert.equal(automationApprovalAvailable({...waiting, status: 'CANCELLED'}, pending), false)
+    assert.equal(automationApprovalAvailable({...waiting, status: 'FAILED'}, pending), false)
+    assert.equal(automationApprovalAvailable(waiting, {...pending, status: 'ACKNOWLEDGED'}), false)
 })
 test('32 old-scope jobs cannot occupy current-scope work slots', async () => {
     const env = rig()

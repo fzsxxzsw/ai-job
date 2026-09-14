@@ -157,8 +157,12 @@ class Jobs(Storage):
             await self.event(c, uid, payload.requestId, "JOB_REQUEST", raw, job["id"])
             return await self.view(uid, job, c)
 
-    async def listing(self, uid, limit=20, offset=0, kind=None, conversation_key=None):
+    async def listing(
+        self, uid, limit=20, offset=0, kind=None, conversation_key=None, active_only=False
+    ):
         query = select(self.jobs).where(self.jobs.c.user_id == uid)
+        if active_only:
+            query = query.where(self.jobs.c.status.not_in(TERMINAL))
         if kind:
             query = query.where(self.jobs.c.kind == kind)
         if conversation_key:

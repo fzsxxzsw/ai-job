@@ -9,6 +9,7 @@ from sqlalchemy import select
 from ..conversation import safe_history
 from ..database import dumps, loads, now_ms
 from ..errors import ApiError
+from ..execution_authority import session_authority_key
 from ..model import effective_config
 from ..model_routing import quota_scope
 from .history import current_rounds, history_key
@@ -16,6 +17,8 @@ from .history import current_rounds, history_key
 TERMINAL = {"COMPLETED", "CANCELLED", "SUPERSEDED", "FAILED"}
 SENSITIVE = {"SEND_RESUME", "ACCEPT_RESUME", "ACCEPT_PHONE", "ACCEPT_WECHAT"}
 ACTION_DONE = {"ACKNOWLEDGED", "CANCELLED", "FAILED"}
+UNSENT_ACTION_TTL_MS = {"APPLICATION": 5 * 60_000, "REPLY": 10 * 60_000}
+APPLICATION_ABSOLUTE_TTL_MS = 24 * 60 * 60_000
 
 
 def digest(value):
@@ -183,6 +186,9 @@ class Storage:
             }
         if payload.kind == "REPLY":
             raw = payload.model_dump(mode="json")
+            bundle["sessionAuthorityEpoch"] = await self.db.control(
+                uid, session_authority_key(payload.input.jobKey), 0, c
+            )
             key = history_key(raw)
             sessions = self.db.table("msg_session")
             session = await self.db.one(
@@ -273,8 +279,48 @@ class Storage:
         return job
 
     async def expire_actions(self, c, uid, job):
+        expired_unsent = False
+        timestamp = now_ms()
+        active_delivery = False
+        if job["kind"] == "APPLICATION":
+            owner = await self.db.control(uid, "automation:executor-owner", {}, c)
+            active_delivery = bool(
+                owner.get("deliveryEnabled") and owner.get("lastSeenAt", 0) + 15_000 >= timestamp
+            )
         for action in await self.action_rows(uid, job["id"], c):
-            if action["lease_until"] and action["lease_until"] < now_ms():
+            ttl = UNSENT_ACTION_TTL_MS.get(job["kind"])
+            ready_at = action["created_at"]
+            if action["approval_status"] == "APPROVED" and action["approval_id"]:
+                approval = await self.db.one(
+                    select(self.events.c.created_at).where(
+                        self.events.c.user_id == uid, self.events.c.id == action["approval_id"]
+                    ),
+                    c,
+                )
+                if approval:
+                    ready_at = approval["created_at"]
+            if (
+                ttl is not None
+                and action["approval_status"] != "PENDING"
+                and action["status"] in {"QUEUED", "LEASED"}
+                and (
+                    (ready_at + ttl < timestamp and not active_delivery)
+                    or (
+                        job["kind"] == "APPLICATION"
+                        and ready_at + APPLICATION_ABSOLUTE_TTL_MS < timestamp
+                    )
+                )
+            ):
+                await self.update_action(
+                    c,
+                    action,
+                    status="CANCELLED",
+                    last_error_code="ACTION_EXPIRED",
+                    lease_token=None,
+                    lease_until=None,
+                )
+                expired_unsent = True
+            elif action["lease_until"] and action["lease_until"] < timestamp:
                 if action["status"] == "LEASED":
                     await self.update_action(
                         c, action, status="QUEUED", lease_token=None, lease_until=None
@@ -283,6 +329,96 @@ class Storage:
                     await self.update_action(
                         c, action, status="UNKNOWN", last_error_code="RECEIPT_MISSING"
                     )
+        return expired_unsent
+
+    async def authority_failure(self, c, uid, job, scope, *, user=None, controls=None):
+        if controls is None:
+            controls = {}
+
+        async def control(key):
+            if key not in controls:
+                controls[key] = await self.db.control(uid, key, 0, c)
+            return controls[key]
+
+        if job["kind"] not in {"REPLY", "APPLICATION"}:
+            return None
+        if loads(job["context_json"], {}).get("scopeHash") != scope:
+            return "AUTHORIZATION_CHANGED"
+        if await control("stop:*"):
+            return "AUTOMATION_PAUSED"
+        if job["kind"] == "REPLY":
+            raw = loads(job["input_json"], {}).get("input", {})
+            key = raw.get("jobKey")
+            if not key:
+                return "AUTHORIZATION_CHANGED"
+            epoch = await control(session_authority_key(key))
+            if loads(job["context_json"], {}).get("sessionAuthorityEpoch", 0) != epoch:
+                return "AUTHORIZATION_CHANGED"
+            if await control("stop:" + key):
+                return "AUTOMATION_PAUSED"
+            if user is None:
+                user = await self.db.user(uid, c)
+            if not user or user["ai_seat_status"] != 1:
+                return "AUTOMATION_PAUSED"
+        return None
+
+    async def close_pending(self, c, uid, job, reason):
+        actions = await self.action_rows(uid, job["id"], c)
+        cancelled = False
+        for action in actions:
+            if action["status"] in {"QUEUED", "LEASED"}:
+                await self.update_action(
+                    c,
+                    action,
+                    status="CANCELLED",
+                    last_error_code=reason,
+                    lease_token=None,
+                    lease_until=None,
+                )
+                cancelled = True
+        unresolved_send = any(a["status"] in {"DISPATCHING", "UNKNOWN"} for a in actions)
+        failed = next((a for a in actions if a["status"] == "FAILED"), None)
+        if unresolved_send or job["status"] == "UNCERTAIN":
+            state = "UNCERTAIN"
+            error = job["last_error_code"] or (
+                "PLATFORM_RESULT_UNKNOWN" if unresolved_send else reason
+            )
+        elif failed:
+            state = "FAILED"
+            error = failed["last_error_code"] or "PLATFORM_REJECTED"
+        else:
+            state = "CANCELLED"
+            error = reason
+        if (
+            not cancelled
+            and job["status"] == state
+            and job["phase"] == state
+            and job["last_error_code"] == error
+            and job["lease_token"] is None
+            and job["lease_until"] is None
+        ):
+            return
+        await self.update_job(
+            c,
+            job,
+            status=state,
+            phase=state,
+            last_error_code=error,
+            lease_token=None,
+            lease_until=None,
+        )
+
+    async def acknowledged_reconciliation(self, c, uid, job):
+        if job["status"] != "EXECUTION_READY" or job["kind"] not in {"REPLY", "APPLICATION"}:
+            return False
+        actions = await self.action_rows(uid, job["id"], c)
+        return (
+            bool(actions)
+            and any(a["status"] == "ACKNOWLEDGED" for a in actions)
+            and all(
+                a["status"] == "ACKNOWLEDGED" or a["approval_status"] == "DECLINED" for a in actions
+            )
+        )
 
     async def wait_for(self, uid, job_id, c):
         job = await self.row(self.jobs, uid, job_id, c)

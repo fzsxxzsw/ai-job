@@ -283,6 +283,7 @@
 <script setup lang="ts">
 import AutomationTasks from './AutomationTasks.vue'
 import {automationRunSummary, unifiedAutomationEnabled} from '../../platform/unifiedRuntime'
+import {announcePushRunCompletion} from '../../platform/completionSummary'
 import axiosOriginal, {AxiosInstance} from "axios";
 import {IS_PERSONAL_MODE} from "../../deploymentMode";
 import {connectionPresentation, normalizeServerUrl} from "../../runtime/serverHealth";
@@ -736,12 +737,11 @@ const executePushRun = async () => {
     try {
         const outcome = await platform.startPush()
         if (outcome.status === 'completed') {
-            try {
-                if (await unifiedAutomationEnabled()) {
-                    const summary = await automationRunSummary(pushRunStore.runId)
-                    ElMessage({message: `本轮岗位检查结束：已联系 ${summary.contacted}，待发招呼 ${summary.waitingGreeting}，招呼待核实 ${summary.uncertainGreeting}。分项任务继续显示。`, type: 'info', duration: 5000})
-                } else ElMessage({message: '批量投递完成', type: 'success', duration: 3000})
-            } catch { ElMessage({message: '本轮岗位检查结束，最新沟通与招呼结果请查看分项任务', type: 'info', duration: 5000}) }
+            // The run must become completed as soon as scanning ends. A slow
+            // summary request must not extend browser authorization for sends.
+            announcePushRunCompletion(pushRunStore.runId, {enabled: unifiedAutomationEnabled,
+                summary: automationRunSummary,
+                notify: (message, type, duration) => { ElMessage({message, type, duration}) }})
         } else if (outcome.status === 'blocked') {
             ElMessage({
                 message: `平台已阻拦，投递已停止：${outcome.reason || '未知原因'}`,

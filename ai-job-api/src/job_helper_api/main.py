@@ -29,7 +29,7 @@ from .contracts import (
 )
 from .database import Database, dumps, loads, now_ms
 from .errors import ApiError, envelope
-from .execution_authority import bump_authority
+from .execution_authority import bump_authority, bump_session_authority
 from .middleware import RequestSizeLimitMiddleware
 from .model import PROVIDERS, effective_config, row_config
 from .model_routing import ModelRouter
@@ -340,14 +340,19 @@ def create_app(
         # reply persistence; stopping must still interrupt an in-flight model.
         lock_key = "conversation:" + jobKey if not stop and jobKey != "globalJobKey" else key
         async with app.state.db.lock(uid, lock_key):
-            async with app.state.db.engine.begin() as c:
-                epoch = await bump_authority(app.state.db, c, uid)
-                await app.state.db.set_control(c, uid, key, stop)
-                if not stop and jobKey == "globalJobKey":
-                    await _resume_legacy_session_stops(app.state.db, c, uid, epoch)
-                elif not stop:
-                    await app.state.db.set_control(c, uid, "chat-rounds:" + jobKey, 0)
-                    await app.state.db.set_control(c, uid, "graph-round-reset:" + jobKey, epoch)
+            async with app.state.db.lock(uid, "automation:state"):
+                async with app.state.db.engine.begin() as c:
+                    epoch = (
+                        await bump_authority(app.state.db, c, uid)
+                        if jobKey == "globalJobKey"
+                        else await bump_session_authority(app.state.db, c, uid, jobKey)
+                    )
+                    await app.state.db.set_control(c, uid, key, stop)
+                    if not stop and jobKey == "globalJobKey":
+                        await _resume_legacy_session_stops(app.state.db, c, uid, epoch)
+                    elif not stop:
+                        await app.state.db.set_control(c, uid, "chat-rounds:" + jobKey, 0)
+                        await app.state.db.set_control(c, uid, "graph-round-reset:" + jobKey, epoch)
         return envelope(True)
 
     @app.post("/api/job/seeker/cloned/change/session/user/stop")

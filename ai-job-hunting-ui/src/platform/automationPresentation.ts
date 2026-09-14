@@ -10,6 +10,13 @@ export function automationJobLabel(job: AutomationJob): string {
     if (job.status === 'READY') return '等待 LangGraph 领取'
     if (job.status === 'UNCERTAIN') return '平台结果待核实，不会重发'
     if (job.status === 'FAILED') return '任务失败，请查看分项结果'
+    if (job.status === 'CANCELLED') {
+        const reason = ({AUTHORIZATION_CHANGED: '设置或会话授权已变化', AUTOMATION_PAUSED: '自动操作已暂停',
+            ACTION_EXPIRED: '等待执行已超时'} as Record<string, string>)[job.lastErrorCode || '']
+        if (reason) return job.actions.some(action => action.status === 'ACKNOWLEDGED')
+            ? `${reason}；部分已发送，剩余已取消（分项回执保留）`
+            : `${reason}；未发动作已取消`
+    }
     if (job.status === 'RETRY') return '依赖暂不可用，等待任务重试'
     if (job.status === 'COMPLETED') {
         if (job.decision?.code === 'MISSING_MATERIALS') return '资料不足，本轮未发送'
@@ -19,10 +26,16 @@ export function automationJobLabel(job: AutomationJob): string {
     }
     return automationPhaseLabel(job.phase)
 }
+export function automationApprovalAvailable(job: AutomationJob, action: AutomationAction): boolean {
+    return !['COMPLETED', 'CANCELLED', 'SUPERSEDED', 'FAILED'].includes(job.status)
+        && action.status === 'QUEUED' && action.approvalStatus === 'PENDING'
+}
 export function automationActionLabel(action: AutomationAction): string {
     const name = ({CONTACT_JOB: '发起沟通', SEND_GREETING: '招呼语', SEND_TEXT: '文本回复', SEND_RESUME: '发送附件简历',
         ACCEPT_PHONE: '同意交换电话', ACCEPT_WECHAT: '同意交换微信', ACCEPT_RESUME: '同意附件简历请求'} as Record<string, string>)[action.kind]
-    const status = action.approvalStatus === 'DECLINED' ? '你已拒绝，未发送' : ({QUEUED: '待执行', LEASED: '已领取，尚未发出',
+    const cancelledReason = action.status === 'CANCELLED' ? ({AUTHORIZATION_CHANGED: '授权变化，未发送',
+        AUTOMATION_PAUSED: '自动操作暂停，未发送', ACTION_EXPIRED: '等待超时，未发送'} as Record<string, string>)[action.lastErrorCode || ''] : undefined
+    const status = action.approvalStatus === 'DECLINED' ? '你已拒绝，未发送' : cancelledReason || ({QUEUED: '待执行', LEASED: '已领取，尚未发出',
         DISPATCHING: '已派发，等待回执', ACKNOWLEDGED: '平台已确认', FAILED: '失败', CANCELLED: '已取消', UNKNOWN: '待核实，不会重发'} as Record<string, string>)[action.status] || action.status
     return `${name}：${status}`
 }

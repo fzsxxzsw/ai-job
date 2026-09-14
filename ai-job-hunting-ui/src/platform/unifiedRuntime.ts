@@ -46,7 +46,7 @@ export function browserAutomationReady(context: BrowserAutomationContext, action
     if (context.account !== account() || context.policy !== currentAutomationPolicy() || getBossRiskStop()
         || String(action.payload.encryptJobId) !== context.encryptJobId) return false
     const enabled = flags()
-    if (context.kind === 'REPLY' ? !enabled.replyEnabled : !enabled.deliveryEnabled || context.runId !== PushRunStore().runId) return false
+    if (context.kind === 'REPLY' ? !enabled.replyEnabled : !enabled.deliveryEnabled || !context.runId || context.runId !== PushRunStore().runId) return false
     if (action.payload.bossId && context.bossId && action.payload.bossId !== context.bossId) return false
     if (action.payload.conversationKey && context.conversationKey && action.payload.conversationKey !== context.conversationKey) return false
     if (['SEND_RESUME', 'ACCEPT_RESUME', 'ACCEPT_PHONE', 'ACCEPT_WECHAT'].includes(action.kind)) {
@@ -104,6 +104,16 @@ export async function submitAutomation(body: AutomationSubmission, context: Brow
     return job
 }
 export async function getAutomationJob(jobId: string) { await ensureIdentity(); return getRuntime().getJob(jobId) }
+export async function listAutomationJobs(offset: number, limit: number, activeOnly: boolean): Promise<AutomationJob[]> {
+    await ensureIdentity()
+    const expectedScope = captureAutomationScope()
+    if (!expectedScope) throw new Error('AUTOMATION_SCOPE_CHANGED')
+    const response = await axios.get('/api/job/automation/jobs', {params: {offset, limit, activeOnly},
+        suppressGlobalErrorToast: true,
+        jobHelperScopeGuard: () => expectedScope === captureAutomationScope()} as any)
+    if (expectedScope !== captureAutomationScope()) throw new Error('AUTOMATION_SCOPE_CHANGED')
+    return response.data.data as AutomationJob[]
+}
 export function captureAutomationScope() { return rawIdentity === identity() ? scope : '' }
 export async function prepareAutomationIdentity() { await ensureIdentity(); return captureAutomationScope() }
 export async function saveAutomationSnapshot(payload: unknown, expectedScope: string) {
