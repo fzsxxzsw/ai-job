@@ -23,7 +23,9 @@ const mocks = {
         export const scrollElementToBottom=()=>{}; export const simulateScrollToEnd=()=>{};
         export class MessageCache {isMessageProcessed(peer,mid){return fixture.processed.some(x=>x[0]===peer&&x[1]===mid)} markMessageAsProcessed(...args){fixture.processed.push(args)}}`,
     stores: `export const UserStore=()=>fixture.store; export const pushResultCount=()=>fixture.counter`,
-    push: `export const PushRunStore=()=>fixture.push`,
+    push: `export const PUSH_RUN_LOCK_NAME='synthetic-push-run';export const PushRunStore=()=>fixture.push`,
+    deliveryWait: `export const waitForPushDelay=async ms=>{fixture.waits.push(ms);await fixture.Tools.sleep(ms);return true};
+        export const greetingDispatchAuthorized=(entry,run,account,stopped,risk)=>!!entry.runId&&entry.runId===run.runId&&entry.account===account&&run.isActive&&!run.stopRequested&&!stopped&&!risk`,
     logger: `export default fixture.log; export const LogLevel={Debug:0}`,
     record: `export class LogRecorder {constructor(){return fixture.log}}`,
     ui: `export const ElMessage=fixture.log; export const isProdEnv=()=>true; export const ElNotification=()=>{}`,
@@ -47,6 +49,7 @@ function mocked(path) {
     if (path === './utils' || path === '../platform/utils') return 'tools'
     if (/(^|\/)stores$/.test(path)) return 'stores'
     if (path.endsWith('/stores/pushRun')) return 'push'
+    if (path === './deliveryRunWait') return 'deliveryWait'
     if (path.endsWith('/stores/remote')) return 'remote'
     if (/\/logging$/.test(path)) return 'logger'
     if (path.endsWith('/logging/record')) return 'record'
@@ -76,9 +79,9 @@ function environment() {
     const storage = new Map()
     const noop = () => {}
     const fixture = {executors:new Map(), policy:'policy-A',scope:'scope-A',enabled:true,allowed:true,risk:null,offline:false,
-        submissions:[], legacy:[],holds:[],processed:[],sends:[],reads:[],audits:[],contacts:[],naturalContacts:[],associations:[],appObservations:[],snapshots:[],bindings:[],cancels:[],requests:[],infos:[],ack:'90071992547409999',
+        submissions:[], legacy:[],holds:[],processed:[],sends:[],reads:[],audits:[],contacts:[],naturalContacts:[],associations:[],appObservations:[],snapshots:[],bindings:[],cancels:[],requests:[],infos:[],waits:[],ack:'90071992547409999',
         store:{user:{aiSeatStatus:1,resumeId:'resume-A',preference:{fhE:false,employmentExcludeE:false,resumeMatchE:true,resumeMatchMinScore:40,drE:false,cgE:true,cg:'您好，这是合成招呼',greetingDeliveryMode:'required',jti:[],jtiE:false}}},
-        push:{runId:'run-A',isActive:true,stopRequested:false},
+        push:{runId:'run-A',isActive:true,stopRequested:false,status:'running',startedAt:Date.now(),setPhase:noop},
         counter:{clearOnceSuccessCount:noop,successIncr:noop,failIncr:noop,notMatchIncr:noop},
         log:{debug:noop,trace:noop,info:(...args)=>fixture.infos.push(args),warn:noop,error:noop,getLogLevel:()=>0},
         gm:{GmGetValue:(k,d)=>storage.has(k)?storage.get(k):d,GmSetValue:(k,v)=>storage.set(k,v)},
@@ -90,14 +93,14 @@ function environment() {
         sleep:async()=>{},getRandomNumber:()=>0,getCookieValue:()=> 'synthetic-platform-token',getEndChar:()=>'',
         isHardBlockedCompany:(...texts)=>texts.some(text=>String(text||'').includes('潮一')),fuzzyMatch:()=>false}
     const module={exports:{}}
-    const context={module,exports:module.exports,require,fixture,crypto,TextEncoder,structuredClone,FormData,URL,Date,console,
-        navigator:{},window:fixture.Tools.window,document:{querySelector:()=>null,querySelectorAll:()=>[],addEventListener:noop},
+    const context={module,exports:module.exports,require,fixture,crypto,TextEncoder,structuredClone,FormData,URL,Date,console,AbortController,
+        navigator:{locks:{request:async (_name,_options,callback)=>callback({})}},window:fixture.Tools.window,document:{querySelector:()=>null,querySelectorAll:()=>[],addEventListener:noop},
         localStorage:{getItem:k=>storage.get(k)??null,setItem:(k,v)=>storage.set(k,v),removeItem:k=>storage.delete(k)},
         setInterval:()=>1,clearInterval:noop,setTimeout:()=>1,clearTimeout:noop}
     vm.runInNewContext(result.outputFiles[0].text,context)
     const option=new module.exports.BossOption()
     const platform=module.exports.PlatformFactory.getInstance('/web/geek')
-    return {...fixture,fixture,option,platform,Option:module.exports.BossOption}
+    return {...fixture,fixture,option,platform,Option:module.exports.BossOption,navigator:context.navigator}
 }
 
 test('actual live reply handler submits exact jobKey, MID and exchange requests before old side effects', async () => {
@@ -167,8 +170,21 @@ test('actual startPush performs the BOSS contact directly instead of leaving an 
     assert.equal(job.contact,true)
     assert.equal(env.sends.length,1);assert.equal(env.sends[0].content,'您好，这是合成招呼');assert.equal(env.legacy.length,0)
 })
+test('custom greeting checks cross-tab lock support before the first BOSS contact', async () => {
+    const job={encryptJobId:'JobA',encryptBossId:'BossA',securityId:'SecA',lid:'LidA',brandName:'合成公司',jobName:'开发'}
+    const guarded=environment();guarded.platform.pushStatus=1;guarded.platform.isLimit=()=>({limit:false})
+    delete guarded.navigator.locks
+    await assert.rejects(guarded.platform.doPush(job), /浏览器无法保护跨标签招呼队列/)
+    assert.equal(guarded.requests.filter(request=>request.url.includes('/friend/add.json')).length,0)
+    const defaultMode=environment();defaultMode.platform.pushStatus=1;defaultMode.platform.isLimit=()=>({limit:false})
+    defaultMode.store.user.preference.greetingDeliveryMode='platform-default'
+    delete defaultMode.navigator.locks
+    await defaultMode.platform.doPush(job)
+    assert.equal(defaultMode.requests.filter(request=>request.url.includes('/friend/add.json')).length,1)
+})
 test('actual next reports the safety wait before loading another batch', async () => {
     const env=environment()
+    env.platform.pushStatus=1
     env.platform.acquireDataPre=async()=>false
     assert.equal(await env.platform.next(),false)
     assert.match(env.infos.flat().join('\n'),/安全等待 90 秒后加载下一批职位/)

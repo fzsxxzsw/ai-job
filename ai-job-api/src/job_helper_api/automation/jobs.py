@@ -1,12 +1,36 @@
-from sqlalchemy import func, select
+from sqlalchemy import String, cast, exists, func, literal, or_, select
 
 from ..database import dumps, loads, now_ms
 from ..errors import ApiError
 from ..outcomes.storage import task_view
 from .storage import TERMINAL, Storage, digest, identifier
 
+UNCERTAIN_REVIEW_PREFIX = "automation:uncertain-review:"
+
 
 class Jobs(Storage):
+    def review_key(self, job):
+        return UNCERTAIN_REVIEW_PREFIX + job["id"] + ":" + str(job["updated_at"])
+
+    def reviewed_exists(self):
+        controls = self.db.table("py_api_control")
+        return exists(
+            select(controls.c.user_id).where(
+                controls.c.user_id == self.jobs.c.user_id,
+                controls.c.control_key
+                == literal(UNCERTAIN_REVIEW_PREFIX)
+                + self.jobs.c.id
+                + literal(":")
+                + cast(self.jobs.c.updated_at, String),
+            )
+        )
+
+    async def reviewed_view(self, uid, job, c=None):
+        view = await self.view(uid, job, c)
+        review = await self.db.control(uid, self.review_key(job), None, c)
+        view["reviewedAt"] = review.get("reviewedAt") if isinstance(review, dict) else None
+        return view
+
     async def submit(self, uid, payload):
         raw = payload.model_dump(mode="json")
         if (
@@ -162,7 +186,10 @@ class Jobs(Storage):
     ):
         query = select(self.jobs).where(self.jobs.c.user_id == uid)
         if active_only:
-            query = query.where(self.jobs.c.status.not_in(TERMINAL))
+            query = query.where(
+                self.jobs.c.status.not_in(TERMINAL),
+                or_(self.jobs.c.status != "UNCERTAIN", ~self.reviewed_exists()),
+            )
         if kind:
             query = query.where(self.jobs.c.kind == kind)
         if conversation_key:
@@ -170,10 +197,60 @@ class Jobs(Storage):
         rows = await self.db.rows(
             query.order_by(self.jobs.c.created_at.desc()).limit(limit).offset(offset)
         )
-        return [await self.view(uid, dict(row)) for row in rows]
+        if not rows:
+            return []
+        uncertain_rows = [row for row in rows if row["status"] == "UNCERTAIN"]
+        review_rows = []
+        if uncertain_rows:
+            controls = self.db.table("py_api_control")
+            review_rows = await self.db.rows(
+                select(controls.c.control_key, controls.c.value_json).where(
+                    controls.c.user_id == uid,
+                    controls.c.control_key.in_([self.review_key(row) for row in uncertain_rows]),
+                )
+            )
+        reviews = {row["control_key"]: loads(row["value_json"]) for row in review_rows}
+        views = []
+        for row in rows:
+            job = dict(row)
+            view = await self.view(uid, job)
+            review = reviews.get(self.review_key(job))
+            view["reviewedAt"] = review.get("reviewedAt") if isinstance(review, dict) else None
+            views.append(view)
+        return views
 
     async def detail(self, uid, job_id):
-        return await self.view(uid, await self.row(self.jobs, uid, job_id))
+        return await self.reviewed_view(uid, await self.row(self.jobs, uid, job_id))
+
+    async def review(self, uid, job_id, payload):
+        async with self.transaction(uid) as c:
+            job = await self.row(self.jobs, uid, job_id, c)
+            if job["status"] != "UNCERTAIN":
+                raise ApiError("JOB_NOT_UNCERTAIN", 409)
+            _, repeated = await self.event(
+                c,
+                uid,
+                payload.requestId,
+                "UNCERTAIN_REVIEW",
+                {"jobId": job_id, "reviewed": payload.reviewed},
+                job_id,
+            )
+            if not repeated:
+                key = self.review_key(job)
+                if payload.reviewed:
+                    current = await self.db.control(uid, key, None, c)
+                    if current is None:
+                        await self.db.set_control(
+                            c, uid, key, {"reviewedAt": now_ms(), "resolution": "UNVERIFIED"}
+                        )
+                else:
+                    controls = self.db.table("py_api_control")
+                    await c.execute(
+                        controls.delete().where(
+                            controls.c.user_id == uid, controls.c.control_key == key
+                        )
+                    )
+            return await self.reviewed_view(uid, job, c)
 
     async def cancel(self, uid, job_id, payload):
         async with self.transaction(uid) as c:
@@ -196,13 +273,31 @@ class Jobs(Storage):
             return await self.view(uid, job, c)
 
     async def status(self, uid):
-        jobs = await self.db.rows(select(self.jobs.c.status).where(self.jobs.c.user_id == uid))
+        jobs = await self.db.rows(
+            select(self.jobs.c.status, func.count().label("total"))
+            .where(self.jobs.c.user_id == uid)
+            .group_by(self.jobs.c.status)
+        )
+        reviewed_count = 0
+        if any(row["status"] == "UNCERTAIN" for row in jobs):
+            reviewed_count = (
+                await self.db.one(
+                    select(func.count().label("total"))
+                    .select_from(self.jobs)
+                    .where(
+                        self.jobs.c.user_id == uid,
+                        self.jobs.c.status == "UNCERTAIN",
+                        self.reviewed_exists(),
+                    )
+                )
+            )["total"]
         counts = {
             "queued": 0,
             "running": 0,
             "waitingExecution": 0,
             "waitingConfirmation": 0,
             "uncertain": 0,
+            "reviewedUncertain": 0,
             "failed": 0,
             "completed": 0,
         }
@@ -220,22 +315,25 @@ class Jobs(Storage):
         }
         for row in jobs:
             if row["status"] in mapping:
-                counts[mapping[row["status"]]] += 1
+                reviewed = reviewed_count if row["status"] == "UNCERTAIN" else 0
+                counts[mapping[row["status"]]] += int(row["total"]) - reviewed
+                counts["reviewedUncertain"] += reviewed
         worker = await self.db.control(uid, "automation:worker", {})
         executor = await self.db.control(uid, "automation:executor-latest", {})
 
         def state(last):
             return "OFFLINE" if not last else "READY" if now_ms() - last < 60000 else "STALE"
 
-        cases = await self.db.rows(
-            select(self.db.table("outcome_case").c.last_observed_at).where(
-                self.db.table("outcome_case").c.user_id == uid
-            )
+        cases = self.db.table("outcome_case")
+        reports = self.db.table("outcome_report")
+        case_summary = await self.db.one(
+            select(
+                func.count().label("case_count"),
+                func.max(cases.c.last_observed_at).label("last_observed"),
+            ).where(cases.c.user_id == uid)
         )
-        reports = await self.db.rows(
-            select(self.db.table("outcome_report").c.id).where(
-                self.db.table("outcome_report").c.user_id == uid
-            )
+        report_summary = await self.db.one(
+            select(func.count().label("report_count")).where(reports.c.user_id == uid)
         )
         outcome_jobs = self.db.table("outcome_job")
         outcome_counts = {
@@ -269,9 +367,9 @@ class Jobs(Storage):
             "counts": counts,
             "outcomes": {
                 "enabled": self.settings.outcome_enabled,
-                "caseCount": len(cases),
-                "reportCount": len(reports),
-                "lastObservedAt": max((r["last_observed_at"] for r in cases), default=None),
+                "caseCount": case_summary["case_count"],
+                "reportCount": report_summary["report_count"],
+                "lastObservedAt": case_summary["last_observed"],
                 "tasks": {
                     "counts": outcome_counts,
                     "total": sum(outcome_counts.values()),

@@ -34,6 +34,10 @@ class RequestId(Input):
     requestId: Id
 
 
+class UncertainReview(RequestId):
+    reviewed: StrictBool
+
+
 class Exchange(Input):
     kind: Literal["ACCEPT_PHONE", "ACCEPT_WECHAT", "ACCEPT_RESUME"]
     requestMessageId: Id

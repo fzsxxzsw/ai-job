@@ -16,7 +16,7 @@
                 <template v-if="state.status">
                     <p>{{ healthy ? '分析服务和浏览器执行器在线；单项任务是否可执行以其状态为准。' : '部分服务状态异常，请查看服务器连接。' }}</p>
                     <p>自动分析：运行中 {{ outcomeRunning }} · 排队 {{ outcomeQueued }} · 等待结果确认 {{ outcomeWaiting }} · 已完成 {{ outcomeCompleted }}<span v-if="outcomeFailed"> · 失败 {{ outcomeFailed }}</span></p>
-                    <p>回复与投递：运行中 {{ actionRunning }} · 排队 {{ actionQueued }} · 待浏览器执行 {{ waitingBrowserCount }} · 待确认 {{ waitingApprovalCount }} · 待核实 {{ uncertainCount }} · 失败 {{ actionFailed }}</p>
+                    <p>回复与投递：运行中 {{ actionRunning }} · 排队 {{ actionQueued }} · 待浏览器执行 {{ waitingBrowserCount }} · 待确认 {{ waitingApprovalCount }} · 待核实 {{ uncertainCount }} · 失败 {{ actionFailed }}<span v-if="reviewedUncertainCount"> · 已归档未知结果 {{ reviewedUncertainCount }}</span></p>
                     <small>分析报告会自动完成并显示在对应会话与求职复盘中，无需逐条确认。</small>
                 </template>
                 <div class="task-browser">
@@ -32,10 +32,15 @@
                 <p v-if="loaded && !loading && !visibleJobs.length">{{ listMode === 'active' ? '目前没有未结任务。' : '暂无历史任务。' }}</p>
                 <el-button v-if="pushRun.status === 'completed'" size="small" :disabled="!!busy" @click="stopGreetingContinuation">停止本轮待发招呼</el-button>
                 <details v-for="job in visibleJobs" :key="job.jobId" :open="job.status === 'WAITING_CONFIRMATION'">
-                    <summary>{{ kindLabel(job.kind) }} · {{ automationJobLabel(job) }} · {{ formatTime(job.createdAt) }}</summary>
+                    <summary>{{ kindLabel(job.kind) }} · {{ recordLabel(job) }} · {{ automationJobLabel(job) }} · {{ formatTime(job.createdAt) }}</summary>
                     <el-button v-if="!['COMPLETED', 'CANCELLED', 'SUPERSEDED', 'FAILED'].includes(job.status) && job.actions.some(action => action.status === 'QUEUED' || action.status === 'LEASED')" size="small" :disabled="!!busy" @click="cancelJob(job.jobId)">取消本任务待发动作</el-button>
                     <p v-if="job.decision">{{ job.decision.reason }}</p>
-                    <p v-if="job.lastErrorCode && ['UNCERTAIN', 'FAILED'].includes(job.status)" class="task-warning">{{ job.status === 'UNCERTAIN' ? '平台回执不足，请核对原操作。系统不会自动重复发送。' : '任务未完整执行，已保留现有回执。' }}</p>
+                    <p v-if="job.status === 'UNCERTAIN'" class="task-warning">{{ hasUnknownSend(job) ? '消息是否送达仍未证实。请按记录时间在对应聊天中核对；系统不会自动重复发送。' : '任务结果尚未确认。请查看任务原因与原始回执；系统不会自动重复执行未确认动作。' }}</p>
+                    <p v-else-if="job.lastErrorCode && job.status === 'FAILED'" class="task-warning">任务未完整执行，已保留现有回执。</p>
+                    <template v-if="job.status === 'UNCERTAIN'">
+                        <p v-if="job.reviewedAt">已于 {{ formatTime(job.reviewedAt) }} 归档提醒；原始状态和回执仍保留在历史记录中。</p>
+                        <el-button size="small" :disabled="!!busy" @click="reviewJob(job.jobId, !job.reviewedAt)">{{ job.reviewedAt ? '重新列入待核实' : '归档此提醒（结果仍未知）' }}</el-button>
+                    </template>
                     <div v-for="action in job.actions" :key="action.actionId" class="task-action">
                         <strong>{{ automationActionLabel(action) }}</strong>
                         <template v-if="automationApprovalAvailable(job, action)">
@@ -52,7 +57,7 @@
 </template>
 <script setup lang="ts">
 import {computed, onMounted, onUnmounted, ref, watch} from 'vue'
-import {subscribeUnifiedAutomation, approveAutomationAction, cancelAutomationJob, listAutomationJobs, stopGreetingContinuation} from '../../platform/unifiedRuntime'
+import {subscribeUnifiedAutomation, approveAutomationAction, cancelAutomationJob, listAutomationJobs, reviewAutomationJob, stopGreetingContinuation} from '../../platform/unifiedRuntime'
 import {PushRunStore} from '../../stores/pushRun'
 import {automationActionLabel, automationApprovalAvailable, automationJobLabel} from '../../platform/automationPresentation'
 import type {AutomationAction, AutomationJob, AutomationSnapshot} from '../../platform/unifiedAutomation'
@@ -85,6 +90,7 @@ const actionRunning = computed(() => state.value.status?.counts.running || 0)
 const waitingBrowserCount = computed(() => state.value.status?.counts.waitingExecution || 0)
 const waitingApprovalCount = computed(() => state.value.status?.counts.waitingConfirmation || 0)
 const uncertainCount = computed(() => state.value.status?.counts.uncertain || 0)
+const reviewedUncertainCount = computed(() => state.value.status?.counts.reviewedUncertain || 0)
 const actionFailed = computed(() => state.value.status?.counts.failed || 0)
 const runningCount = computed(() => outcomeRunning.value + actionRunning.value)
 const healthy = computed(() => !!state.value.status && !state.value.error
@@ -92,6 +98,13 @@ const healthy = computed(() => !!state.value.status && !state.value.error
 const healthLabel = computed(() => healthy.value ? '服务在线' : state.value.status ? '服务需检查' : '正在连接')
 const kindLabel = (value: string) => ({REPLY: '自动回复', APPLICATION: '筛选与投递', CAREER_REVIEW: '求职复盘'} as Record<string, string>)[value] || '自动任务'
 const formatTime = (value: number) => value ? new Date(value).toLocaleString('zh-CN') : '时间未知'
+const recordLabel = (job: AutomationJob) => {
+    const display = job.display
+    const identity = [display?.companyName, display?.jobTitle, display?.recruiterName].filter(Boolean).join(' · ')
+    return identity ? `${identity}（记录 ${job.jobId.slice(0, 8)}）` : `记录 ${job.jobId.slice(0, 8)}`
+}
+const hasUnknownSend = (job: AutomationJob) => job.actions.some(action =>
+    action.status === 'UNKNOWN' && ['SEND_TEXT', 'SEND_GREETING'].includes(action.kind))
 
 async function loadPage(target = page.value) {
     const request = ++listRequest
@@ -127,6 +140,16 @@ async function cancelJob(jobId: string) {
     busy.value = jobId
     try { await cancelAutomationJob(jobId); ElMessage.success('待发操作已取消'); await loadPage(page.value) }
     catch { ElMessage.warning('取消结果尚未确认，请稍后查看状态') }
+    finally { busy.value = '' }
+}
+async function reviewJob(jobId: string, reviewed: boolean) {
+    if (busy.value) return
+    busy.value = jobId
+    try {
+        await reviewAutomationJob(jobId, reviewed)
+        ElMessage.success(reviewed ? '提醒已归档，原始结果仍未核实' : '已重新列入待核实')
+        await loadPage(page.value)
+    } catch { ElMessage.warning('操作结果尚未确认，请刷新任务列表核对') }
     finally { busy.value = '' }
 }
 async function approve(action: AutomationAction, decision: 'APPROVE' | 'DECLINE') {

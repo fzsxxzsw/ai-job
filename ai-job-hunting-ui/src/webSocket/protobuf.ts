@@ -120,9 +120,14 @@ export class Message {
         return this.msg.buffer.slice(0, this.msg.byteLength);
     }
 
-    async send(retries: number = 3, retryDelayMs: number = 500): Promise<boolean> {
+    async send(retries: number = 3, retryDelayMs: number = 500, canDispatch?: () => boolean): Promise<boolean> {
+        const authorized = () => {
+            try { return !canDispatch || canDispatch() }
+            catch { return false }
+        }
         let initAttempted = false;
         for (let attempt = 1; attempt <= retries; attempt++) {
+            if (!authorized()) return false
             try {
                 // A one-shot caller used to call ensureReady and then immediately
                 // leave the loop without ever sending. Resolve readiness first,
@@ -131,17 +136,23 @@ export class Message {
                     initAttempted = true;
                     await Promise.resolve(Tools.window.AIJobHelperChatBridge?.ensureReady?.(8_000))
                 }
+                // Readiness can settle after a delivery run was stopped.
+                if (!authorized()) return false
                 // Only the bridge resolves true after BOSS returns messageSync for this
                 // exact clientMid. Merely invoking a legacy send method is not delivery
                 // evidence and must never clear a greeting/AI-reply retry queue.
+                // A bridge left in memory by an older userscript may ignore the
+                // authorization argument, so a guarded send must fail closed.
+                if (canDispatch && Tools.window.AIJobHelperChatBridge?.supportsDispatchAuthorization !== true) return false
                 if (Tools.window.AIJobHelperChatBridge?.isReady?.()
-                    && await Promise.resolve(Tools.window.AIJobHelperChatBridge.send(this))) {
+                    && await Promise.resolve(Tools.window.AIJobHelperChatBridge.send(this, canDispatch))) {
                     return true;
                 }
             } catch (e) {
                 logRecorder.warn(`消息发送通道第${attempt}次尝试失败`, e)
             }
             if (attempt < retries) {
+                if (!authorized()) return false
                 await Tools.sleep(retryDelayMs)
             }
         }

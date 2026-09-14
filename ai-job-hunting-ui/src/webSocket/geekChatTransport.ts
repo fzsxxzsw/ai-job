@@ -435,8 +435,9 @@ export class GeekChatTransport {
         return false
     }
 
-    public async send(message: any): Promise<boolean> {
+    public async send(message: any, canDispatch?: () => boolean): Promise<boolean> {
         if (!await this.refreshReady()) return false
+        if (canDispatch && !canDispatch()) return false
         const connector = this.getConnector()
         const recipient = buildGeekChatRecipient(message)
         const body = message?.msgObj?.body
@@ -458,6 +459,7 @@ export class GeekChatTransport {
             }
             if (legacyRawClient && typeof legacyRawClient.send === 'function'
                 && message?.msg instanceof Uint8Array) {
+                if (canDispatch && !canDispatch()) return false
                 await Promise.resolve(legacyRawClient.send(message))
                 return true
             }
@@ -466,6 +468,7 @@ export class GeekChatTransport {
             // internal client. Prefer the root facade and only fall back to the
             // connector when the facade does not expose a matching method.
             const sendTarget = this.getMessageSendTarget(body.type)
+            if (canDispatch && !canDispatch()) return false
             pendingSend = this.trackHighLevelSend(message, recipient, body)
             let result: any
             if (body.type === 1 && typeof sendTarget?.sendTextMessage === 'function') {

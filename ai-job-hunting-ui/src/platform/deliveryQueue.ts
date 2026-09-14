@@ -6,6 +6,7 @@ export type RetryQueueEntry = {
     acknowledgedAt?: number,
     dispatchedAt?: number,
     manualReviewAt?: number,
+    userStoppedAt?: number,
     serverMid?: string,
 }
 
@@ -63,6 +64,7 @@ export function canRetryAfterConfirmedUngreeted(
 ): boolean {
     const dispatchedAt = Number(entry.dispatchedAt || 0)
     return !hasServerAcknowledgement(entry)
+        && !Number(entry.userStoppedAt || 0)
         && dispatchedAt > 0
         && observedAt - dispatchedAt >= confirmationGraceMs
         && (isDispatchUncertain(entry) || isManualReviewDelivery(entry))
@@ -85,6 +87,7 @@ export function isRetryableDelivery(
     maxAttempts = DELIVERY_MAX_ATTEMPTS,
 ): boolean {
     return !isAwaitingDeliveryReceipt(entry)
+        && !Number(entry.userStoppedAt || 0)
         && !isDispatchUncertain(entry)
         && !isManualReviewDelivery(entry)
         && Number(entry.attempts || 0) < maxAttempts

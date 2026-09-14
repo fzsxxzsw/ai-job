@@ -40,6 +40,8 @@
             </div>
         </template>
 
+        <div v-if="pushPhaseLabel" class="runtime-alert" role="status">{{ pushPhaseLabel }}</div>
+
         <div class="operation-status-grid">
             <div class="status-metric">
                 <span class="status-metric-label">今日已发起沟通</span>
@@ -76,6 +78,16 @@
             <el-tag :type="pendingSendCount > 0 ? 'warning' : 'success'" effect="plain">
                 待发送/重试 {{ pendingSendCount }}
             </el-tag>
+            <el-tag v-if="oldUnsentGreetingCount > 0" type="warning" effect="plain">
+                旧轮次招呼结果未确认 {{ oldUnsentGreetingCount }}
+            </el-tag>
+            <el-button v-if="oldUnsentGreetingCount > 0" size="small" type="warning" plain
+                       :disabled="pushRunStore.isActive" :loading="retiringOldGreetings"
+                       @click="handleRetireOldGreetings">停止旧招呼自动续发，保留记录</el-button>
+            <el-button v-if="pushRunStore.status === 'completed' && currentRunPendingGreetingCount > 0"
+                       size="small" type="warning" plain @click="handleStopGreetingContinuation">
+                停止本轮待发招呼
+            </el-button>
             <el-tag :type="awaitingReceiptCount > 0 ? 'warning' : 'success'" effect="plain">
                 待页面送达回执 {{ awaitingReceiptCount }}
             </el-tag>
@@ -282,7 +294,8 @@
 
 <script setup lang="ts">
 import AutomationTasks from './AutomationTasks.vue'
-import {automationRunSummary, unifiedAutomationEnabled} from '../../platform/unifiedRuntime'
+import {automationRunSummary, stopGreetingContinuation, unifiedAutomationEnabled} from '../../platform/unifiedRuntime'
+import {COMPLETED_DELIVERY_GRACE_MS} from '../../platform/automationReadiness'
 import {announcePushRunCompletion} from '../../platform/completionSummary'
 import axiosOriginal, {AxiosInstance} from "axios";
 import {IS_PERSONAL_MODE} from "../../deploymentMode";
@@ -315,6 +328,7 @@ import {
 
 import {userRemoteLoad} from "../../stores/remote";
 import {PushRunStore} from "../../stores/pushRun";
+import {waitForPushPreflight} from "../../platform/deliveryRunWait";
 import {AiPower} from "../../platform/aiPower";
 import {applyAiReplyToggle} from "../../runtime/aiReplyToggle";
 
@@ -376,6 +390,9 @@ const importResumeLoading = ref<boolean>(false);
 const productListLoading = ref<boolean>(false);
 const aiSeatChannelReady = ref(false)
 const pendingGreetingCount = ref(0)
+const oldUnsentGreetingCount = ref(0)
+const currentRunPendingGreetingCount = ref(0)
+const retiringOldGreetings = ref(false)
 const pendingAiReplyCount = ref(0)
 const pendingSendCount = ref(0)
 const awaitingReceiptCount = ref(0)
@@ -387,6 +404,7 @@ const aiReplyReceiptCount = ref(0)
 const todayPushSuccessCount = ref(0)
 const todayPushFailCount = ref(0)
 const riskStopReason = ref('')
+const phaseClock = ref(Date.now())
 const runtimeStatus = Tools.window.__AI_JOB_HELPER_RUNTIME_STATUS__
 const runtimeScriptVersion = [
     runtimeStatus?.version || GM_info?.script?.version || '未知版本',
@@ -441,10 +459,22 @@ const pushStatusLabel = computed(() => {
     if (pushRunStore.status === 'running') return '投递进行中'
     if (pushRunStore.status === 'stopping') return '正在停止'
     if (pushRunStore.status === 'completed') return '本轮已完成'
-    if (pushRunStore.status === 'blocked') return `已阻止：${pushRunStore.reason || '前置条件不满足'}`
-    if (pushRunStore.status === 'failed') return '运行异常'
-    if (pushRunStore.status === 'stopped') return '已停止'
+    if (pushRunStore.status === 'blocked') return `已阻止：${pushRunStore.reason.slice(0, 80) || '前置条件不满足'}`
+    if (pushRunStore.status === 'failed') return `运行异常：${pushRunStore.reason.slice(0, 80) || '请查看运行记录'}`
+    if (pushRunStore.status === 'stopped') return `已停止：${pushRunStore.reason.slice(0, 80) || '用户手动停止'}`
     return '等待手动启动'
+})
+const pushPhaseLabel = computed(() => {
+    if (pushRunStore.status === 'completed' && currentRunPendingGreetingCount.value > 0
+        && pushRunStore.completedAt) {
+        const remaining = Math.max(0, Math.ceil((pushRunStore.completedAt
+            + COMPLETED_DELIVERY_GRACE_MS - phaseClock.value) / 1000))
+        if (remaining > 0) return `本轮已完成，${currentRunPendingGreetingCount.value} 条招呼仍可能在约 ${remaining} 秒内补发`
+    }
+    if (!pushRunStore.isActive || !pushRunStore.phase) return ''
+    const remaining = pushRunStore.phaseUntil
+        ? Math.max(0, Math.ceil((pushRunStore.phaseUntil - phaseClock.value) / 1000)) : null
+    return remaining === null ? pushRunStore.phase : `${pushRunStore.phase} · 约剩 ${remaining} 秒`
 })
 const aiReplyHealthType = computed<'success' | 'warning' | 'danger' | 'info'>(() => {
     if (!userStore.user.aiSeatStatus) return 'info'
@@ -628,8 +658,11 @@ localStorage.setItem(AUTO_START_PUSH_KEY, 'false')
 
 // 非生产环境支持mock投递
 const mockPush = ref<boolean>(false)
+let preflightAbortController: AbortController | null = null
 
 const executePushRun = async () => {
+    const runId = pushRunStore.runId
+    const signal = preflightAbortController?.signal || new AbortController().signal
     if (!loginInterceptor()) {
         return {status: 'blocked', reason: 'BOSS 或本地服务尚未登录'} as const
     }
@@ -637,8 +670,15 @@ const executePushRun = async () => {
         // Login becoming ready is not proof that the preference request has completed.
         // Always await the authoritative server config before the first BOSS side effect,
         // otherwise cgE/cg can still be empty and create a bare “正在沟通” session.
-        await userRemoteLoad(true)
+        pushRunStore.setPhase('核对服务器上的最新投递设置', undefined, runId)
+        const preferenceLoad = await waitForPushPreflight(userRemoteLoad(true, true), signal)
+        if (preferenceLoad.stopped || pushRunStore.stopRequested) {
+            return {status: 'stopped', reason: '用户在偏好预检阶段停止'} as const
+        }
     } catch (error: any) {
+        if (signal.aborted || pushRunStore.stopRequested) {
+            return {status: 'stopped', reason: '用户在偏好预检阶段停止'} as const
+        }
         logRecorder.error('用户偏好尚未加载，已阻止开始投递', error?.message || error)
         ElMessage({
             type: 'error',
@@ -685,6 +725,7 @@ const executePushRun = async () => {
 
     if (greetingRequiresReadyChannel(configuredGreetingMode)
         && !Tools.window.AIJobHelperChatBridge?.isReady?.()) {
+        pushRunStore.setPhase('等待 BOSS 消息通道就绪', Date.now() + 10_000, runId)
         ElMessage({
             type: 'info',
             message: '正在连接 BOSS 消息服务，请稍候…',
@@ -692,9 +733,10 @@ const executePushRun = async () => {
         })
         let channelReady = false
         try {
-            channelReady = await Promise.resolve(
-                Tools.window.AIJobHelperChatBridge?.ensureReady?.(10_000),
-            ) === true
+            const readiness = await waitForPushPreflight(Promise.resolve(
+                Tools.window.AIJobHelperChatBridge?.ensureReady?.(10_000)), signal)
+            if (readiness.stopped) return {status: 'stopped', reason: '用户在消息通道预检阶段停止'} as const
+            channelReady = readiness.value === true
         } finally {
             // ensureReady 不产生投递副作用；结束后仍需检查用户是否在预检阶段停止。
         }
@@ -765,8 +807,12 @@ const executePushRun = async () => {
 
 const startPush = async () => {
     if (pushRunStore.isActive || !loginInterceptor()) return
+    preflightAbortController = new AbortController()
     try {
-        const execution = await pushRunStore.run(executePushRun, () => platform.pausePush())
+        const execution = await pushRunStore.run(executePushRun, () => {
+            preflightAbortController?.abort()
+            platform.pausePush()
+        })
         if (!execution.acquired) {
             ElMessage({
                 type: 'warning',
@@ -776,6 +822,8 @@ const startPush = async () => {
         }
     } catch (_) {
         // executePushRun 已记录并展示具体异常；这里避免点击事件产生未处理 Promise。
+    } finally {
+        preflightAbortController = null
     }
 }
 
@@ -784,6 +832,42 @@ const pausePush = () => {
     platform.pausePush()
     // 停止更新投递记录
     stopRecordsUpdate();
+}
+
+const stopRunOnPageLeave = () => {
+    if (pushRunStore.isActive) {
+        pausePush()
+    } else if (pushRunStore.status === 'completed' && pushRunStore.completedAt
+        && Date.now() <= pushRunStore.completedAt + COMPLETED_DELIVERY_GRACE_MS) {
+        try { stopGreetingContinuation() }
+        finally { platform.pausePush() }
+    }
+}
+
+const handleRetireOldGreetings = async () => {
+    if (pushRunStore.isActive || retiringOldGreetings.value) return
+    try {
+        await ElMessageBox.confirm(
+            '这些旧轮次招呼没有可靠的派发或送达记录，实际结果尚未确认。确认后只停止未来自动续发，原始队列和审计记录保留；已记录派发或回执的消息不会更改。',
+            '停止旧招呼自动续发', {type: 'warning', confirmButtonText: '停止续发并保留记录', cancelButtonText: '返回'},
+        )
+        retiringOldGreetings.value = true
+        const count = await platform.retireOldUnsentGreetings()
+        oldUnsentGreetingCount.value = platform.oldUnsentGreetingCount()
+        ElMessage.success(count > 0 ? `已停止 ${count} 条旧轮次招呼自动续发，结果仍需人工核对` : '没有可停止续发的旧招呼')
+    } catch (error: any) {
+        if (error !== 'cancel' && error !== 'close') {
+            ElMessage.error(String(error?.message || '旧招呼核对未完成'))
+        }
+    } finally {
+        retiringOldGreetings.value = false
+    }
+}
+
+const handleStopGreetingContinuation = () => {
+    stopGreetingContinuation()
+    currentRunPendingGreetingCount.value = platform.currentRunPendingGreetingCount()
+    ElMessage.success('本轮待发招呼已停止自动续发；已派发记录仍会核对回执')
 }
 
 const handleClearRiskStop = async () => {
@@ -987,9 +1071,8 @@ if (!loginStore.login && !loginStore.loginFailStatus) {
 
 let aiSeatHealthTimer: number | null = null
 onMounted(() => {
-    // The run belongs to the Pinia store, not this component. When the user
-    // switches menus and comes back, reconnect the transient log view to the
-    // still-running task instead of presenting a second Start button.
+    window.addEventListener('pagehide', stopRunOnPageLeave)
+    // Reconnect only a currently mounted run's transient log view.
     if (pushRunStore.isActive) startRecordsUpdate()
     const readDeliveryQueue = (key: string): RetryQueueEntry[] => {
         try {
@@ -1002,10 +1085,13 @@ onMounted(() => {
     }
 
     const refreshAiSeatHealth = () => {
+        phaseClock.value = Date.now()
         aiSeatChannelReady.value = !!Tools.window.AIJobHelperChatBridge?.isReady?.()
         const greetingQueue = readDeliveryQueue('ai-job-pending-greetings-v1')
         const aiReplyQueue = readDeliveryQueue('ai-job-pending-ai-replies-v1')
         pendingGreetingCount.value = countBlockingDeliveries(greetingQueue)
+        oldUnsentGreetingCount.value = platform.oldUnsentGreetingCount()
+        currentRunPendingGreetingCount.value = platform.currentRunPendingGreetingCount()
         pendingAiReplyCount.value = countBlockingDeliveries(aiReplyQueue)
         pendingSendCount.value = pendingGreetingCount.value + pendingAiReplyCount.value
 
@@ -1041,6 +1127,8 @@ onMounted(() => {
 
 // 组件卸载时清理定时器
 onUnmounted(() => {
+    window.removeEventListener('pagehide', stopRunOnPageLeave)
+    stopRunOnPageLeave()
     stopRecordsUpdate();
     if (aiSeatHealthTimer !== null) {
         window.clearInterval(aiSeatHealthTimer)

@@ -16,7 +16,7 @@ import {type AutomationAction, type FilterInput, type ActionReceipt} from './uni
 import {unifiedAutomationEnabled, registerAutomationExecutor, bindAutomationContact, captureAutomationScope, saveAutomationSnapshot,
     holdUnifiedAutomation, currentAutomationPolicy, browserAutomationReady, type BrowserAutomationContext} from './unifiedRuntime';
 import {performUnifiedText, prepareUnifiedChat, unknownPlatformReceipt} from './unifiedBossActions';
-import {PushRunStore} from '../stores/pushRun';
+import {PUSH_RUN_LOCK_NAME, PushRunStore} from '../stores/pushRun';
 import {exactPlatformId} from './boss/outcomeCollector';
 import {PushResultStatus, PushStatus} from "../enums";
 import {Message} from "../webSocket/protobuf";
@@ -45,7 +45,6 @@ import {
 import {
     canRetryAfterConfirmedUngreeted,
     countDeliveryGateBlockers,
-    deliveryScopeKey,
     findExhaustedDeliveries,
     findNextRetryableOutsideUnknownScopes,
     hasDeliveryGateTimedOut,
@@ -53,6 +52,7 @@ import {
     isDispatchUncertain,
     isExhaustedDelivery,
     isManualReviewDelivery,
+    isRetryableDelivery,
     RetryQueueEntry,
     shouldMoveUncertainToManualReview,
 } from "./deliveryQueue";
@@ -70,10 +70,11 @@ import {
     greetingRequiresReadyChannel,
     normalizeGreetingDeliveryMode,
 } from "./greetingPolicy";
-import {makeGreetingTaskKey, migrateAndDedupeGreetingTasks} from "./greetingIdentity";
+import {greetingLockIdentity, makeGreetingTaskKey, migrateAndDedupeGreetingTasks, reserveNewGreetingTask} from "./greetingIdentity";
 import {findBossMountTarget} from "../runtime/routeHost";
 import {isSalaryWithinConfiguredRange} from "./salaryPolicy";
 import {weekendBenefitStatus} from './weekendPolicy';
+import {greetingDispatchAuthorized, waitForPushDelay} from './deliveryRunWait';
 
 let pushResultCounter: any;
 let userStore: any;
@@ -123,6 +124,8 @@ export abstract class AbsPlatform implements Platform {
     protected logRecorder: LogRecorder = new LogRecorder('recorder');
 
     protected pushStatus: PushStatus = PushStatus.NOT_START
+    protected pushAbortController = new AbortController()
+    protected activeRunId = ''
     protected _pushMock: boolean = false;
 
 
@@ -147,12 +150,15 @@ export abstract class AbsPlatform implements Platform {
         // 每次投递前清空单次成功计数器
         pushResultCounter.clearOnceSuccessCount()
         this.pushStatus = PushStatus.PUSHING;
+        this.pushAbortController = new AbortController()
+        this.activeRunId = PushRunStore().runId
         this.startPreHandler()
         do {
             // 获取jobDetail集合并过滤
             let jobList = this.getJobList();
             for (const jobDetail of jobList) {
                 try {
+                    PushRunStore().setPhase('筛选岗位并核对投递条件', undefined, this.activeRunId)
                     await this.waitForDeliveryGate()
                     this.preMatchJob();
                     await this.matchJob(jobDetail);
@@ -212,18 +218,27 @@ export abstract class AbsPlatform implements Platform {
                 }
             }
         } while (await this.next())
+        if (this.pushAbortController.signal.aborted) {
+            this.logRecorder.info("投递已停止")
+            return {status: 'stopped', reason: '用户已停止投递'} as PushRunOutcome
+        }
         this.logRecorder.info("结束投递")
         return {status: 'completed'} as PushRunOutcome
     }
 
     next = async () => {
+        if (this.pushStatus !== PushStatus.PUSHING) return false
         const nextPageInterval = Math.max(
             SAFE_MIN_NEXT_PAGE_INTERVAL_SECONDS,
             Number(userStore.user.preference.npi) || 0,
         )
+        PushRunStore().setPhase('翻页安全间隔', Date.now() + nextPageInterval * 1000, this.activeRunId)
         this.logRecorder.info(`当前批次已处理完，安全等待 ${nextPageInterval} 秒后加载下一批职位`)
-        await Tools.sleep(nextPageInterval * 1000)
+        if (!await waitForPushDelay(nextPageInterval * 1000, this.pushAbortController.signal)
+            || this.pushStatus !== PushStatus.PUSHING) return false
+        PushRunStore().setPhase('加载下一批职位', undefined, this.activeRunId)
         const next = await this.acquireDataPre();
+        if (this.pushStatus !== PushStatus.PUSHING) return false
         if (!next) {
             this.logRecorder.info("没有更多可用职位或求职期望")
         }
@@ -231,6 +246,8 @@ export abstract class AbsPlatform implements Platform {
     };
 
     pausePush(): void {
+        this.pushStatus = PushStatus.PAUSE
+        this.pushAbortController.abort()
     }
 
     abstract hasNext(): boolean;
@@ -286,6 +303,10 @@ export abstract class AbsPlatform implements Platform {
 
     abstract getJobKey(jobDetail: JobDetail): string;
 
+    oldUnsentGreetingCount(): number { return 0 }
+    currentRunPendingGreetingCount(): number { return 0 }
+    async retireOldUnsentGreetings(): Promise<number> { return 0 }
+
     protected async waitForDeliveryGate(): Promise<void> {
         return
     }
@@ -302,6 +323,8 @@ export abstract class AbsPlatform implements Platform {
 
 type PendingGreeting = {
     key: string,
+    runId?: string,
+    account?: string,
     jobTitle: string,
     brandName: string,
     toUid?: string,
@@ -315,6 +338,7 @@ type PendingGreeting = {
     acknowledgedAt?: number,
     dispatchedAt?: number,
     manualReviewAt?: number,
+    userStoppedAt?: number,
     bossLookup?: {
         encryptBossId: string,
         securityId: string,
@@ -327,6 +351,7 @@ export type PushRunOutcome = {
 }
 
 class BossPlatform extends AbsPlatform {
+    private static readonly STOPPED_PUSH_RUN_KEY_PREFIX = 'ai-job-push-run-stop:';
     private static readonly AI_FILTER_CACHE_KEY = 'ai-job-filter-cache-v2';
     private static readonly AI_FILTER_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
     private static readonly AI_FILTER_CACHE_MAX_ENTRIES = 150;
@@ -348,6 +373,55 @@ class BossPlatform extends AbsPlatform {
     private lastJobSourceDiagnosticKey = "";
     private applicationSnapshotContexts = new Map<string, Omit<ApplicationSnapshotPayload, 'appliedAt'>>();
     private unifiedFilterInputs = new Map<string, FilterInput>();
+
+    private greetingRunAuthorized(entry: Pick<PendingGreeting, 'runId' | 'account' | 'createdAt' | 'userStoppedAt'>): boolean {
+        const run = PushRunStore()
+        const account = String(Tools.window?._PAGE?.uid || '')
+        const scope = captureAutomationScope()
+        try {
+            const stopKey = BossPlatform.STOPPED_PUSH_RUN_KEY_PREFIX + entry.runId
+            const continuationStopped = !!GM_getValue(stopKey, false) || !!localStorage.getItem(stopKey)
+                || !!localStorage.getItem('ai-job-unified-stop:' + scope + ':' + entry.runId)
+            return !entry.userStoppedAt && greetingDispatchAuthorized(entry, run, account, continuationStopped, !!getBossRiskStop())
+        } catch { return false }
+    }
+
+    oldUnsentGreetingCount(): number {
+        return this.readGreetingQueue().filter(entry =>
+            isRetryableDelivery(entry) && !this.greetingRunAuthorized(entry)).length
+    }
+
+    currentRunPendingGreetingCount(): number {
+        return this.readGreetingQueue().filter(entry =>
+            isRetryableDelivery(entry) && this.greetingRunAuthorized(entry)).length
+    }
+
+    async retireOldUnsentGreetings(): Promise<number> {
+        const locks = (globalThis.navigator as any)?.locks
+        if (!locks?.request) throw new Error('浏览器无法确认其他投递标签页是否仍在运行，未更改旧记录')
+        return locks.request(PUSH_RUN_LOCK_NAME, {mode: 'exclusive', ifAvailable: true}, async (runLock: unknown) => {
+            if (!runLock) throw new Error('另一个标签页仍在投递，请先停止后再核对旧招呼')
+            let retired = 0
+            const candidates = this.readGreetingQueue().filter(entry =>
+                isRetryableDelivery(entry) && !this.greetingRunAuthorized(entry))
+            for (const candidate of candidates) {
+                const execution = await runWithOptionalDeliveryLock(locks, 'greeting', greetingLockIdentity(candidate), async () => {
+                    const current = this.readGreetingQueue().find(entry => entry.key === candidate.key)
+                    if (!current || !isRetryableDelivery(current) || this.greetingRunAuthorized(current)) return false
+                    current.userStoppedAt = Date.now()
+                    this.persistGreetingEntry(current)
+                    recordDeliveryAudit({key: current.key, kind: 'greeting', status: 'blocked',
+                        jobTitle: current.jobTitle, content: current.content, attempts: current.attempts,
+                        bossId: current.toUid, conversationKey: current.conversationKey,
+                        clientMid: current.clientMid, serverMid: current.serverMid,
+                        lastError: '旧轮次没有可靠的派发或送达记录，结果未确认；用户选择停止自动续发，保留人工核对'})
+                    return true
+                })
+                if (execution.acquired && execution.value) retired++
+            }
+            return retired
+        })
+    }
 
     private buildAiFilterCacheKey(parts: string[]): string {
         const raw = parts.join('\u0001')
@@ -444,9 +518,13 @@ class BossPlatform extends AbsPlatform {
         localStorage.setItem(BossPlatform.GREETING_QUEUE_KEY, raw)
     }
 
-    private enqueueGreeting(entry: PendingGreeting): void {
-        const queue = this.readGreetingQueue().filter(item => item.key !== entry.key)
-        queue.push(entry)
+    private enqueueGreeting(entry: PendingGreeting, preserveExisting = false): boolean {
+        const current = this.readGreetingQueue()
+        const reservation = preserveExisting
+            ? reserveNewGreetingTask(current, entry)
+            : {queue: [...current.filter(item => item.key !== entry.key), entry], reserved: true}
+        if (!reservation.reserved) return false
+        const queue = reservation.queue
         this.writeGreetingQueue(queue)
         recordDeliveryAudit({
             key: entry.key,
@@ -460,6 +538,7 @@ class BossPlatform extends AbsPlatform {
             clientMid: entry.clientMid,
             serverMid: entry.serverMid,
         })
+        return true
     }
 
     /** Merge one delivery into the latest shared queue snapshot while its send lock is held. */
@@ -512,7 +591,7 @@ class BossPlatform extends AbsPlatform {
 
     private async deliverPendingGreeting(entry: PendingGreeting, waitForChannel: boolean): Promise<boolean> {
         const lockScope = 'greeting'
-        const lockIdentity = deliveryScopeKey(entry)
+        const lockIdentity = greetingLockIdentity(entry)
         const execution = await runWithOptionalDeliveryLock(
             (globalThis.navigator as any)?.locks,
             lockScope,
@@ -606,6 +685,9 @@ class BossPlatform extends AbsPlatform {
             this.markGreetingAsFailed(entry, 'retry limit reached')
             return false
         }
+        // Reconcile late ACKs above, but an old/reloaded/stopped run can never
+        // authorize a fresh greeting send, including a queued legacy entry.
+        if (entry.userStoppedAt || !this.greetingRunAuthorized(entry)) return false
         this.greetingSendingKeys.add(entry.key)
         try {
             // 投递成功后页面可能马上刷新或切走。队列会先保存 Boss 查询参数，
@@ -620,10 +702,12 @@ class BossPlatform extends AbsPlatform {
                         encryptBossId: entry.bossLookup.encryptBossId,
                         securityId: entry.bossLookup.securityId,
                     } as BossJobDetail)
+                    if (!this.greetingRunAuthorized(entry)) return false
                     entry.toUid = bossData.data.bossId.toString()
                     entry.toName = entry.bossLookup.encryptBossId
                     this.enqueueGreeting(entry)
                 } catch (error: any) {
+                    if (!this.greetingRunAuthorized(entry)) return false
                     this.persistGreetingFailure(entry, error)
                     this.logRecorder.warn(`工作【${entry.jobTitle}】获取Boss信息失败，招呼语已保留待补发`, error?.message || error)
                     return false
@@ -634,6 +718,7 @@ class BossPlatform extends AbsPlatform {
             if (!Tools.window.AIJobHelperChatBridge?.isReady?.() && waitForChannel) {
                 await Promise.resolve(Tools.window.AIJobHelperChatBridge?.ensureReady?.(8_000))
             }
+            if (!this.greetingRunAuthorized(entry)) return false
             if (!Tools.window.AIJobHelperChatBridge?.isReady?.()) {
                 return false
             }
@@ -652,8 +737,9 @@ class BossPlatform extends AbsPlatform {
                 this.enqueueGreeting(entry)
             }
             // 每轮只做一次有副作用发送；失败由一分钟一次的队列做有界重试。
+            if (!this.greetingRunAuthorized(entry)) return false
             const requestedClientMid = String(entry.clientMid || '')
-            const sent = await message.send(1, 1_000)
+            const sent = await message.send(1, 1_000, () => this.greetingRunAuthorized(entry))
             const actualClientMid = String(message.msgObj.cmid || requestedClientMid)
             entry.clientMid = actualClientMid
             if (sent) {
@@ -689,6 +775,7 @@ class BossPlatform extends AbsPlatform {
                 this.logRecorder.warn(`工作【${entry.jobTitle}】招呼语已交给BOSS SDK，ACK暂未返回；已暂停重发以防重复消息`)
                 return false
             }
+            if (!this.greetingRunAuthorized(entry)) return false
             this.persistGreetingFailure(entry, 'chat bridge did not acknowledge the message')
             return false
         } finally {
@@ -696,14 +783,7 @@ class BossPlatform extends AbsPlatform {
         }
     }
 
-    /**
-     * 聊天页兜底：BOSS 有时会在首次沟通后立即销毁职位标签页，导致该标签页
-     * 尚未来得及把跨标签补发队列写完整。聊天列表中“您正在与Boss…沟通”是
-     * 官方页面给出的确定状态，表示会话已建立但一条消息都没有发送。
-     *
-     * 这里只补这一种状态；草稿、已发送、HR 已回复以及用户正在输入时都不碰，
-     * 防止抢占用户操作或重复发消息。
-     */
+    /** Only an existing greeting from this still-authorized run may use exact DOM recovery. */
     private async deliverUngreetedConversationFromDom(): Promise<void> {
         const greeting = userStore?.user?.preference?.cg?.trim() || ''
         const greetingMode = normalizeGreetingDeliveryMode(
@@ -734,7 +814,7 @@ class BossPlatform extends AbsPlatform {
             }
             const selectedTaskKey = makeGreetingTaskKey(selected.encryptBossId)
             const existing = this.readGreetingQueue().find(item => item.key === selectedTaskKey)
-            if (existing) {
+            if (existing && this.greetingRunAuthorized(existing)) {
                 this.recoverGreetingAfterConfirmedUngreeted(existing)
                 const confirmed = await this.deliverPendingGreeting(existing, true)
                 if (confirmed || existing.serverMid) {
@@ -743,32 +823,7 @@ class BossPlatform extends AbsPlatform {
                 }
                 return
             }
-            const entry: PendingGreeting = {
-                key: selectedTaskKey,
-                jobTitle: (document.querySelector('.top-info-content') as HTMLElement | null)?.innerText?.trim() || '当前会话',
-                brandName: selected.brandName
-                    || (document.querySelector('.top-info-content') as HTMLElement | null)?.innerText?.trim() || '',
-                toUid: selected.bossId,
-                toName: selected.encryptBossId,
-                content: greeting,
-                createdAt: Date.now(),
-                attempts: 0,
-                clientMid: Message.createClientMid(),
-                conversationKey: selected.conversationKey,
-                bossLookup: {encryptBossId: selected.encryptBossId, securityId: selected.securityId},
-            }
-            this.greetingDomFallbackRunning = true
-            try {
-                this.enqueueGreeting(entry)
-                if (await this.deliverPendingGreeting(entry, true)) {
-                    // This is the plugin's exact full draft. Clear it only after BOSS has
-                    // acknowledged the same clientMid, preventing a later manual duplicate.
-                    activeEditor.innerHTML = ''
-                    activeEditor.dispatchEvent(new InputEvent('input', {bubbles: true, inputType: 'deleteContentBackward'}))
-                }
-            } finally {
-                this.greetingDomFallbackRunning = false
-            }
+            // A draft without a run-bound queue record is not permission to send.
             return
         }
 
@@ -793,37 +848,14 @@ class BossPlatform extends AbsPlatform {
         }
         const identityTaskKey = makeGreetingTaskKey(identity.encryptBossId)
         const existing = this.readGreetingQueue().find(item => item.key === identityTaskKey)
-        if (existing) {
+        if (existing && this.greetingRunAuthorized(existing)) {
             this.recoverGreetingAfterConfirmedUngreeted(existing)
             await this.deliverPendingGreeting(existing, true)
-            return
-        }
-        const entry: PendingGreeting = {
-            key: identityTaskKey,
-            jobTitle: rowText.split('\n').slice(0, 3).join(' '),
-            brandName: identity.brandName || rowText,
-            toUid: identity.bossId,
-            toName: identity.encryptBossId,
-            content: greeting,
-            createdAt: Date.now(),
-            attempts: 0,
-            clientMid: Message.createClientMid(),
-            conversationKey: identity.conversationKey,
-            bossLookup: {encryptBossId: identity.encryptBossId, securityId: identity.securityId},
-        }
-        this.greetingDomFallbackRunning = true
-        try {
-            this.enqueueGreeting(entry)
-            await this.deliverPendingGreeting(entry, true)
-        } catch (error: any) {
-            this.logRecorder.warn('聊天页兜底发送自定义招呼语失败，将自动重试', error?.message || error)
-        } finally {
-            this.greetingDomFallbackRunning = false
         }
     }
 
     private recoverGreetingAfterConfirmedUngreeted(entry: PendingGreeting): void {
-        if (!canRetryAfterConfirmedUngreeted(entry)) return
+        if (entry.userStoppedAt || !canRetryAfterConfirmedUngreeted(entry)) return
 
         delete entry.dispatchedAt
         delete entry.manualReviewAt
@@ -902,7 +934,8 @@ class BossPlatform extends AbsPlatform {
             // An unknown dispatch blocks only its own conversation. The selector
             // below skips that scope while allowing unrelated greetings to proceed.
             const next = findNextRetryableOutsideUnknownScopes(
-                queue,
+                queue.filter(entry => this.greetingRunAuthorized(entry)
+                    || isDispatchUncertain(entry) || isManualReviewDelivery(entry)),
                 this.greetingSendingKeys,
             )
             if (next && Tools.window.AIJobHelperChatBridge?.isReady?.()) {
@@ -1075,6 +1108,13 @@ class BossPlatform extends AbsPlatform {
                 !!userStore?.user?.preference?.cgE,
                 userStore?.user?.preference?.cg,
             )
+            if (greetingBlocksNewApplications(greetingMode)) {
+                const oldUnsent = greetingQueue.filter(entry =>
+                    isRetryableDelivery(entry) && !this.greetingRunAuthorized(entry))
+                if (oldUnsent.length > 0) {
+                    throw new PublishLimitExp(`${oldUnsent.length} 条旧轮次招呼结果未确认；请在状态卡选择“停止旧招呼自动续发”并核对记录后再开始严格模式投递`)
+                }
+            }
             // AI replies and background greetings are independent workers. Only the
             // explicitly selected strict greeting mode may pause new applications.
             const pending = countDeliveryGateBlockers(
@@ -1083,6 +1123,8 @@ class BossPlatform extends AbsPlatform {
                 false,
             )
             if (pending === 0) return
+            PushRunStore().setPhase(`等待 ${pending} 条消息取得 BOSS 确认`,
+                gateStartedAt + 2 * 60 * 1000, this.activeRunId)
             if (hasDeliveryGateTimedOut(gateStartedAt, now)) {
                 throw new PublishLimitExp(`消息发送通道在两分钟内未恢复，仍有 ${pending} 条消息待确认；已安全停止本轮投递`)
             }
@@ -1090,7 +1132,9 @@ class BossPlatform extends AbsPlatform {
                 lastLogAt = now
                 this.logRecorder.warn(`发送闭环闸门：仍有 ${pending} 条招呼语或AI回复未取得BOSS服务器确认，已暂停新增沟通`)
             }
-            await Tools.sleep(2_000)
+            if (!await waitForPushDelay(2_000, this.pushAbortController.signal)) {
+                throw new PublishStopExp('用户已停止投递')
+            }
         }
         throw new PublishStopExp('发送闭环尚未完成')
     }
@@ -1293,11 +1337,12 @@ class BossPlatform extends AbsPlatform {
                 this.logRecorder.info("自动翻页成功，继续处理新职位")
                 return true;
             }
+            if (this.pushStatus !== PushStatus.PUSHING) return false
             return await this.switchToNextExpectation();
         } else if (this.curUrl.includes("job-recommend")) {
             try {
                 await simulateScrollToEnd()
-                await Tools.sleep(1500)
+                if (!await waitForPushDelay(1500, this.pushAbortController.signal)) return false
                 return this.getJobList().length > 0
             } catch (e) {
                 this.logRecorder.warn("获取下一页失败", e)
@@ -1307,7 +1352,7 @@ class BossPlatform extends AbsPlatform {
             this.lastHeight = document.querySelector(".job-list")?.scrollHeight as number
             try {
                 await simulateScrollToEnd()
-                await Tools.sleep(1500)
+                if (!await waitForPushDelay(1500, this.pushAbortController.signal)) return false
                 return this.getJobList().length > 0
             } catch (e) {
                 this.logRecorder.warn("获取下一页失败", e)
@@ -1320,8 +1365,7 @@ class BossPlatform extends AbsPlatform {
             return false
         }
         nextButton.click();
-        await Tools.sleep(1500)
-        return true
+        return await waitForPushDelay(1500, this.pushAbortController.signal)
     }
 
     private getVisibleJobIdentities(): Set<string> {
@@ -1369,7 +1413,7 @@ class BossPlatform extends AbsPlatform {
             if (this.pushStatus == PushStatus.PAUSE) {
                 return false
             }
-            await Tools.sleep(500)
+            if (!await waitForPushDelay(500, this.pushAbortController.signal)) return false
             const afterIds = this.getVisibleJobIdentities()
             if (Array.from(afterIds).some(id => !beforeIds.has(id) && !this.processedJobKeys.has(id))) {
                 return true
@@ -1428,7 +1472,7 @@ class BossPlatform extends AbsPlatform {
             liveEntry.element.click()
 
             for (let attempt = 0; attempt < 20; attempt++) {
-                await Tools.sleep(500)
+                if (!await waitForPushDelay(500, this.pushAbortController.signal)) return false
                 if (location.pathname !== '/web/geek/jobs') {
                     this.logRecorder.error(`求职期望【${entry.key}】触发了异常页面跳转，已停止自动投递，避免继续切换页面`)
                     this.pushStatus = PushStatus.PAUSE
@@ -1694,7 +1738,18 @@ class BossPlatform extends AbsPlatform {
     }
 
     pausePush() {
-        this.pushStatus = PushStatus.PAUSE
+        const runId = PushRunStore().runId || this.activeRunId
+        try {
+            if (runId) {
+                const key = BossPlatform.STOPPED_PUSH_RUN_KEY_PREFIX + runId
+                try { GM_setValue(key, true) }
+                catch { localStorage.setItem(key, 'true') }
+            }
+        } catch {
+            this.logRecorder.warn('停止标记未能持久化；当前页面已立即停止，旧队列仍须人工核对')
+        } finally {
+            super.pausePush()
+        }
     }
 
     getJobKey(jobDetail: BossJobDetail): string {
@@ -1745,7 +1800,11 @@ class BossPlatform extends AbsPlatform {
             )
             const lastPushAt = Number(TampermonkeyApi.GmGetValue(BOSS_LAST_PUSH_AT_KEY, 0)) || 0
             const waitMs = calculatePushCooldownMs(lastPushAt, configuredSeconds)
-            if (waitMs > 0) await Tools.sleep(waitMs)
+            if (waitMs > 0) PushRunStore().setPhase('沟通安全间隔', Date.now() + waitMs, this.activeRunId)
+            if (waitMs > 0 && !await waitForPushDelay(waitMs, this.pushAbortController.signal)) {
+                throw new PublishStopExp('用户已停止投递')
+            }
+            PushRunStore().setPhase('向 BOSS 发起沟通', undefined, this.activeRunId)
 
             const riskStop = getBossRiskStop()
             if (riskStop) throw new PublishLimitExp(`BOSS风控熔断：${riskStop.reason}`)
@@ -1760,7 +1819,15 @@ class BossPlatform extends AbsPlatform {
 
         const lockManager = (globalThis.navigator as any)?.locks
         if (lockManager?.request) {
-            return await lockManager.request('ai-job-hunting-boss-friend-add', run)
+            try {
+                return await lockManager.request('ai-job-hunting-boss-friend-add',
+                    {signal: this.pushAbortController.signal}, run)
+            } catch (error: any) {
+                if (this.pushAbortController.signal.aborted || error?.name === 'AbortError') {
+                    throw new PublishStopExp('用户已停止投递')
+                }
+                throw error
+            }
         }
         return await run()
     }
@@ -1779,6 +1846,15 @@ class BossPlatform extends AbsPlatform {
             throw new NotMatchException(jobTitle, jobDetail.brandName, '命中本地永久硬屏蔽公司（潮一相关）')
         }
 
+        const greetingMode = normalizeGreetingDeliveryMode(
+            userStore.user.preference.greetingDeliveryMode,
+            !!userStore.user.preference.cgE,
+            userStore.user.preference.cg,
+        )
+        if (customGreetingEnabled(greetingMode) && !(globalThis.navigator as any)?.locks?.request) {
+            throw new PublishLimitExp('浏览器无法保护跨标签招呼队列；未向 BOSS 发起沟通')
+        }
+
         logger.debug("正在投递：" + jobTitle)
         this.logRecorder.info(`工作【${jobTitle}】已通过筛选，正在向 BOSS 发起沟通`)
 
@@ -1794,6 +1870,7 @@ class BossPlatform extends AbsPlatform {
                 }),
             );
         } catch (error: any) {
+            if (error instanceof PublishStopExp || error instanceof PublishLimitExp) throw error
             const dailyLimit = this.stopForBossDailyLimit(error)
             if (dailyLimit) throw new PublishLimitExp(dailyLimit.reason)
             const risk = tripBossRiskCircuit(error)
@@ -1949,9 +2026,11 @@ class BossPlatform extends AbsPlatform {
         }
         let customGreeting = userStore.user.preference.cg;
         const entry: PendingGreeting = {
-            // 必须在第一次 await 之前写入队列：页面即使此刻被 BOSS 刷新、
-            // 自动翻页或浏览器关闭，聊天页的重试 worker 仍能恢复并补发。
+            // 锁内核对旧记录后入队；刷新后仅可核对回执，
+            // 新发送仍须属于当前已授权的投递轮次。
             key: makeGreetingTaskKey(jobDetail.encryptBossId),
+            runId: PushRunStore().runId,
+            account: String(Tools.window?._PAGE?.uid || ''),
             jobTitle: this.getJobKey(jobDetail),
             brandName: jobDetail.brandName,
             toName: jobDetail.encryptBossId,
@@ -1965,8 +2044,23 @@ class BossPlatform extends AbsPlatform {
                 securityId: jobDetail.securityId,
             },
         }
-        // 先持久化再做任何异步查询；浏览器刷新或通道暂时断开都不会丢任务。
-        this.enqueueGreeting(entry)
+        const locks = (globalThis.navigator as any)?.locks
+        if (!locks?.request) {
+            throw new PublishLimitExp('浏览器无法保护跨标签招呼队列；已停止新增投递，请核对本次沟通')
+        }
+        const reservation = await runWithOptionalDeliveryLock(locks, 'greeting', greetingLockIdentity(entry), async () => {
+            if (!this.greetingRunAuthorized(entry)) throw new PublishStopExp('用户已停止投递')
+            const priorAudit = readDeliveryAudit().find(item => item.kind === 'greeting' && item.key === entry.key)
+            return !priorAudit && this.enqueueGreeting(entry, true)
+        })
+        if (!reservation.acquired) {
+            throw new PublishLimitExp('招呼队列正在其他标签页处理；未覆盖旧记录，已停止新增投递')
+        }
+        if (!reservation.value) {
+            this.logRecorder.warn(`工作【${entry.jobTitle}】已有同一招聘者的招呼或派发核对记录，保留原记录，不自动重发`)
+            return
+        }
+        // 先持久化再做任何异步查询；刷新后仅核对回执，不自动续发。
         const sent = await this.deliverPendingGreeting(entry, greetingRequiresReadyChannel(greetingMode))
         if (!sent) {
             this.logRecorder.warn(`工作【${this.getJobKey(jobDetail)}】自定义招呼语已进入自动补发队列`)
@@ -1995,6 +2089,11 @@ class BossPlatform extends AbsPlatform {
         lastCode = 'DETAIL_UNAVAILABLE',
     ): Promise<any> {
 
+        PushRunStore().setPhase('读取岗位详情', undefined, this.activeRunId)
+        if (this.pushStatus !== PushStatus.PUSHING || this.pushAbortController.signal.aborted) {
+            throw new PublishStopExp('用户已停止投递')
+        }
+
         const activeRiskStop = getBossRiskStop()
         if (activeRiskStop) throw new PublishLimitExp(`BOSS风控熔断：${activeRiskStop.reason}`)
 
@@ -2004,11 +2103,15 @@ class BossPlatform extends AbsPlatform {
         }
         const params = buildBossJobCardQuery(jobDetail)
         try {
-            let resp = await axiosOriginal.get("https://www.zhipin.com/wapi/zpgeek/job/card.json?" + params, {timeout: 5000})
+            let resp = await axiosOriginal.get("https://www.zhipin.com/wapi/zpgeek/job/card.json?" + params,
+                {timeout: 5000, signal: this.pushAbortController.signal})
             const responseRisk = tripBossRiskCircuit(resp)
             if (responseRisk) throw new PublishLimitExp(`BOSS风控熔断：${responseRisk.reason}`)
             return parseBossJobCardResponse(resp.data)
         } catch (error: any) {
+            if (this.pushAbortController.signal.aborted || this.pushStatus !== PushStatus.PUSHING) {
+                throw new PublishStopExp('用户已停止投递')
+            }
             if (error instanceof PublishLimitExp) throw error
             const risk = tripBossRiskCircuit(error)
             if (risk) throw new PublishLimitExp(`BOSS风控熔断：${risk.reason}`)

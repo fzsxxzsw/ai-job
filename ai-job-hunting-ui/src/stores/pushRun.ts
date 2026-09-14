@@ -49,6 +49,8 @@ export const PushRunStore = defineStore('push-run', () => {
     const runId = ref('')
     const status = ref<PushRunStatus>('idle')
     const reason = ref('')
+    const phase = ref('')
+    const phaseUntil = ref<number>()
     const startedAt = ref<number>()
     // In-memory only: reloading a page never renews a completed delivery run.
     const completedAt = ref<number>()
@@ -65,6 +67,8 @@ export const PushRunStore = defineStore('push-run', () => {
         runId.value = createRunId()
         status.value = 'preparing'
         reason.value = ''
+        phase.value = '检查最新投递设置'
+        phaseUntil.value = undefined
         startedAt.value = Date.now()
         completedAt.value = undefined
         stopRequested.value = false
@@ -86,6 +90,8 @@ export const PushRunStore = defineStore('push-run', () => {
 
             const result = execution.value
             reason.value = result?.reason || ''
+            phase.value = ''
+            phaseUntil.value = undefined
             if (stopRequested.value || result?.status === 'stopped') status.value = 'stopped'
             else if (result?.status === 'blocked') status.value = 'blocked'
             else {
@@ -96,6 +102,8 @@ export const PushRunStore = defineStore('push-run', () => {
         } catch (error: any) {
             status.value = 'failed'
             reason.value = String(error?.message || error || '未知错误')
+            phase.value = ''
+            phaseUntil.value = undefined
             throw error
         } finally {
             stopHandler = undefined
@@ -106,8 +114,16 @@ export const PushRunStore = defineStore('push-run', () => {
         if (!isActive.value) return false
         stopRequested.value = true
         status.value = 'stopping'
+        phase.value = '正在停止当前操作'
+        phaseUntil.value = undefined
         stopHandler?.()
         return true
+    }
+
+    function setPhase(value: string, until?: number, expectedRunId?: string): void {
+        if (!isActive.value || stopRequested.value || expectedRunId && expectedRunId !== runId.value) return
+        phase.value = value
+        phaseUntil.value = until
     }
 
     function markRunning(): boolean {
@@ -120,12 +136,15 @@ export const PushRunStore = defineStore('push-run', () => {
         runId,
         status,
         reason,
+        phase,
+        phaseUntil,
         startedAt,
         completedAt,
         stopRequested,
         isActive,
         run,
         stop,
+        setPhase,
         markRunning,
     }
 })

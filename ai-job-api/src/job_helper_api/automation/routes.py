@@ -69,6 +69,10 @@ def register_routes(app, require_user, writable):
     async def cancel(job_id: str, payload: dto.RequestId, uid=Depends(enabled)):
         return envelope(await service().cancel(uid, job_id, payload))
 
+    @app.post("/api/job/automation/jobs/{job_id}/review")
+    async def review(job_id: str, payload: dto.UncertainReview, uid=Depends(writable)):
+        return envelope(await service().review(uid, job_id, payload))
+
     @app.post("/api/job/automation/executors/heartbeat")
     async def executor_heartbeat(payload: dto.ExecutorHeartbeat, uid=Depends(enabled)):
         return envelope(await service(Actions).heartbeat(uid, payload))

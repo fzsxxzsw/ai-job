@@ -153,6 +153,39 @@ test('keeps the persisted clientMid when sending through GeekChatCore', async ()
     assert.equal(sdk.sent[0].type, 'text')
 })
 
+test('does not write through GeekChatCore when a stopped run revokes permission during readiness', async () => {
+    const sdk = new FakeSdk('CONNECTED')
+    const transport = new GeekChatTransport(createWindow(sdk))
+    let finishReadiness
+    transport.refreshReady = () => new Promise(resolve => { finishReadiness = resolve })
+    let authorized = true
+    const message = createMessage('70000000000010')
+    const pending = transport.send(message, () => authorized)
+    authorized = false
+    finishReadiness(true)
+
+    assert.equal(await pending, false)
+    assert.equal(sdk.sent.length, 0)
+    assert.equal(message.msgObj.__dispatchedAt, undefined)
+})
+
+test('rechecks permission at the final high-level and raw SDK write', async () => {
+    const highLevelSdk = new FakeSdk('CONNECTED')
+    const highLevel = new GeekChatTransport(createWindow(highLevelSdk))
+    let checks = 0
+    assert.equal(await highLevel.send(createMessage('70000000000014'), () => ++checks < 2), false)
+    assert.equal(highLevelSdk.sent.length, 0)
+
+    let rawWrites = 0
+    const rawSdk = new FakeSdk('CONNECTED')
+    rawSdk.getClient = () => ({client: {send: () => { rawWrites++ }}})
+    const raw = new GeekChatTransport(createWindow(rawSdk))
+    const rawMessage = {...createMessage('70000000000015'), msg: new Uint8Array([1])}
+    checks = 0
+    assert.equal(await raw.send(rawMessage, () => ++checks < 2), false)
+    assert.equal(rawWrites, 0)
+})
+
 test('prefers the SDK root facade over a connected socketConnect with no client', async () => {
     const sdk = new FakeSdk('CONNECTED')
     const brokenConnector = {

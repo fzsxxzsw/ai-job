@@ -42,3 +42,14 @@ export function migrateAndDedupeGreetingTasks<T extends GreetingIdentitySource>(
     }
     return Array.from(deduped.values())
 }
+
+/** Reserving a new conversation greeting must never replace an earlier send record. */
+export function reserveNewGreetingTask<T extends {key: string}>(queue: T[], entry: T): {queue: T[]; reserved: boolean} {
+    if (queue.some(current => current.key === entry.key)) return {queue, reserved: false}
+    return {queue: [...queue, entry], reserved: true}
+}
+
+/** A greeting keeps one lock while its recipient ID is learned asynchronously. */
+export function greetingLockIdentity(entry: {key: string}): string {
+    return entry.key
+}

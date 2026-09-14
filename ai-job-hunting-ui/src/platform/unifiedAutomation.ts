@@ -14,13 +14,14 @@ export type AutomationJob = {
     jobId: string; kind: 'REPLY' | 'APPLICATION' | 'CAREER_REVIEW'; status: string; phase: string; revision: number
     inputHash: string; createdAt: number; updatedAt: number; lastErrorCode: string | null; decision: AutomationDecision | null
     actions: AutomationAction[]; phaseHistory: {phase: string; at?: number}[]
+    reviewedAt?: number | null; display?: {jobTitle: string; companyName: string; recruiterName: string}
     result: null | {schemaVersion: 1; kind: AutomationJob['kind']; decision: AutomationDecision; analysis: Record<string, unknown> | null; missingMaterials: string[]}
 }
 export type AutomationStatus = {
     contractVersion: 1; enabled: boolean; mode: 'LANGGRAPH' | 'LEGACY'; buildId: string
     agent: {state: 'READY' | 'STALE' | 'OFFLINE'; lastSeenAt: number | null; lastCompletedAt: number | null; lastErrorCode: string | null}
     executor: {state: 'READY' | 'STALE' | 'OFFLINE'; lastSeenAt: number | null}
-    counts: {queued: number; running: number; waitingExecution: number; waitingConfirmation: number; uncertain: number; failed: number; completed: number}
+    counts: {queued: number; running: number; waitingExecution: number; waitingConfirmation: number; uncertain: number; reviewedUncertain: number; failed: number; completed: number}
     outcomes: {enabled: boolean; caseCount: number; reportCount: number; lastObservedAt: number | null
         tasks?: {counts: Record<string, number>; total: number; items: OutcomeTask[]}}
 }
@@ -59,6 +60,10 @@ export function createUnifiedAutomation<C>(dependencies: Dependencies<C>) {
     const now = dependencies.now || Date.now
     let snapshot: AutomationSnapshot = {status: null, jobs: [], error: '', held: 0, updatedAt: 0}
     let statusScope = '', statusAt = 0
+    let statusInFlight: {scope: string; promise: Promise<AutomationStatus>} | null = null
+    const PARKED_UNKNOWN_POLL_MS = 60_000
+    const parkedUnknownUntil = new Map<string, number>()
+    const pendingAckRefresh = new Map<string, Set<string>>()
     const listeners = new Set<(state: AutomationSnapshot) => void>(), running = new Set<string>()
     const publish = () => { for (const listener of listeners) listener({...snapshot}) }
     const rawRead = <T>(key: string): T | null => { try { return JSON.parse(dependencies.storage.getItem(PREFIX + key) || 'null') } catch { return null } }
@@ -102,16 +107,32 @@ export function createUnifiedAutomation<C>(dependencies: Dependencies<C>) {
     }
     async function status(force = false): Promise<AutomationStatus> {
         const scope = dependencies.scope()
-        if (scope !== statusScope) { snapshot.status = null; snapshot.jobs = []; snapshot.updatedAt = 0 }
+        if (scope !== statusScope) {
+            snapshot.status = null; snapshot.jobs = []; snapshot.updatedAt = 0
+            parkedUnknownUntil.clear(); pendingAckRefresh.clear()
+        }
+        if (statusInFlight?.scope === scope) return statusInFlight.promise
         if (!force && scope === statusScope && snapshot.status && now() - statusAt < 2_000) return snapshot.status
-        try {
-            const value = await request('/status') as AutomationStatus
-            if (value.contractVersion !== 1 || !['LANGGRAPH', 'LEGACY'].includes(value.mode)
-                || value.enabled !== (value.mode === 'LANGGRAPH')) throw new Error('AUTOMATION_CONTRACT_INVALID')
-            if (scope !== statusScope) snapshot.jobs = []
-            snapshot.status = value; snapshot.error = ''; snapshot.updatedAt = now(); statusScope = scope; statusAt = now(); publish()
-            return value
-        } catch (error) { snapshot.error = '统一任务服务暂不可用，自动操作已等待；不会切回旧发送流程'; publish(); throw error }
+        const promise = (async () => {
+            try {
+                const value = await request('/status', undefined, scope) as AutomationStatus
+                if (value.contractVersion !== 1 || !['LANGGRAPH', 'LEGACY'].includes(value.mode)
+                    || value.enabled !== (value.mode === 'LANGGRAPH')) throw new Error('AUTOMATION_CONTRACT_INVALID')
+                if (scope !== dependencies.scope()) throw new Error('AUTOMATION_SCOPE_CHANGED')
+                if (scope !== statusScope) snapshot.jobs = []
+                snapshot.status = value; snapshot.error = ''; snapshot.updatedAt = now(); statusScope = scope; statusAt = now(); publish()
+                return value
+            } catch (error) {
+                if (scope === dependencies.scope()) {
+                    snapshot.status = null; statusAt = 0
+                    snapshot.error = '统一任务服务暂不可用，自动操作已等待；不会切回旧发送流程'; publish()
+                }
+                throw error
+            }
+        })()
+        statusInFlight = {scope, promise}
+        try { return await promise }
+        finally { if (statusInFlight?.promise === promise) statusInFlight = null }
     }
     async function heartbeat() {
         return request('/executors/heartbeat', {executorId: dependencies.executorId, platformAccount: dependencies.account(), capabilities: dependencies.capabilities?.() || [...ACTION_KINDS], ...dependencies.flags()})
@@ -133,23 +154,43 @@ export function createUnifiedAutomation<C>(dependencies: Dependencies<C>) {
             platformAccount: dependencies.account(), dispatchToken: record.dispatchToken, clientMid: record.clientMid, ...record.receipt}, record.scope)
         record.delivered = true; write('dispatch:' + record.actionId, record)
     }
+    async function refreshJob(saved: SavedJob<C>): Promise<AutomationJob> {
+        const job = await request('/jobs/' + encodeURIComponent(saved.jobId)) as AutomationJob
+        parkedUnknownUntil.delete(saved.jobId)
+        mergeBinding('job:' + saved.jobId, saved)
+        snapshot.jobs = [job, ...snapshot.jobs.filter(item => item.jobId !== job.jobId)].slice(0, 30)
+        for (const acknowledged of job.actions.filter(action => action.status === 'ACKNOWLEDGED')) {
+            if (saved.reconciledActions?.includes(acknowledged.actionId)) continue
+            saved.reconciledActions = [...(saved.reconciledActions || []), acknowledged.actionId]
+            write('job:' + saved.jobId, saved)
+            await dependencies.execution.acknowledged?.(saved.context, acknowledged, read<Dispatch>('dispatch:' + acknowledged.actionId)?.receipt)
+            write('job:' + saved.jobId, saved)
+        }
+        if (saved.scope !== dependencies.scope()) throw new Error('AUTOMATION_SCOPE_CHANGED')
+        const pendingActions = pendingAckRefresh.get(saved.jobId)
+        if (pendingActions) {
+            for (const actionId of pendingActions) {
+                if (job.actions.some(action => action.actionId === actionId && action.status === 'ACKNOWLEDGED')) pendingActions.delete(actionId)
+            }
+            if (!pendingActions.size) pendingAckRefresh.delete(saved.jobId)
+        }
+        return job
+    }
     async function tickJob(saved: SavedJob<C>) {
         if (saved.scope !== dependencies.scope() || saved.completed || running.has(saved.jobId)) return
         running.add(saved.jobId)
         try {
-            const job = await request('/jobs/' + encodeURIComponent(saved.jobId)) as AutomationJob
-            mergeBinding('job:' + saved.jobId, saved)
-            snapshot.jobs = [job, ...snapshot.jobs.filter(item => item.jobId !== job.jobId)].slice(0, 30)
-            for (const acknowledged of job.actions.filter(action => action.status === 'ACKNOWLEDGED')) {
-                if (saved.reconciledActions?.includes(acknowledged.actionId)) continue
-                saved.reconciledActions = [...(saved.reconciledActions || []), acknowledged.actionId]
-                write('job:' + saved.jobId, saved)
-                await dependencies.execution.acknowledged?.(saved.context, acknowledged, read<Dispatch>('dispatch:' + acknowledged.actionId)?.receipt)
-                write('job:' + saved.jobId, saved)
-            }
+            const job = await refreshJob(saved)
             if (TERMINAL.has(job.status)) {
                 if (job.status === 'COMPLETED') await dependencies.execution.completed?.(saved.context, job)
                 saved.completed = true; write('job:' + saved.jobId, saved); return
+            }
+            if (job.status === 'UNCERTAIN' && !pendingAckRefresh.has(saved.jobId) && !job.actions.some(action =>
+                ['QUEUED', 'LEASED', 'DISPATCHING'].includes(action.status))) {
+                // The exact ACK listener below still reconciles immediately. A periodic
+                // detail refresh catches server-side changes missed by this browser.
+                parkedUnknownUntil.set(saved.jobId, now() + PARKED_UNKNOWN_POLL_MS)
+                snapshot.held++; return
             }
             const queued = job.actions.find(action => action.status === 'QUEUED' && action.approvalStatus !== 'PENDING')
             if (!queued || !dependencies.execution.ready(saved.context, queued)) { snapshot.held++; return }
@@ -184,14 +225,24 @@ export function createUnifiedAutomation<C>(dependencies: Dependencies<C>) {
             }
             if (dependencies.execution.run) await dependencies.execution.run(saved.context, queued, execute)
             else await execute()
-        } catch { snapshot.error = '任务正在等待可靠授权、平台关联或回执；未确认动作不会重发' }
-        finally { running.delete(saved.jobId); publish() }
+        } catch {
+            if (saved.scope === dependencies.scope()) snapshot.error = '任务正在等待可靠授权、平台关联或回执；未确认动作不会重发'
+        }
+        finally { running.delete(saved.jobId); if (saved.scope === dependencies.scope()) publish() }
     }
     let nextJob = 0
     async function pass() {
         if (!(await status(true)).enabled) return
         await heartbeat()
         snapshot.jobs = await request('/jobs?limit=30&offset=0') as AutomationJob[]
+        for (const job of snapshot.jobs) {
+            const saved = read<SavedJob<C>>('job:' + job.jobId)
+            if (job.status !== 'UNCERTAIN' || job.actions.some(action =>
+                ['QUEUED', 'LEASED', 'DISPATCHING'].includes(action.status)
+                || action.status === 'ACKNOWLEDGED' && !saved?.reconciledActions?.includes(action.actionId))) {
+                parkedUnknownUntil.delete(job.jobId)
+            }
+        }
         snapshot.held = 0
         for (const record of list<Dispatch>('dispatch:')) {
             if (record.scope !== dependencies.scope()) continue
@@ -200,9 +251,13 @@ export function createUnifiedAutomation<C>(dependencies: Dependencies<C>) {
             if (record.receipt && !record.delivered) { try { await sendReceipt(record) } catch { /* persisted for retry */ } }
         }
         const jobs = list<SavedJob<C>>('job:').filter(job => job.scope === dependencies.scope() && !job.completed)
-        const start = jobs.length ? nextJob % jobs.length : 0
-        for (let offset = 0; offset < Math.min(30, jobs.length); offset++) await tickJob(jobs[(start + offset) % jobs.length])
-        nextJob = jobs.length ? (start + Math.min(30, jobs.length)) % jobs.length : 0
+        const active = jobs.filter(job => !parkedUnknownUntil.has(job.jobId))
+        const dueUnknown = jobs.filter(job => parkedUnknownUntil.has(job.jobId)
+            && parkedUnknownUntil.get(job.jobId)! <= now())
+        const eligible = [...active, ...dueUnknown]
+        const start = eligible.length ? nextJob % eligible.length : 0
+        for (let offset = 0; offset < Math.min(30, eligible.length); offset++) await tickJob(eligible[(start + offset) % eligible.length])
+        nextJob = eligible.length ? (start + Math.min(30, eligible.length)) % eligible.length : 0
         publish()
     }
     let passing: Promise<void> | null = null
@@ -217,7 +272,18 @@ export function createUnifiedAutomation<C>(dependencies: Dependencies<C>) {
             if (record.clientMid !== clientMid && dependencies.acknowledgement?.(record.clientMid) !== serverMid) continue
             record.receipt = {status: 'ACKNOWLEDGED', serverMid, platformCode: 0, occurredAt: now(), errorCode: null}; record.delivered = false
             write('dispatch:' + record.actionId, record)
+            const pendingActions = pendingAckRefresh.get(record.jobId) || new Set<string>()
+            pendingActions.add(record.actionId)
+            pendingAckRefresh.set(record.jobId, pendingActions)
+            parkedUnknownUntil.delete(record.jobId)
             await sendReceipt(record)
+            const saved = read<SavedJob<C>>('job:' + record.jobId)
+            if (saved && saved.scope === dependencies.scope() && !running.has(saved.jobId)) {
+                running.add(saved.jobId)
+                try { await refreshJob(saved); publish() }
+                catch { if (saved.scope === dependencies.scope()) { snapshot.error = '回执已保存，任务状态等待下次核对'; publish() } }
+                finally { running.delete(saved.jobId) }
+            }
         }
     }
     async function bindContact(actionId: string, bossId: string, conversationKey: string) {

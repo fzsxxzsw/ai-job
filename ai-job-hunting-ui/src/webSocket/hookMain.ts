@@ -187,13 +187,17 @@ function clearClientMidAliases(waiterClientMid: string): void {
     }
 }
 
-async function dispatchChatMessage(message: {msg?: Uint8Array, msgObj?: any}): Promise<boolean> {
-    if (geekChatTransport.isReady() && await geekChatTransport.send(message)) {
+async function dispatchChatMessage(message: {msg?: Uint8Array, msgObj?: any}, canDispatch?: () => boolean): Promise<boolean> {
+    if (canDispatch && !canDispatch()) return false
+    if (geekChatTransport.isReady() && await geekChatTransport.send(message, canDispatch)) {
         return true
     }
+    // The SDK readiness check above can await while the user stops the run.
+    if (canDispatch && !canDispatch()) return false
     const socket = getOpenChatSocket()
     if (!socket || !(message?.msg instanceof Uint8Array)) return false
     outgoingMessageId = outgoingMessageId >= 65535 ? 1 : outgoingMessageId + 1
+    if (canDispatch && !canDispatch()) return false
     socket.send(mqtt.encode({payload: message.msg, messageId: outgoingMessageId}))
     return true
 }
@@ -202,6 +206,7 @@ async function dispatchChatMessage(message: {msg?: Uint8Array, msgObj?: any}): P
 // protobuf message through the real BOSS chat socket instead of relying on a brittle
 // copy of BOSS's private ChatWebsocket class.
 Tools.window.AIJobHelperChatBridge = {
+    supportsDispatchAuthorization: true,
     isReady: () => geekChatTransport.isReady() || !!getOpenChatSocket(),
     ensureReady: async (timeoutMs = 8_000) => {
         if (getOpenChatSocket()) return true
@@ -215,13 +220,13 @@ Tools.window.AIJobHelperChatBridge = {
         const normalizedClientMid = normalizeProtocolId(clientMid)
         return normalizedClientMid ? findRecentMessageAck(normalizedClientMid) : undefined
     },
-    send: async (message: {msg?: Uint8Array, msgObj?: any}) => {
+    send: async (message: {msg?: Uint8Array, msgObj?: any}, canDispatch?: () => boolean) => {
         if (!(message?.msg instanceof Uint8Array)) {
             return false
         }
         const clientMid = normalizeProtocolId(message?.msgObj?.cmid || message?.msgObj?.mid)
         if (!clientMid) {
-            return await dispatchChatMessage(message)
+            return await dispatchChatMessage(message, canDispatch)
         }
         // Retain plugin ownership independently of ACK timing. GeekChatCore also
         // echoes local outgoing messages, which is how manual intervention is seen.
@@ -232,6 +237,7 @@ Tools.window.AIJobHelperChatBridge = {
             ;(message.msgObj as any).__serverMid = recentAck.serverMid
             return true
         }
+        if (canDispatch && !canDispatch()) return false
         // Register the ACK waiter before sending. BOSS can acknowledge very quickly,
         // and registering afterwards could lose that ACK and incorrectly queue a retry.
         const dispatchGate = createAcknowledgedDispatchGate(message.msgObj)
@@ -250,7 +256,7 @@ Tools.window.AIJobHelperChatBridge = {
             ;(message.msgObj as any).__serverMid = confirmation.serverMid
             dispatchGate.acknowledge()
         })
-        void dispatchChatMessage(message).then(dispatched => {
+        void dispatchChatMessage(message, canDispatch).then(dispatched => {
             if (dispatched) {
                 // The ACK waiter may have timed out while the SDK promise was
                 // pending. Reconcile a concurrently received ACK before the gate

@@ -114,6 +114,16 @@ export async function listAutomationJobs(offset: number, limit: number, activeOn
     if (expectedScope !== captureAutomationScope()) throw new Error('AUTOMATION_SCOPE_CHANGED')
     return response.data.data as AutomationJob[]
 }
+export async function reviewAutomationJob(jobId: string, reviewed: boolean): Promise<AutomationJob> {
+    await ensureIdentity()
+    const expectedScope = captureAutomationScope()
+    if (!expectedScope) throw new Error('AUTOMATION_SCOPE_CHANGED')
+    const response = await axios.post(`/api/job/automation/jobs/${encodeURIComponent(jobId)}/review`,
+        {requestId: crypto.randomUUID(), reviewed},
+        {suppressGlobalErrorToast: true, jobHelperScopeGuard: () => expectedScope === captureAutomationScope()} as any)
+    if (expectedScope !== captureAutomationScope()) throw new Error('AUTOMATION_SCOPE_CHANGED')
+    return response.data.data as AutomationJob
+}
 export function captureAutomationScope() { return rawIdentity === identity() ? scope : '' }
 export async function prepareAutomationIdentity() { await ensureIdentity(); return captureAutomationScope() }
 export async function saveAutomationSnapshot(payload: unknown, expectedScope: string) {

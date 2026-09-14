@@ -18,7 +18,7 @@ const action = (kind = 'SEND_TEXT', id = 'action-1') => ({actionId: id, jobId: '
 const makeJob = actions => ({jobId: 'job-1', kind: 'REPLY', status: 'WAITING_EXECUTION', phase: 'WAITING_EXECUTION',
     revision: 1, inputHash: 'b'.repeat(64), createdAt: 1, updatedAt: 1, lastErrorCode: null, decision: {code: 'SEND', reason: '合成'},
     actions, result: null, phaseHistory: []})
-function rig({actions = [action()], storage = new MemoryStorage(), executorId = 'executor-A', shared, perform, prepare, ready, acknowledged, acknowledgement, onDispatch, onGetJob} = {}) {
+function rig({actions = [action()], storage = new MemoryStorage(), executorId = 'executor-A', shared, perform, prepare, ready, acknowledged, acknowledgement, onDispatch, onGetJob, onStatus} = {}) {
     const state = shared || {job: makeJob(actions), calls: [], statusEnabled: true, failStatus: false}
     let scope = 'scope-A', allowed = true, now = 1788757200000, effects = 0
     const api = createUnifiedAutomation({storage, executorId, now: () => now, scope: () => scope, account: () => '40',
@@ -26,6 +26,7 @@ function rig({actions = [action()], storage = new MemoryStorage(), executorId = 
         async request(path, body) {
             state.calls.push({path, body: clone(body)})
             if (path.endsWith('/status')) {
+                await onStatus?.()
                 if (state.failStatus) throw new Error('offline')
                 return {contractVersion: 1, enabled: state.statusEnabled, mode: state.statusEnabled ? 'LANGGRAPH' : 'LEGACY'}
             }
@@ -221,6 +222,66 @@ test('round robin progresses beyond 32 held jobs without deleting uncertain evid
         },execution:{ready:()=>false,perform:async()=>{throw Error('never')}}})
     await api.tick();await api.tick()
     assert.equal(new Set(visits).size,33);assert.equal(storage.length,33)
+})
+test('parked unknown jobs use one detail GET per minute while new queued work stays prompt', async () => {
+    const unknown = {...action(), status: 'UNKNOWN'}
+    const env = rig({actions: [unknown]})
+    env.state.job.status = 'UNCERTAIN'
+    await env.submit(); await env.api.tick()
+    const detailCalls = () => env.state.calls.filter(call => call.path.endsWith('/jobs/job-1')).length
+    assert.equal(detailCalls(), 1)
+    for (let index = 0; index < 19; index++) { env.advance(3_000); await env.api.tick() }
+    assert.equal(detailCalls(), 1, 'parked UNKNOWN does not monopolize every three-second pass')
+    env.advance(3_000); await env.api.tick()
+    assert.equal(detailCalls(), 2, 'periodic refresh still detects missed server reconciliation')
+    env.state.job.status = 'WAITING_EXECUTION'
+    env.state.job.actions[0].status = 'QUEUED'
+    env.advance(3_000); await env.api.tick()
+    assert.equal(env.effects(), 1, 'list status change wakes new executable work without the parked delay')
+})
+test('server-visible late ACK wakes a parked UNKNOWN job for exact reconciliation', async () => {
+    const acknowledged = []
+    const env = rig({actions: [{...action(), status: 'UNKNOWN'}],
+        acknowledged: (_context, item) => acknowledged.push(item.actionId)})
+    env.state.job.status = 'UNCERTAIN'
+    await env.submit(); await env.api.tick()
+    env.state.job.actions[0].status = 'ACKNOWLEDGED'
+    env.advance(3_000); await env.api.tick()
+    assert.deepEqual(acknowledged, ['action-1'])
+    assert.equal(env.effects(), 0, 'reconciliation never replays the original send')
+})
+test('exact late ACK refreshes only its job immediately and cannot trigger a newly queued send', async () => {
+    const acknowledged = []
+    const env = rig({perform: async () => ({status: 'UNKNOWN', serverMid: null, platformCode: null,
+        occurredAt: 1788757200000, errorCode: 'RECEIPT_MISSING'}),
+    acknowledged: (_context, item) => acknowledged.push(item.actionId)})
+    await env.submit(); await env.api.tick()
+    env.state.job.status = 'UNCERTAIN'
+    await env.api.tick()
+    const before = env.state.calls.filter(call => call.path.endsWith('/jobs/job-1')).length
+    env.state.job.actions.push(action('SEND_TEXT', 'second-action'))
+    await env.api.acknowledge('90071992547409931', '90071992547409999')
+    assert.equal(env.state.calls.filter(call => call.path.endsWith('/jobs/job-1')).length, before + 1)
+    assert.deepEqual(acknowledged, ['action-1'])
+    assert.equal(env.effects(), 1, 'the ACK listener reconciles but never executes queued work')
+})
+test('concurrent status reads share one request, reject on failure, and isolate scope changes', async () => {
+    let release, block = true
+    const env = rig({onStatus: () => block ? new Promise(resolve => { release = resolve }) : undefined})
+    const first = env.api.status(true)
+    const second = env.api.enabled()
+    while (!release) await new Promise(resolve => setImmediate(resolve))
+    assert.equal(env.state.calls.filter(call => call.path.endsWith('/status')).length, 1)
+    env.switchScope(); block = false
+    const switched = await env.api.status(true)
+    assert.equal(switched.enabled, true)
+    release()
+    await assert.rejects(first, /AUTOMATION_SCOPE_CHANGED/)
+    await assert.rejects(second, /AUTOMATION_SCOPE_CHANGED/)
+    assert.equal(env.state.calls.filter(call => call.path.endsWith('/status')).length, 2)
+    env.state.failStatus = true
+    await assert.rejects(env.api.status(true), /offline/)
+    await assert.rejects(env.api.enabled(), /offline/, 'failed refresh does not expose the old enabled cache')
 })
 test('late SDK-remapped ACK is accepted only with exact registered original-MID proof', async () => {
     let proven=false
