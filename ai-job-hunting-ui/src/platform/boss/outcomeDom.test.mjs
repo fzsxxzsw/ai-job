@@ -60,6 +60,15 @@ test('reply recovery uses the final exact row and rejects an unverifiable final 
  rig.panel.querySelectorAll=()=>[valid,invalid]
  assert.equal(captureCurrentReplyCandidate(rig.root,'40'),null)
 })
+test('reply recovery accepts a class-only BOSS row with an exact conversation security id',()=>{
+ const rig=fixture({job:null,conversation:null});rig.raw.securityId='SecA'
+ rig.row.getAttribute=()=>null
+ assert.ok(captureCurrentReplyCandidate(rig.root,'40'))
+ rig.raw.securityId='SecB'
+ assert.equal(captureCurrentReplyCandidate(rig.root,'40'),null)
+ delete rig.raw.securityId
+ assert.equal(captureCurrentReplyCandidate(rig.root,'40'),null)
+})
 test('system cards are excluded from history and can never become reply candidates',()=>{
  for(const options of [{type:4,text:'你与该职位竞争者PK情况'},{bodyType:12,text:'附件简历预览'},
   {bodyType:1,text:'对方拒绝了您的发送请求'}]) {

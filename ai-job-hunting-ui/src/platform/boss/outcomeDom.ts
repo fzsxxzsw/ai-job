@@ -14,7 +14,12 @@ function binding(value: any) {
         encryptBossId: value.encryptBossId, securityId: value.securityId}
 }
 function selectedBinding(root: ParentNode) {
-    let element: any = root.querySelector('.friend-content.selected, .friend-content-warp.selected, li.selected .friend-content')
+    let element: any = root.querySelector([
+        '.friend-content.selected',
+        '.friend-content-warp.selected',
+        'li.selected .friend-content',
+        'li[aria-current="true"] .friend-content',
+    ].join(','))
     for (let depth = 0; element && depth < 7; depth++, element = element.parentElement) {
         const result = binding(source(element))
         if (result) return result
@@ -40,6 +45,61 @@ function rowFacts(row: Element, own: string, peer: string) {
     return {mid, cmid: exactPlatformId(raw.cmid), from: {uid: from}, to: {uid: to}, time: raw.time ?? null,
         text, kind: classification.kind, encryptJobId: raw.encryptJobId ?? null,
         conversationKey: raw.conversationKey ?? null}
+}
+
+function replyRowFacts(row: Element, own: string, peer: string, securityId: string) {
+    const raw = rawMessage(row)
+    const mid = exactPlatformId(raw?.mid)
+    const dataMid = row.getAttribute('data-mid')
+    const dataMessageId = row.getAttribute('data-message-id')
+    const attributeMid = dataMid || dataMessageId
+    if (!mid || attributeMid && attributeMid !== mid || dataMid && dataMessageId && dataMid !== dataMessageId) {
+        return null
+    }
+    const rawSecurityId = typeof raw?.securityId === 'string' ? raw.securityId.trim() : ''
+    // Newer BOSS rows no longer expose data-mid on every message element. Accept the
+    // protobuf-owned MID only when its exact conversation securityId independently
+    // binds the row to the selected chat; otherwise retain the strict attribute check.
+    if (!attributeMid && (!rawSecurityId || rawSecurityId !== securityId)) return null
+    const from = exactPlatformId(raw?.from?.uid), to = exactPlatformId(raw?.to?.uid)
+    if (!(from === own && to === peer || from === peer && to === own)) return null
+    const text = typeof raw?.body?.text === 'string' ? raw.body.text : null
+    const visible = row.querySelector('.text, .message-text, .text-content')?.textContent
+    if (text === null || visible == null || text.trim() !== visible.trim()) return null
+    const classification = classifyBossMessage(raw, own)
+    if (!isOutcomeMessage(classification.kind)) return null
+    return {mid, cmid: exactPlatformId(raw.cmid), from: {uid: from}, to: {uid: to}, time: raw.time ?? null,
+        text, kind: classification.kind, encryptJobId: raw.encryptJobId ?? null,
+        conversationKey: raw.conversationKey ?? null, securityId: rawSecurityId || null}
+}
+
+function replyRows(panel: Element): Element[] {
+    const candidates = Array.from(panel.querySelectorAll([
+        '[data-mid]',
+        '[data-message-id]',
+        '[class*="item-friend"]',
+        '[class*="item-myself"]',
+        '[class*="message-friend"]',
+        '[class*="message-self"]',
+    ].join(','))).filter(row => !row.closest('#ai-job, [contenteditable="true"]'))
+    const rows: Element[] = []
+    const seen = new Set<Element>()
+    for (const candidate of candidates) {
+        let owner: Element | null = candidate
+        let depth = 0
+        while (owner && owner !== panel && depth < 5) {
+            if (rawMessage(owner)) {
+                if (!seen.has(owner)) {
+                    seen.add(owner)
+                    rows.push(owner)
+                }
+                break
+            }
+            owner = owner.parentElement
+            depth += 1
+        }
+    }
+    return rows
 }
 
 /** A selection is not a chat-panel identity. Missing panel/message-owned data withholds HR evidence. */
@@ -89,21 +149,23 @@ export function captureCurrentReplyCandidate(root: ParentNode, ownAccount: unkno
     const panelBinding = binding(source(panel))
     if (!own || !selected || !panel || panelBinding && JSON.stringify(selected) !== JSON.stringify(panelBinding)) return null
     const current = panelBinding || selected
-    const finalRow = () => Array.from(panel.querySelectorAll('[data-mid], [data-message-id]'))
-        .filter(row => !row.closest('#ai-job, [contenteditable="true"]'))
-        .at(-1)
+    const finalRow = () => replyRows(panel).at(-1)
     const row = finalRow()
-    const message = row ? rowFacts(row, own, current.bossId) : null
+    const message = row ? replyRowFacts(row, own, current.bossId, current.securityId) : null
+    const ownsConversation = !!message && (
+        message.securityId === current.securityId
+        || message.encryptJobId === current.encryptJobId && message.conversationKey === current.conversationKey
+    )
     if (!message || message.kind !== 'RECRUITER_TEXT' || message.from.uid !== current.bossId
         || message.to.uid !== own || !message.text.trim()
         || message.encryptJobId && message.encryptJobId !== current.encryptJobId
         || message.conversationKey && message.conversationKey !== current.conversationKey
-        || !panelBinding && (message.encryptJobId !== current.encryptJobId || message.conversationKey !== current.conversationKey)) return null
+        || !panelBinding && !ownsConversation) return null
     const fingerprint = JSON.stringify(message)
     const recheck = () => root.querySelector('.chat-conversation') === panel
         && JSON.stringify(selectedBinding(root)) === JSON.stringify(selected)
         && JSON.stringify(binding(source(panel))) === JSON.stringify(panelBinding)
-        && finalRow() === row && JSON.stringify(rowFacts(row!, own, current.bossId)) === fingerprint
+        && finalRow() === row && JSON.stringify(replyRowFacts(row!, own, current.bossId, current.securityId)) === fingerprint
     return recheck() ? {binding: current, message: {...message, encryptJobId: current.encryptJobId,
         conversationKey: current.conversationKey}, recheck} : null
 }
