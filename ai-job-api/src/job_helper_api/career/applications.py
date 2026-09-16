@@ -261,27 +261,53 @@ class Applications(Versions):
         )
         return [await self.application_view(uid, row) for row in rows]
 
-    async def follow_up_candidates(self, uid, limit=50, offset=0, minimum_age_hours=24):
-        """Preview exact read-without-reply applications; never drafts or sends here."""
-        condition = (
-            (self.applications.c.user_id == uid)
-            & (self.applications.c.read_state == "READ")
-            & (self.applications.c.application_status == "SOFT_REJECTED")
+    async def follow_up_candidates(
+        self, uid, limit=50, offset=0, minimum_age_hours=24, fallback_age_hours=48
+    ):
+        """Return bounded, explainable candidates; task creation remains browser-owned."""
+        terminal_statuses = {
+            "WITHDRAWN",
+            "EXPLICIT_REJECTED",
+            "INTERVIEW_SCHEDULED",
+            "OFFER_RECEIVED",
+        }
+        terminal_events = {
+            "REJECTED",
+            "INTERVIEW_INVITED",
+            "INTERVIEW_COMPLETED",
+            "OFFER_RECEIVED",
+            "WITHDRAWN",
+        }
+        condition = self.applications.c.user_id == uid
+        candidate_condition = (
+            condition
+            & (self.applications.c.application_validity == "VALID")
+            & self.applications.c.job_title.is_not(None)
+            & self.applications.c.company_name.is_not(None)
+            & self.applications.c.jd_text.is_not(None)
+            & self.applications.c.platform_account.is_not(None)
+            & self.applications.c.conversation_key.is_not(None)
+            & self.applications.c.boss_id.is_not(None)
+            & self.applications.c.application_status.not_in(terminal_statuses)
         )
         total_row = await self.db.one(
-            select(func.count().label("count")).select_from(self.applications).where(condition)
+            select(func.count().label("count"))
+            .select_from(self.applications)
+            .where(condition, self.applications.c.read_state == "READ")
         )
         total = total_row["count"] if total_row else 0
         rows = await self.db.rows(
             select(self.applications)
-            .where(condition)
-            .order_by(self.applications.c.status_updated_at.desc(), self.applications.c.id)
+            .where(candidate_condition)
+            .order_by(self.applications.c.updated_at.desc(), self.applications.c.id)
             .limit(limit)
             .offset(offset)
         )
         messages = self.db.table("conversation_message")
+        jobs = self.db.table("automation_job")
         timestamp = now_ms()
         minimum_age_ms = minimum_age_hours * 60 * 60 * 1000
+        fallback_age_ms = fallback_age_hours * 60 * 60 * 1000
         items = []
         for row in rows:
             latest = await self.db.one(
@@ -290,18 +316,49 @@ class Applications(Versions):
                 .order_by(messages.c.order_at.desc(), messages.c.id.desc())
                 .limit(1)
             )
+            previous = await self.db.one(
+                select(jobs.c.id)
+                .where(
+                    jobs.c.user_id == uid,
+                    jobs.c.kind == "FOLLOW_UP",
+                    jobs.c.business_key
+                    == digest(["FOLLOW_UP", row["platform_account"], row["id"]]),
+                )
+                .limit(1)
+            )
+            events = effective_events(
+                [
+                    event
+                    for event in await self.timeline(uid, row["id"])
+                    if event["confirmation"] != "INFERRED"
+                ]
+            )
+            evidence_track = (
+                "EXACT_READ_NO_REPLY" if row["read_state"] == "READ" else "ACKNOWLEDGED_WAITING"
+            )
+            required_age_ms = (
+                minimum_age_ms if evidence_track == "EXACT_READ_NO_REPLY" else fallback_age_ms
+            )
             blocker = None
-            if row["application_validity"] == "INVALID":
-                blocker = "INVALID_APPLICATION"
+            if row["application_validity"] != "VALID":
+                blocker = "APPLICATION_NOT_VALIDATED"
+            elif not row["job_title"] or not row["company_name"] or not row["jd_text"]:
+                blocker = "INCOMPLETE_JOB_METADATA"
             elif not row["platform_account"] or not row["conversation_key"] or not row["boss_id"]:
                 blocker = "MISSING_EXACT_BINDING"
+            elif row["application_status"] in terminal_statuses or any(
+                event["event_type"] in terminal_events for event in events
+            ):
+                blocker = "TERMINAL_APPLICATION"
+            elif previous:
+                blocker = "ALREADY_FOLLOWED_UP"
             elif not latest:
                 blocker = "MISSING_CONVERSATION_HISTORY"
             elif latest["role"] != "USER":
                 blocker = "LATEST_MESSAGE_IS_NOT_USER"
             elif latest["delivery_state"] != "ACKNOWLEDGED":
                 blocker = "OUTBOUND_NOT_ACKNOWLEDGED"
-            elif timestamp - latest["order_at"] < minimum_age_ms:
+            elif timestamp - latest["order_at"] < required_age_ms:
                 blocker = "TOO_RECENT"
             items.append(
                 {
@@ -317,8 +374,13 @@ class Applications(Versions):
                     "applicationValidity": row["application_validity"],
                     "applicationStatus": row["application_status"],
                     "readState": row["read_state"],
+                    "evidenceTrack": evidence_track,
+                    "requiredAgeHours": minimum_age_hours
+                    if evidence_track == "EXACT_READ_NO_REPLY"
+                    else fallback_age_hours,
                     "anchorOutboundMessageId": latest["message_id"] if latest else None,
                     "anchorOutboundAt": latest["order_at"] if latest else None,
+                    "jdText": (row["jd_text"] or "")[:10000],
                     "eligible": blocker is None,
                     "blocker": blocker,
                 }
@@ -326,10 +388,74 @@ class Applications(Versions):
         return {
             "asOf": timestamp,
             "minimumAgeHours": minimum_age_hours,
+            "fallbackAgeHours": fallback_age_hours,
             "exactReadNoReplyCount": int(total or 0),
             "eligibleCount": sum(item["eligible"] for item in items),
             "items": items,
         }
+
+    async def follow_up_dispatch_blocker(self, uid, job, c):
+        """Recheck every mutable eligibility fact inside the dispatch transaction."""
+        raw = loads(job["input_json"], {}).get("input", {})
+        app = await self.db.one(
+            select(self.applications).where(
+                self.applications.c.user_id == uid,
+                self.applications.c.id == raw.get("applicationId"),
+            ),
+            c,
+        )
+        if not app or app["application_validity"] != "VALID":
+            return "FOLLOW_UP_APPLICATION_CHANGED"
+        if (
+            app["platform_account"] != job["platform_account"]
+            or app["encrypt_job_id"] != job["encrypt_job_id"]
+            or app["conversation_key"] != job["conversation_key"]
+            or app["boss_id"] != job["boss_id"]
+        ):
+            return "FOLLOW_UP_BINDING_CHANGED"
+        if app["application_status"] in {
+            "WITHDRAWN",
+            "EXPLICIT_REJECTED",
+            "INTERVIEW_SCHEDULED",
+            "OFFER_RECEIVED",
+        }:
+            return "FOLLOW_UP_APPLICATION_TERMINAL"
+        events = effective_events(
+            [
+                event
+                for event in await self.timeline(uid, app["id"], c)
+                if event["confirmation"] != "INFERRED"
+            ]
+        )
+        if any(
+            event["event_type"]
+            in {
+                "REJECTED",
+                "INTERVIEW_INVITED",
+                "INTERVIEW_COMPLETED",
+                "OFFER_RECEIVED",
+                "WITHDRAWN",
+            }
+            for event in events
+        ):
+            return "FOLLOW_UP_APPLICATION_TERMINAL"
+        messages = self.db.table("conversation_message")
+        latest = await self.db.one(
+            select(messages)
+            .where(messages.c.user_id == uid, messages.c.application_id == app["id"])
+            .order_by(messages.c.order_at.desc(), messages.c.id.desc())
+            .limit(1),
+            c,
+        )
+        if (
+            not latest
+            or latest["message_id"] != raw.get("anchorOutboundMessageId")
+            or latest["order_at"] != raw.get("anchorOutboundAt")
+            or latest["role"] != "USER"
+            or latest["delivery_state"] != "ACKNOWLEDGED"
+        ):
+            return "FOLLOW_UP_CONVERSATION_CHANGED"
+        return None
 
     async def insert_application(
         self,

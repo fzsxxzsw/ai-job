@@ -15,7 +15,7 @@ from job_helper_agent.outcome_client import (
     validate_api_url,
 )
 
-JobKind = Literal["REPLY", "APPLICATION", "CAREER_REVIEW"]
+JobKind = Literal["REPLY", "APPLICATION", "FOLLOW_UP", "CAREER_REVIEW"]
 WaitFor = Literal["EXECUTION", "CONFIRMATION", "NONE"]
 
 

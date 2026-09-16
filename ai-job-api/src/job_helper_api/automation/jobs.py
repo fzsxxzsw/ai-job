@@ -89,16 +89,22 @@ class Jobs(Storage):
             identity = (
                 payload.input.inboundMessageId
                 if payload.kind == "REPLY"
+                else payload.input.applicationId
+                if payload.kind == "FOLLOW_UP"
                 else payload.input.cycleKey
             )
-            business_key = digest(
-                [
-                    payload.kind,
-                    payload.platformAccount,
-                    payload.encryptJobId,
-                    payload.conversationKey if payload.kind == "REPLY" else None,
-                    identity,
-                ]
+            business_key = (
+                digest([payload.kind, payload.platformAccount, identity])
+                if payload.kind == "FOLLOW_UP"
+                else digest(
+                    [
+                        payload.kind,
+                        payload.platformAccount,
+                        payload.encryptJobId,
+                        payload.conversationKey if payload.kind == "REPLY" else None,
+                        identity,
+                    ]
+                )
             )
             previous = await self.db.one(
                 select(self.jobs).where(

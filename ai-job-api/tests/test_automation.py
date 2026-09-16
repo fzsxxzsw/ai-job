@@ -73,6 +73,94 @@ def application_input():
     }
 
 
+def follow_up_input():
+    return {
+        "requestId": "follow-up-request",
+        "kind": "FOLLOW_UP",
+        "platformAccount": "boss-owner",
+        "conversationKey": "peer:security",
+        "bossId": "peer",
+        "encryptJobId": "JobCase",
+        "input": {
+            "applicationId": "application-case",
+            "anchorOutboundMessageId": "90001",
+            "anchorOutboundAt": now_ms() - 48 * 60 * 60 * 1000,
+            "evidenceTrack": "ACKNOWLEDGED_WAITING",
+            "jobKey": "JobCase:boss-owner",
+            "jobInfo": {"jobTitle": "AI 应用开发", "jdText": "Python FastAPI"},
+        },
+    }
+
+
+def seed_follow_up_application(world):
+    stamp = now_ms()
+    old = stamp - 48 * 60 * 60 * 1000
+    with sqlite3.connect(world["path"]) as db:
+        uid = world["settings"].owner_user_id
+        db.execute(
+            "INSERT INTO career_application ("
+            "id,user_id,application_key,platform_account,encrypt_job_id,conversation_key,boss_id,"
+            "cycle_key,origin,job_title,company_name,jd_text,snapshot_completeness,"
+            "application_validity,read_state,application_status,data_json,created_at,updated_at"
+            ") VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                "application-case",
+                uid,
+                "application-case-key",
+                "boss-owner",
+                "JobCase",
+                "peer:security",
+                "peer",
+                "cycle-case",
+                "MANUAL",
+                "AI 应用开发",
+                "示例公司",
+                "Python FastAPI",
+                "COMPLETE",
+                "VALID",
+                "READ",
+                "SOFT_REJECTED",
+                "{}",
+                old,
+                stamp,
+            ),
+        )
+        db.execute(
+            "INSERT INTO conversation_message ("
+            "id,user_id,application_id,conversation_id,platform_account,conversation_key,boss_id,"
+            "encrypt_job_id,message_id,role,author_kind,text,text_hash,sent_at,observed_at,order_at,"
+            "order_confidence,causal_root_message_id,causal_depth,delivery_state,model_eligible,"
+            "sources_json,created_at,updated_at"
+            ") VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                "message-case",
+                uid,
+                "application-case",
+                "conversation-case",
+                "boss-owner",
+                "peer:security",
+                "peer",
+                "JobCase",
+                "90001",
+                "USER",
+                "USER",
+                "您好，我想应聘这个岗位。",
+                "a" * 64,
+                old,
+                old,
+                old,
+                "EXACT",
+                "90001",
+                0,
+                "ACKNOWLEDGED",
+                1,
+                "[]",
+                old,
+                old,
+            ),
+        )
+
+
 def worker(client, job, commit=True):
     claim = response(
         client.post("/internal/automation/claim", json={"workerId": "worker"}, headers=INTERNAL)
@@ -104,6 +192,58 @@ def executor(client, job, capability="SEND_TEXT"):
     )
     action = response(client.post(BASE + "/actions/claim", json={**scope, "jobId": job["jobId"]}))
     return scope, action
+
+
+def test_follow_up_is_deduplicated_and_text_action_needs_no_manual_approval(auto, world):
+    raw = follow_up_input()
+    job = response(auto.post(BASE + "/jobs", json=raw))
+    duplicate = {**raw, "requestId": "follow-up-request-retry"}
+    assert response(auto.post(BASE + "/jobs", json=duplicate))["jobId"] == job["jobId"]
+    rebound = {
+        **raw,
+        "requestId": "follow-up-request-rebound",
+        "conversationKey": "other:conversation",
+    }
+    assert auto.post(BASE + "/jobs", json=rebound).status_code == 409
+    _, _, saved = worker(auto, job)
+    assert saved["waitFor"] == "EXECUTION"
+    detail = response(auto.get(BASE + "/jobs/" + job["jobId"]))
+    assert detail["kind"] == "FOLLOW_UP"
+    assert len(detail["actions"]) == 1
+    assert detail["actions"][0]["kind"] == "SEND_TEXT"
+    assert detail["actions"][0]["approvalStatus"] == "NOT_REQUIRED"
+    assert detail["actions"][0]["payload"]["text"]
+    assert len(world["fake"].calls) == 1
+
+
+def test_follow_up_dispatch_rechecks_terminal_application_in_same_transaction(auto, world):
+    seed_follow_up_application(world)
+    job = response(auto.post(BASE + "/jobs", json=follow_up_input()))
+    worker(auto, job)
+    scope, action = executor(auto, job)
+    with sqlite3.connect(world["path"]) as db:
+        db.execute(
+            "UPDATE career_application SET application_status='EXPLICIT_REJECTED' "
+            "WHERE id='application-case'"
+        )
+    dispatched = auto.post(
+        BASE + "/actions/" + action["actionId"] + "/dispatch",
+        json={
+            **scope,
+            "leaseToken": action["leaseToken"],
+            "authorizationRevision": action["authorizationRevision"],
+            "clientMid": "12345",
+        },
+    )
+    assert dispatched.status_code == 409
+    assert "FOLLOW_UP_APPLICATION_TERMINAL" in dispatched.text
+    with sqlite3.connect(world["path"]) as db:
+        assert (
+            db.execute(
+                "SELECT status FROM automation_action WHERE id=?", (action["actionId"],)
+            ).fetchone()[0]
+            == "LEASED"
+        )
 
 
 def test_only_one_live_browser_executor_can_claim_actions(auto, world):

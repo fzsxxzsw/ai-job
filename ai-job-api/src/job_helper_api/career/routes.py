@@ -68,9 +68,14 @@ def register_career_routes(app, require_user, writable, internal):
         limit: int = Query(50, ge=1, le=100),
         offset: int = Query(0, ge=0),
         minimumAgeHours: int = Query(24, ge=0, le=168),
+        fallbackAgeHours: int = Query(48, ge=0, le=336),
         uid=Depends(require_user),
     ):
-        return envelope(await service().follow_up_candidates(uid, limit, offset, minimumAgeHours))
+        return envelope(
+            await service().follow_up_candidates(
+                uid, limit, offset, minimumAgeHours, fallbackAgeHours
+            )
+        )
 
     @app.get("/api/job/career/applications/{ident}")
     async def application(ident: str, uid=Depends(require_user)):

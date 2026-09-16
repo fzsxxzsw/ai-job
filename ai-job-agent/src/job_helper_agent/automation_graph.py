@@ -17,7 +17,7 @@ from job_helper_agent.automation_client import (
 )
 
 GRAPH_VERSION = "unified-career-graph-v1"
-KINDS = ("REPLY", "APPLICATION", "CAREER_REVIEW")
+KINDS = ("REPLY", "APPLICATION", "FOLLOW_UP", "CAREER_REVIEW")
 
 
 class AutomationState(TypedDict, total=False):

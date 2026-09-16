@@ -134,7 +134,7 @@ class Workflow(Storage):
                             self.jobs.c.available_at <= now_ms(),
                             self.jobs.c.kind.in_(
                                 (
-                                    ["REPLY", "APPLICATION"]
+                                    ["REPLY", "FOLLOW_UP", "APPLICATION"]
                                     if self.settings.automation_enabled
                                     else []
                                 )

@@ -334,6 +334,21 @@ test('actual reply executor refuses an old draft as soon as a newer live MID is 
     const a={kind:'SEND_TEXT',payload:{encryptJobId:'JobA',bossId:'81',conversationKey:'BossA:SecA',text:'旧回复'}}
     assert.equal(env.executors.get('REPLY').ready(previous,a),false)
 })
+test('automatic follow-up executor requires the exact live conversation and active reply authority', () => {
+    const env=environment()
+    const context={kind:'FOLLOW_UP',account:'40',policy:'policy-A',encryptJobId:'JobA',bossId:'81',
+        conversationKey:'BossA:SecA',applicationId:'application-A',anchorOutboundMessageId:'outbound-A',
+        anchorOutboundAt:1788757200000,contact:{...peer,bossId:'81',jobTitle:'Java开发'}}
+    const action={kind:'SEND_TEXT',approvalStatus:'NOT_REQUIRED',
+        payload:{encryptJobId:'JobA',bossId:'81',conversationKey:'BossA:SecA',text:'您好，想礼貌询问一下岗位进展。'}}
+    const executor=env.executors.get('FOLLOW_UP')
+    assert.equal(typeof executor?.ready,'function')
+    assert.equal(executor.ready(context,action),true)
+    env.fixture.allowed=false
+    assert.equal(executor.ready(context,action),false)
+    env.fixture.allowed=true;action.payload.conversationKey='BossB:SecB'
+    assert.equal(executor.ready(context,action),false)
+})
 test('manual takeover waits for activation, blocks M1 and clears only after accepted newer M2', async () => {
     const env=environment()
     const key='ai-job-manual-takeover-v1:fence:40:81'

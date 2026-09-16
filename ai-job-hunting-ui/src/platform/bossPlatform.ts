@@ -59,6 +59,7 @@ import {
     readManualTakeoverFence,
     synchronizeManualTakeoverFence,
 } from '../webSocket/manualTakeover';
+import type {FollowUpCandidate, FollowUpPreview} from './careerProtocol';
 
 let userStore = null as any;
 
@@ -106,6 +107,8 @@ export class BossOption {
     private static aiReplyRetryTimer: number | null = null;
     private static aiReplySendingKeys = new Set<string>();
     private static aiReplyDrainRunning = false;
+    private static followUpTimer: number | null = null;
+    private static followUpRunning = false;
     private static inboundMessageProcessingKeys = new Set<string>();
     private static conversationMessageExecutor = new KeyedSerialExecutor();
     private static domCatchUpTimer: number | null = null;
@@ -251,6 +254,7 @@ export class BossOption {
             userStore = UserStore()
         }
         this.startAiReplyRetryWorker()
+        this.startAutomaticFollowUpWorker()
         registerAutomationExecutor('REPLY', {
             ready: (context, action) => this.unifiedReplyReady(context, action),
             run: async (context, _action, operation) => {
@@ -270,6 +274,92 @@ export class BossOption {
                 this.finalizeInboundMessage(Number(context.bossId), context.inboundMessageId, context.inboundMessageMid, false)
             },
         })
+        registerAutomationExecutor('FOLLOW_UP', {
+            ready: (context, action) => this.unifiedFollowUpReady(context, action),
+            run: async (context, _action, operation) => {
+                await runWithOptionalDeliveryLock((globalThis.navigator as any)?.locks, 'automatic-follow-up',
+                    context.conversationKey || context.bossId || '', operation)
+            },
+            prepare: async (_context, action) => { if (action.kind === 'SEND_TEXT') await prepareUnifiedChat() },
+            perform: async (context, action, clientMid) => {
+                if (!this.unifiedFollowUpReady(context, action)) return {status: 'FAILED', serverMid: null, platformCode: null,
+                    occurredAt: Date.now(), errorCode: 'AUTHORIZATION_CHANGED', executionPhase: 'BEFORE_PLATFORM_CALL'}
+                return performUnifiedText(context.contact!, action, clientMid)
+            },
+        })
+    }
+
+    private followUpContact(candidate: FollowUpCandidate): BossUserInfo | undefined {
+        const matches = Array.from(BossOption.bossUserInfoMap.values()).filter(contact =>
+            String(contact.bossId) === candidate.bossId
+            && String(contact.encryptJobId) === candidate.encryptJobId
+            && makeConversationKey(contact.encryptBossId, contact.securityId) === candidate.conversationKey)
+        return matches.length === 1 ? matches[0] : undefined
+    }
+
+    private async scanAutomaticFollowUps(): Promise<void> {
+        if (BossOption.followUpRunning || getBossRiskStop() || !userStore?.user?.aiSeatStatus
+            || !location.pathname.includes('/web/geek/chat') || !Tools.window.AIJobHelperChatBridge?.isReady?.()) return
+        BossOption.followUpRunning = true
+        try {
+            if (!await unifiedAutomationEnabled()) return
+            const account = exactPlatformId(Tools.window._PAGE?.uid)
+            if (!account) return
+            let candidate: FollowUpCandidate | undefined
+            let contact: BossUserInfo | undefined
+            for (let offset = 0; offset < 500 && !candidate; offset += 50) {
+                const response = await axios.get('/api/job/career/follow-ups/candidates', {
+                    params: {limit: 50, offset, minimumAgeHours: 24, fallbackAgeHours: 48},
+                    timeout: 10_000, suppressGlobalErrorToast: true,
+                } as any)
+                const preview = response.data.data as FollowUpPreview
+                candidate = preview.items.find(item => item.eligible && item.platformAccount === account
+                    && !!item.bossId && !!item.conversationKey && !!item.anchorOutboundMessageId && !!item.anchorOutboundAt
+                    && !!this.followUpContact(item))
+                if (candidate) contact = this.followUpContact(candidate)
+                if (preview.items.length < 50) break
+            }
+            if (!candidate || !contact) return
+            const requestId = await automationRequestId(['follow-up', account, candidate.applicationId])
+            await submitAutomation({requestId, kind: 'FOLLOW_UP', platformAccount: account,
+                conversationKey: candidate.conversationKey, encryptJobId: candidate.encryptJobId, bossId: candidate.bossId,
+                input: {applicationId: candidate.applicationId,
+                    anchorOutboundMessageId: candidate.anchorOutboundMessageId!, anchorOutboundAt: candidate.anchorOutboundAt!,
+                    evidenceTrack: candidate.evidenceTrack, jobKey: `${candidate.encryptJobId}:${account}`,
+                    jobInfo: {jobTitle: candidate.jobTitle, companyName: candidate.companyName,
+                        recruiterName: candidate.recruiterName, salaryText: candidate.salaryText, jdText: candidate.jdText}}},
+                {kind: 'FOLLOW_UP', account, policy: currentAutomationPolicy(), encryptJobId: candidate.encryptJobId,
+                    conversationKey: candidate.conversationKey, bossId: candidate.bossId, contact: {...contact},
+                    applicationId: candidate.applicationId, anchorOutboundMessageId: candidate.anchorOutboundMessageId!,
+                    anchorOutboundAt: candidate.anchorOutboundAt!})
+        } catch (error) {
+            BossOption.logRecorder.warn('自动跟进候选检查失败，已等待下次安全重试', error)
+        } finally {
+            BossOption.followUpRunning = false
+        }
+    }
+
+    private startAutomaticFollowUpWorker(): void {
+        if (BossOption.followUpTimer !== null) return
+        const scan = () => { void this.scanAutomaticFollowUps() }
+        BossOption.followUpTimer = window.setInterval(scan, 60_000)
+        window.setTimeout(scan, 5_000)
+    }
+
+    private unifiedFollowUpReady(context: BrowserAutomationContext, action: AutomationAction): boolean {
+        const contact = context.contact
+        const latest = BossOption.latestLiveInbound.get(`${context.account}:${context.bossId}`)
+        if (latest && (!context.anchorOutboundAt || latest.sentAt === null
+            || latest.sentAt >= context.anchorOutboundAt
+            || latest.conversationKey && latest.conversationKey !== context.conversationKey)) return false
+        if (context.bossId && manualFenceBlocks(context.account, context.bossId)) return false
+        return !!contact && action.kind === 'SEND_TEXT' && browserAutomationReady(context, action)
+            && !Tools.isHardBlockedCompany(contact.jobTitle)
+            && String(contact.encryptJobId) === action.payload.encryptJobId
+            && String(contact.bossId) === action.payload.bossId
+            && makeConversationKey(contact.encryptBossId, contact.securityId) === action.payload.conversationKey
+            && !checkConversationExclusion(localStorage, String(contact.bossId), userStore.user.preference,
+                contact, '自动跟进投递进度')
     }
 
     private unifiedReplyReady(context: BrowserAutomationContext, action: AutomationAction): boolean {

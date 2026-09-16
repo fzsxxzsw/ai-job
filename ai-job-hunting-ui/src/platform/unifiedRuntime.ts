@@ -11,9 +11,10 @@ import type {SerializableBossJobDetail} from './boss/automationJob'
 import {deliveryRunAuthorized} from './automationReadiness'
 
 export type BrowserAutomationContext = {
-    kind: 'REPLY' | 'APPLICATION'; account: string; policy: string; encryptJobId: string; conversationKey: string | null
+    kind: 'REPLY' | 'APPLICATION' | 'FOLLOW_UP'; account: string; policy: string; encryptJobId: string; conversationKey: string | null
     bossId: string | null; contact?: BossUserInfo; job?: SerializableBossJobDetail; runId?: string
     inboundMessageId?: string; inboundMessageMid?: string; question?: string
+    applicationId?: string; anchorOutboundMessageId?: string; anchorOutboundAt?: number
     snapshot?: {encryptJobId: string; jobBaseInfo: string; jobExtInfo: string; preMatchResult: unknown}
     greetingEnabled?: boolean
 }
@@ -68,7 +69,9 @@ export function browserAutomationReady(context: BrowserAutomationContext, action
     if (context.account !== account() || context.policy !== currentAutomationPolicy() || getBossRiskStop()
         || String(action.payload.encryptJobId) !== context.encryptJobId) return false
     const enabled = flags()
-    if (context.kind === 'REPLY' ? !enabled.replyEnabled : !enabled.deliveryEnabled || !context.runId || context.runId !== PushRunStore().runId) return false
+    if (context.kind === 'APPLICATION'
+        ? !enabled.deliveryEnabled || !context.runId || context.runId !== PushRunStore().runId
+        : !enabled.replyEnabled) return false
     if (action.payload.bossId && context.bossId && action.payload.bossId !== context.bossId) return false
     if (action.payload.conversationKey && context.conversationKey && action.payload.conversationKey !== context.conversationKey) return false
     if (['SEND_RESUME', 'ACCEPT_RESUME', 'ACCEPT_PHONE', 'ACCEPT_WECHAT'].includes(action.kind)) {

@@ -67,12 +67,17 @@ async def compute(service, job):
 
     def action(kind, extra=None):
         payload = {**binding, **(extra or {})}
+        automatic_follow_up = job["kind"] == "FOLLOW_UP" and kind == "SEND_TEXT"
         artifact["actions"].append(
             {
                 "kind": kind,
                 "payload": payload,
                 "payloadHash": digest(payload),
-                "approvalStatus": "PENDING" if kind in SENSITIVE else "NOT_REQUIRED",
+                "approvalStatus": "NOT_REQUIRED"
+                if automatic_follow_up
+                else "PENDING"
+                if kind in SENSITIVE
+                else "NOT_REQUIRED",
             }
         )
 
@@ -96,6 +101,42 @@ async def compute(service, job):
         action("CONTACT_JOB")
         if input_["greeting"]["enabled"] and input_["greeting"]["text"].strip():
             action("SEND_GREETING", {"text": input_["greeting"]["text"]})
+        return artifact
+    if job["kind"] == "FOLLOW_UP":
+        if await is_stopped(service.db, uid, input_["jobKey"]):
+            result["decision"] = decision("STOP", "当前会话或 AI 回复已暂停")
+            return artifact
+        if await conversation_exclusion(
+            service.db,
+            uid,
+            input_["jobKey"],
+            "自动跟进投递进度",
+            input_.get("jobInfo"),
+        ):
+            result["decision"] = decision("STOP", "命中现有岗位或对话排除规则")
+            return artifact
+        system, _, config = await system_prompt(frozen, uid)
+        prompt = (
+            "请根据真实简历、岗位资料和已有对话，生成一条自然、克制的中文求职跟进消息。"
+            "只输出准备发送的正文，1到2句话，不虚构经历，不催促，不讨论薪资，"
+            "表达仍有兴趣并礼貌询问岗位进展。"
+        )
+        _, response = await generate_draft(
+            service.model,
+            service.settings,
+            config,
+            system,
+            bundle["preference"],
+            bundle["history"],
+            prompt,
+            input_.get("jobInfo"),
+        )
+        text = str(response.get("answerContent") or "").strip()
+        if not text:
+            result["decision"] = decision("STOP", "模型未生成可发送的跟进正文")
+            return artifact
+        action("SEND_TEXT", {"text": text[:500]})
+        result["decision"] = decision("SEND", "跟进正文已生成，等待安全发送与平台回执")
         return artifact
     if await is_stopped(service.db, uid, input_["jobKey"]):
         result["decision"] = decision("STOP", "当前会话或 AI 回复已暂停")
@@ -188,6 +229,20 @@ def validate_artifact(job, artifact):
             or result.get("analysis", {}).get("filter") is not False
         ):
             return False
+    elif job["kind"] == "FOLLOW_UP":
+        if (
+            code not in {"SEND", "STOP", "MISSING_MATERIALS"}
+            or len(actions) > 1
+            or actions
+            and (
+                actions[0].get("kind") != "SEND_TEXT"
+                or actions[0].get("approvalStatus") != "NOT_REQUIRED"
+                or not isinstance(actions[0].get("payload", {}).get("text"), str)
+                or not actions[0]["payload"]["text"].strip()
+                or len(actions[0]["payload"]["text"]) > 500
+            )
+        ):
+            return False
     for action in actions:
         kind, payload = action.get("kind"), action.get("payload", {})
         allowed = (
@@ -224,8 +279,13 @@ def validate_artifact(job, artifact):
                 "platformResumeId"
             ) != input_.get("platformResumeId"):
                 return False
-        if set(payload) != expected or action.get("approvalStatus") != (
-            "PENDING" if kind in SENSITIVE else "NOT_REQUIRED"
-        ):
+        expected_approval = (
+            "NOT_REQUIRED"
+            if job["kind"] == "FOLLOW_UP" and kind == "SEND_TEXT"
+            else "PENDING"
+            if kind in SENSITIVE
+            else "NOT_REQUIRED"
+        )
+        if set(payload) != expected or action.get("approvalStatus") != expected_approval:
             return False
     return True

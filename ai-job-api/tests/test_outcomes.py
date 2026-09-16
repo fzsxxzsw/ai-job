@@ -519,10 +519,39 @@ def test_application_statuses_persist_read_soft_explicit_and_interview_evidence(
         "/api/job/career/follow-ups/candidates", params={"minimumAgeHours": 0}
     ).json()["data"]
     assert preview["exactReadNoReplyCount"] == 1
+    assert preview["eligibleCount"] == 0
+    assert preview["items"] == []
+
+    with sqlite3.connect(world["path"]) as db:
+        db.execute(
+            "UPDATE career_application SET application_validity='VALID',"
+            "job_title='AI 应用开发',company_name='示例公司',jd_text='Python FastAPI' "
+            "WHERE encrypt_job_id='Manual-Soft'"
+        )
+    preview = ledger_client.get(
+        "/api/job/career/follow-ups/candidates",
+        params={"minimumAgeHours": 0, "fallbackAgeHours": 0},
+    ).json()["data"]
     assert preview["eligibleCount"] == 1
-    assert preview["items"][0]["encryptJobId"] == "Manual-Soft"
+    assert preview["items"][0]["evidenceTrack"] == "EXACT_READ_NO_REPLY"
     assert preview["items"][0]["anchorOutboundMessageId"] == "920002"
-    assert preview["items"][0]["eligible"] is True
+
+    with sqlite3.connect(world["path"]) as db:
+        db.execute(
+            "UPDATE career_application SET read_state='UNKNOWN' WHERE encrypt_job_id='Manual-Soft'"
+        )
+    preview = ledger_client.get(
+        "/api/job/career/follow-ups/candidates",
+        params={"minimumAgeHours": 0, "fallbackAgeHours": 0},
+    ).json()["data"]
+    assert preview["eligibleCount"] == 1
+    assert preview["items"][0]["evidenceTrack"] == "ACKNOWLEDGED_WAITING"
+    assert preview["items"][0]["anchorOutboundMessageId"] == "920002"
+
+    with sqlite3.connect(world["path"]) as db:
+        db.execute(
+            "UPDATE career_application SET read_state='READ' WHERE encrypt_job_id='Manual-Soft'"
+        )
 
     rejected = observation(
         "这个岗位已经招满了，暂不继续推进。",

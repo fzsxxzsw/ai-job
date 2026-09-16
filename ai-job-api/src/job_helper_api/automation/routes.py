@@ -63,7 +63,7 @@ def register_routes(app, require_user, writable):
     async def listing(
         limit: int = Query(20, ge=1, le=100),
         offset: int = Query(0, ge=0),
-        kind: Literal["REPLY", "APPLICATION", "CAREER_REVIEW"] | None = None,
+        kind: Literal["REPLY", "APPLICATION", "FOLLOW_UP", "CAREER_REVIEW"] | None = None,
         conversationKey: str | None = Query(None, max_length=255),
         activeOnly: bool = False,
         uid=Depends(require_user),

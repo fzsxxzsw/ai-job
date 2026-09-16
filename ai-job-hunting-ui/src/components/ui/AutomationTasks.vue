@@ -96,7 +96,7 @@ const runningCount = computed(() => outcomeRunning.value + actionRunning.value)
 const healthy = computed(() => !!state.value.status && !state.value.error
     && state.value.status.agent.state === 'READY' && state.value.status.executor.state === 'READY')
 const healthLabel = computed(() => healthy.value ? '服务在线' : state.value.status ? '服务需检查' : '正在连接')
-const kindLabel = (value: string) => ({REPLY: '自动回复', APPLICATION: '筛选与投递', CAREER_REVIEW: '求职复盘'} as Record<string, string>)[value] || '自动任务'
+const kindLabel = (value: string) => ({REPLY: '自动回复', FOLLOW_UP: '自动跟进', APPLICATION: '筛选与投递', CAREER_REVIEW: '求职复盘'} as Record<string, string>)[value] || '自动任务'
 const formatTime = (value: number) => value ? new Date(value).toLocaleString('zh-CN') : '时间未知'
 const recordLabel = (job: AutomationJob) => {
     const display = job.display

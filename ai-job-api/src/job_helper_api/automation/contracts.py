@@ -121,13 +121,22 @@ class ApplicationInput(Input):
     strategyPlanId: Id | None = None
 
 
+class FollowUpInput(Input):
+    applicationId: Id
+    anchorOutboundMessageId: Id
+    anchorOutboundAt: int = Field(gt=0)
+    evidenceTrack: Literal["EXACT_READ_NO_REPLY", "ACKNOWLEDGED_WAITING"]
+    jobKey: str = Field(min_length=1, max_length=64)
+    jobInfo: dict[str, Any]
+
+
 class JobInput(RequestId):
-    kind: Literal["REPLY", "APPLICATION"]
+    kind: Literal["REPLY", "APPLICATION", "FOLLOW_UP"]
     platformAccount: Subject
     conversationKey: Subject | None
     encryptJobId: Subject
     bossId: Subject | None
-    input: ReplyInput | ApplicationInput
+    input: ReplyInput | ApplicationInput | FollowUpInput
 
     @model_validator(mode="after")
     def coherent(self):
@@ -140,6 +149,15 @@ class JobInput(RequestId):
                 raise ValueError("Reply requires exact binding")
             if self.input.jobKey != self.encryptJobId + ":" + self.platformAccount:
                 raise ValueError("Legacy jobKey does not match the authenticated job/account")
+        elif self.kind == "FOLLOW_UP":
+            if (
+                not isinstance(self.input, FollowUpInput)
+                or not self.bossId
+                or not self.conversationKey
+            ):
+                raise ValueError("Follow-up requires exact binding")
+            if self.input.jobKey != self.encryptJobId + ":" + self.platformAccount:
+                raise ValueError("Follow-up jobKey does not match the authenticated job/account")
         elif not isinstance(self.input, ApplicationInput):
             raise ValueError("Application input required")
         return self

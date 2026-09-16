@@ -98,7 +98,9 @@ class Actions(Storage):
         failure = await self.authority_failure(c, uid, job, executor["scopeHash"])
         if failure:
             raise ApiError(failure, 409)
-        if not raw.get("replyEnabled" if job["kind"] == "REPLY" else "deliveryEnabled"):
+        if not raw.get(
+            "replyEnabled" if job["kind"] in {"REPLY", "FOLLOW_UP"} else "deliveryEnabled"
+        ):
             raise ApiError("AUTOMATION_PAUSED", 409)
         return executor
 
@@ -168,6 +170,14 @@ class Actions(Storage):
         async with self.transaction(uid) as c:
             action = await self.row(self.actions, uid, action_id, c)
             job = await self.row(self.jobs, uid, action["job_id"], c)
+            if job["kind"] == "FOLLOW_UP":
+                from ..career.applications import Applications
+
+                blocker = await Applications(
+                    self.db, self.settings, self.model, self.notifier
+                ).follow_up_dispatch_blocker(uid, job, c)
+                if blocker:
+                    raise ApiError(blocker, 409)
             executor = await self.authority(uid, job, payload, c)
             if action["kind"] not in executor["input"]["capabilities"]:
                 raise ApiError("AUTHORIZATION_CHANGED", 409)

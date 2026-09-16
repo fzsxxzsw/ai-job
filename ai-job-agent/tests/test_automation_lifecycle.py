@@ -8,7 +8,7 @@ from job_helper_agent.config import AgentConfig
 from test_automation_worker import TOKEN, FakeAutomationAPI
 
 
-def test_lifespan_compiles_three_graphs_scans_and_exposes_live_heartbeat(
+def test_lifespan_compiles_all_graphs_scans_and_exposes_live_heartbeat(
     tmp_path, monkeypatch
 ):
     peer = FakeAutomationAPI(execution=False)
@@ -39,7 +39,12 @@ def test_lifespan_compiles_three_graphs_scans_and_exposes_live_heartbeat(
         body = response.json()
         assert body["checks"]["automationGraph"] == "compiled"
         assert body["checks"]["automationWorker"] == "running"
-        assert body["automation"]["graphs"] == ["APPLICATION", "CAREER_REVIEW", "REPLY"]
+        assert body["automation"]["graphs"] == [
+            "APPLICATION",
+            "CAREER_REVIEW",
+            "FOLLOW_UP",
+            "REPLY",
+        ]
         assert body["automation"]["lastHeartbeatAt"] > 0
         assert body["automation"]["lastSuccessfulClaimAt"] > 0
         assert body["automation"]["lastCompletedAt"] > 0

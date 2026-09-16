@@ -193,6 +193,25 @@ class Storage:
             bundle["rounds"], _ = await current_rounds(self.db, uid, raw, c)
             if not resume:
                 bundle["missingMaterials"].append("RESUME")
+        elif payload.kind == "FOLLOW_UP":
+            from .conversation_history import freeze_recent
+
+            bundle["sessionAuthorityEpoch"] = await self.db.control(
+                uid, session_authority_key(payload.input.jobKey), 0, c
+            )
+            bundle.update(
+                await freeze_recent(
+                    self.db,
+                    c,
+                    uid,
+                    platform_account=payload.platformAccount,
+                    conversation_key=payload.conversationKey,
+                    boss_id=payload.bossId,
+                    encrypt_job_id=payload.encryptJobId,
+                )
+            )
+            if not resume:
+                bundle["missingMaterials"].append("RESUME")
         elif self.settings.career_enabled:
             from ..career.strategies import Strategies
 
@@ -326,13 +345,13 @@ class Storage:
                 controls[key] = await self.db.control(uid, key, 0, c)
             return controls[key]
 
-        if job["kind"] not in {"REPLY", "APPLICATION"}:
+        if job["kind"] not in {"REPLY", "FOLLOW_UP", "APPLICATION"}:
             return None
         if loads(job["context_json"], {}).get("scopeHash") != scope:
             return "AUTHORIZATION_CHANGED"
         if await control("stop:*"):
             return "AUTOMATION_PAUSED"
-        if job["kind"] == "REPLY":
+        if job["kind"] in {"REPLY", "FOLLOW_UP"}:
             raw = loads(job["input_json"], {}).get("input", {})
             key = raw.get("jobKey")
             if not key:
@@ -395,7 +414,11 @@ class Storage:
         )
 
     async def acknowledged_reconciliation(self, c, uid, job):
-        if job["status"] != "EXECUTION_READY" or job["kind"] not in {"REPLY", "APPLICATION"}:
+        if job["status"] != "EXECUTION_READY" or job["kind"] not in {
+            "REPLY",
+            "FOLLOW_UP",
+            "APPLICATION",
+        }:
             return False
         actions = await self.action_rows(uid, job["id"], c)
         return (

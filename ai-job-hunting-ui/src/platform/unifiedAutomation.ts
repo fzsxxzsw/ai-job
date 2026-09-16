@@ -11,7 +11,7 @@ export type AutomationAction = {
     lastErrorCode: string | null; leaseToken?: string; leaseUntil?: number; authorizationRevision?: number
 }
 export type AutomationJob = {
-    jobId: string; kind: 'REPLY' | 'APPLICATION' | 'CAREER_REVIEW'; status: string; phase: string; revision: number
+    jobId: string; kind: 'REPLY' | 'APPLICATION' | 'FOLLOW_UP' | 'CAREER_REVIEW'; status: string; phase: string; revision: number
     inputHash: string; createdAt: number; updatedAt: number; lastErrorCode: string | null; decision: AutomationDecision | null
     actions: AutomationAction[]; phaseHistory: {phase: string; at?: number}[]
     reviewedAt?: number | null; display?: {jobTitle: string; companyName: string; recruiterName: string}
@@ -27,10 +27,11 @@ export type AutomationStatus = {
 }
 export type FilterInput = {prompt: string; jobBaseInfo: string; jobExtInfo: string; resumeMatchEnabled: boolean; minMatchScore: number; titleRuleStatus?: string; titleMatchedKeywords: string[]; configuredSalaryRange?: string; offeredSalaryRange?: string}
 export type AutomationSubmission = {
-    requestId: string; kind: 'REPLY' | 'APPLICATION'; platformAccount: string; conversationKey: string | null; encryptJobId: string; bossId: string | null
+    requestId: string; kind: 'REPLY' | 'APPLICATION' | 'FOLLOW_UP'; platformAccount: string; conversationKey: string | null; encryptJobId: string; bossId: string | null
     input: {inboundMessageId: string; inboundSentAt: number | null; question: string; jobKey: string; jobInfo: Record<string, unknown>; platformResumeId: string | null
         exchangeRequest: null | {kind: 'ACCEPT_PHONE' | 'ACCEPT_WECHAT' | 'ACCEPT_RESUME'; requestMessageId: string}}
         | {cycleKey: string; filterInput: FilterInput; localAssessment: {passed: boolean; reason: string}; greeting: {enabled: boolean; text: string}; preparedResumeVersionId: string | null; strategyPlanId: string | null}
+        | {applicationId: string; anchorOutboundMessageId: string; anchorOutboundAt: number; evidenceTrack: 'EXACT_READ_NO_REPLY' | 'ACKNOWLEDGED_WAITING'; jobKey: string; jobInfo: Record<string, unknown>}
 }
 export type ActionReceipt = {status: 'ACKNOWLEDGED' | 'FAILED' | 'UNKNOWN'; serverMid: string | null; platformCode: number | null; occurredAt: number; errorCode: string | null; executionPhase?: 'BEFORE_PLATFORM_CALL' | 'PLATFORM_RESULT'}
 export type AutomationSnapshot = {status: AutomationStatus | null; jobs: AutomationJob[]; error: string; held: number; updatedAt: number}
