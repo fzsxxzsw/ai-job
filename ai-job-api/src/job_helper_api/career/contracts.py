@@ -2,7 +2,7 @@ from typing import Annotated, Any, Literal
 
 from pydantic import ConfigDict, Field, model_validator
 
-from ..automation.contracts import Digest, Id, RequestId
+from ..automation.contracts import Digest, Id, RequestId, Subject
 from ..contracts import Input
 from ..database import dumps
 
@@ -63,6 +63,21 @@ class EventInput(RequestId):
     evidence: Evidence
     confirmation: Literal["USER_CONFIRMED", "INFERRED"]
     supersedesEventId: Id | None = None
+
+
+class FollowUpBindingRefresh(Input):
+    oldConversationKey: Subject
+    newConversationKey: Subject
+    bossId: Subject
+    encryptJobId: Subject
+    anchorOutboundMessageId: Subject
+    anchorOutboundAt: int = Field(gt=0)
+
+    @model_validator(mode="after")
+    def changed(self):
+        if self.oldConversationKey == self.newConversationKey:
+            raise ValueError("Conversation binding must change")
+        return self
 
 
 class ReviewInput(RequestId):

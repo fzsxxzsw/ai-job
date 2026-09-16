@@ -1,6 +1,7 @@
 from sqlalchemy import func, select
 
 from ..application_validity import validity_columns
+from ..automation.conversation_history import conversation_id
 from ..automation.storage import digest, identifier
 from ..database import dumps, loads, now_ms
 from ..errors import ApiError
@@ -457,6 +458,99 @@ class Applications(Versions):
         ):
             return "FOLLOW_UP_CONVERSATION_CHANGED"
         return None
+
+    async def refresh_follow_up_binding(self, uid, ident, payload):
+        """Rotate only a proven stale BOSS conversation binding for one safe follow-up."""
+        terminal_statuses = {
+            "WITHDRAWN",
+            "EXPLICIT_REJECTED",
+            "INTERVIEW_SCHEDULED",
+            "OFFER_RECEIVED",
+        }
+        terminal_events = {
+            "REJECTED",
+            "INTERVIEW_INVITED",
+            "INTERVIEW_COMPLETED",
+            "OFFER_RECEIVED",
+            "WITHDRAWN",
+        }
+        async with self.transaction(uid) as c:
+            app = await self.row(self.applications, uid, ident, c)
+            if (
+                app["application_validity"] != "VALID"
+                or app["application_status"] in terminal_statuses
+                or app["encrypt_job_id"] != payload.encryptJobId
+                or app["boss_id"] != payload.bossId
+                or app["conversation_key"]
+                not in {payload.oldConversationKey, payload.newConversationKey}
+            ):
+                raise ApiError("FOLLOW_UP_BINDING_CHANGED", 409)
+            events = effective_events(
+                [
+                    event
+                    for event in await self.timeline(uid, ident, c)
+                    if event["confirmation"] != "INFERRED"
+                ]
+            )
+            if any(event["event_type"] in terminal_events for event in events):
+                raise ApiError("FOLLOW_UP_APPLICATION_TERMINAL", 409)
+            messages = self.db.table("conversation_message")
+            latest = await self.db.one(
+                select(messages)
+                .where(messages.c.user_id == uid, messages.c.application_id == ident)
+                .order_by(messages.c.order_at.desc(), messages.c.id.desc())
+                .limit(1),
+                c,
+            )
+            if (
+                not latest
+                or latest["message_id"] != payload.anchorOutboundMessageId
+                or latest["order_at"] != payload.anchorOutboundAt
+                or latest["role"] != "USER"
+                or latest["delivery_state"] != "ACKNOWLEDGED"
+            ):
+                raise ApiError("FOLLOW_UP_CONVERSATION_CHANGED", 409)
+            if app["conversation_key"] == payload.newConversationKey:
+                return {
+                    "applicationId": ident,
+                    "conversationKey": payload.newConversationKey,
+                    "updated": False,
+                }
+            new_conversation_id = conversation_id(
+                app["platform_account"],
+                payload.newConversationKey,
+                payload.bossId,
+                payload.encryptJobId,
+            )
+            conflict = await self.db.one(
+                select(messages.c.id).where(
+                    messages.c.user_id == uid,
+                    messages.c.conversation_id == new_conversation_id,
+                ).limit(1),
+                c,
+            )
+            if conflict:
+                raise ApiError("FOLLOW_UP_BINDING_CONFLICT", 409)
+            timestamp = now_ms()
+            await c.execute(
+                messages.update()
+                .where(messages.c.user_id == uid, messages.c.application_id == ident)
+                .values(
+                    conversation_id=new_conversation_id,
+                    conversation_key=payload.newConversationKey,
+                    updated_at=timestamp,
+                )
+            )
+            await c.execute(
+                self.applications.update()
+                .where(self.applications.c.user_id == uid, self.applications.c.id == ident)
+                .values(conversation_key=payload.newConversationKey, updated_at=timestamp)
+            )
+            return {
+                "applicationId": ident,
+                "conversationKey": payload.newConversationKey,
+                "updated": True,
+            }
 
     async def insert_application(
         self,

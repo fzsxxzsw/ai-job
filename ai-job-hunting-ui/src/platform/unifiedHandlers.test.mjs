@@ -12,7 +12,8 @@ const mocks = {
         export const captureAutomationScope=()=>fixture.scope;
         export const observeUnifiedContacts=(...args)=>fixture.naturalContacts.push(args);
         export const saveAutomationSnapshot=async value=>fixture.snapshots.push(value);
-        export const browserAutomationReady=(ctx,a)=>fixture.allowed&&ctx.policy===fixture.policy&&(!['SEND_RESUME','ACCEPT_PHONE','ACCEPT_WECHAT','ACCEPT_RESUME'].includes(a.kind)||a.approvalStatus==='APPROVED');
+        export const browserAutomationReady=(ctx,a)=>{const autoResume=ctx.kind==='REPLY'&&a.approvalStatus==='NOT_REQUIRED'&&['SEND_RESUME','ACCEPT_RESUME'].includes(a.kind);
+            return fixture.allowed&&ctx.policy===fixture.policy&&(!['SEND_RESUME','ACCEPT_PHONE','ACCEPT_WECHAT','ACCEPT_RESUME'].includes(a.kind)||a.approvalStatus==='APPROVED'||autoResume)};
         export const submitAutomation=async(body,context)=>{fixture.submissions.push({body,context});if(fixture.submitFailure){fixture.submitFailure=false;throw Error('response lost')}
             if(fixture.submitGate)await fixture.submitGate;
             const job=fixture.makeAutomationJob(body);fixture.automationJobs.set(job.jobId,job);fixture.publishAutomation(job);
@@ -171,6 +172,16 @@ test('actual registered sensitive executor holds unapproved actions and sends on
     assert.equal(receipt.status,'ACKNOWLEDGED')
     const request=env.requests.find(r=>r.url.endsWith('/exchange/accept'))
     assert.equal(request.data.type,2);assert.equal(request.data.mid,'90071992547409941');assert.equal(request.data.securityId,'SecA')
+})
+test('exact resume invitation is automatically accepted while phone and WeChat still require approval', async () => {
+    const env=environment();await env.option.handlerBossMessage(raw('我想要一份您的附件简历，您是否同意',undefined,7),81,'我想要一份您的附件简历，您是否同意')
+    const ctx=env.submissions[0].context
+    const action={actionId:'resume-action',kind:'ACCEPT_RESUME',approvalStatus:'NOT_REQUIRED',payload:{encryptJobId:'JobA',bossId:'81',
+        conversationKey:'BossA:SecA',requestMessageId:ctx.inboundMessageMid,platformResumeId:'resume-A',resumeVersionId:null}}
+    const executor=env.executors.get('REPLY');assert.equal(executor.ready(ctx,action),true)
+    const receipt=await executor.perform(ctx,action,null);assert.equal(receipt.status,'ACKNOWLEDGED')
+    const request=env.requests.find(r=>r.url.endsWith('/exchange/accept'))
+    assert.equal(request.data.type,4);assert.equal(request.data.mid,'90071992547409941');assert.equal(request.data.encryptResumeId,'resume-A')
 })
 test('actual legacy reply and exchange exits remain held in enabled mode', async () => {
     const env=environment()
@@ -371,6 +382,27 @@ test('automatic follow-up scanner resolves an eligible durable candidate missing
     assert.equal(env.submissions[0].body.kind,'FOLLOW_UP')
     assert.equal(env.submissions[0].body.input.applicationId,'application-A')
     assert.equal(env.submissions[0].context.conversationKey,'BossA:SecA')
+})
+test('automatic follow-up scanner refreshes a stale BOSS securityId and safely rebinds the durable candidate', async () => {
+    const env=environment()
+    env.Option.bossUserInfoMap.set(81,{...peer,securityId:'OldSec'})
+    env.fixture.Tools.window.location.pathname='/web/geek/chat'
+    env.fixture.Tools.window.AIJobHelperChatBridge.isReady=()=>true
+    const candidate={applicationId:'application-A',platformAccount:'40',encryptJobId:'JobA',conversationKey:'BossA:OldSec',bossId:'81',
+        jobTitle:'Python后端开发',companyName:'合成公司',recruiterName:'合成HR',salaryText:'10-15K',jdText:'Python、FastAPI 和 MySQL',
+        applicationValidity:'VALID',applicationStatus:'APPLIED',readState:'UNREAD',evidenceTrack:'EXACT_UNREAD_NO_REPLY',requiredAgeHours:48,
+        anchorOutboundMessageId:'90071992547409980',anchorOutboundAt:1788757200000,eligible:true,blocker:null}
+    env.fixture.http=async config=>{
+        env.requests.push(config)
+        if(config.url==='/api/job/career/follow-ups/candidates')return {data:{data:{items:[candidate]}}}
+        if(config.url.includes('getGeekFriendList'))return {data:{code:0,zpData:{result:[peer]}}}
+        if(config.url.endsWith('/follow-up-binding'))return {data:{data:{applicationId:'application-A',conversationKey:'BossA:SecA',updated:true}}}
+        throw Error(`unexpected request: ${config.url}`)
+    }
+    await env.option.scanAutomaticFollowUps()
+    const rebound=env.requests.find(request=>request.url.endsWith('/follow-up-binding'))
+    assert.equal(rebound.data.oldConversationKey,'BossA:OldSec');assert.equal(rebound.data.newConversationKey,'BossA:SecA')
+    assert.equal(env.submissions.length,1);assert.equal(env.submissions[0].body.conversationKey,'BossA:SecA')
 })
 test('manual takeover waits for activation, blocks M1 and clears only after accepted newer M2', async () => {
     const env=environment()

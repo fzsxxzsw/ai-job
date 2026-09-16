@@ -246,6 +246,82 @@ def test_follow_up_dispatch_rechecks_terminal_application_in_same_transaction(au
         )
 
 
+def test_follow_up_binding_rotates_only_with_the_exact_unchanged_outbound_anchor(auto, world):
+    seed_follow_up_application(world)
+    payload = {
+        "oldConversationKey": "peer:security",
+        "newConversationKey": "peer:fresh-security",
+        "bossId": "peer",
+        "encryptJobId": "JobCase",
+        "anchorOutboundMessageId": "90001",
+        "anchorOutboundAt": follow_up_input()["input"]["anchorOutboundAt"],
+    }
+    with sqlite3.connect(world["path"]) as db:
+        payload["anchorOutboundAt"] = db.execute(
+            "SELECT order_at FROM conversation_message WHERE id='message-case'"
+        ).fetchone()[0]
+    rebound = response(
+        auto.post(
+            "/api/job/career/applications/application-case/follow-up-binding",
+            json=payload,
+        )
+    )
+    assert rebound == {
+        "applicationId": "application-case",
+        "conversationKey": "peer:fresh-security",
+        "updated": True,
+    }
+    with sqlite3.connect(world["path"]) as db:
+        assert db.execute(
+            "SELECT conversation_key FROM career_application WHERE id='application-case'"
+        ).fetchone()[0] == "peer:fresh-security"
+        message = db.execute(
+            "SELECT conversation_key,conversation_id FROM conversation_message WHERE id='message-case'"
+        ).fetchone()
+        assert message[0] == "peer:fresh-security"
+        assert message[1] != "conversation-case"
+    assert response(
+        auto.post(
+            "/api/job/career/applications/application-case/follow-up-binding",
+            json=payload,
+        )
+    )["updated"] is False
+    wrong = {**payload, "anchorOutboundMessageId": "different-message"}
+    assert auto.post(
+        "/api/job/career/applications/application-case/follow-up-binding", json=wrong
+    ).status_code == 409
+
+
+def test_explicit_resume_requests_execute_without_manual_approval(auto, world):
+    card = reply_input()
+    card["input"].update(
+        question="我想要一份您的附件简历，您是否同意",
+        exchangeRequest={"kind": "ACCEPT_RESUME", "requestMessageId": "100"},
+        platformResumeId="resume-old",
+    )
+    card_job = response(auto.post(BASE + "/jobs", json=card))
+    worker(auto, card_job)
+    card_action = next(
+        action
+        for action in response(auto.get(BASE + "/jobs/" + card_job["jobId"]))["actions"]
+        if action["kind"] == "ACCEPT_RESUME"
+    )
+    assert card_action["approvalStatus"] == "NOT_REQUIRED"
+
+    world["fake"].output = "COMMAND_SEND_RESUME"
+    request = reply_input("101")
+    request["input"].update(
+        question="方便发一份附件简历吗？",
+        platformResumeId="resume-old",
+        inboundSentAt=card["input"]["inboundSentAt"] + 1_000,
+    )
+    request_job = response(auto.post(BASE + "/jobs", json=request))
+    worker(auto, request_job)
+    request_action = response(auto.get(BASE + "/jobs/" + request_job["jobId"]))["actions"][0]
+    assert request_action["kind"] == "SEND_RESUME"
+    assert request_action["approvalStatus"] == "NOT_REQUIRED"
+
+
 def test_only_one_live_browser_executor_can_claim_actions(auto, world):
     job = response(auto.post(BASE + "/jobs", json=reply_input()))
     worker(auto, job)

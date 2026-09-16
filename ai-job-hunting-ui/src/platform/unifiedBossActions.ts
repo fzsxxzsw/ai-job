@@ -36,7 +36,11 @@ export async function performUnifiedText(contact: BossUserInfo, action: Automati
     return receipt
 }
 export async function performUnifiedExchange(contact: BossUserInfo, action: AutomationAction): Promise<ActionReceipt> {
-    if (action.approvalStatus !== 'APPROVED' || String(contact.bossId) !== action.payload.bossId
+    const automaticResume = action.approvalStatus === 'NOT_REQUIRED'
+        && ['SEND_RESUME', 'ACCEPT_RESUME'].includes(action.kind)
+        && !!action.payload.platformResumeId
+        && (action.kind === 'SEND_RESUME' || !!action.payload.requestMessageId)
+    if ((action.approvalStatus !== 'APPROVED' && !automaticResume) || String(contact.bossId) !== action.payload.bossId
         || makeConversationKey(contact.encryptBossId, contact.securityId) !== action.payload.conversationKey || getBossRiskStop()) {
         return {status: 'FAILED', serverMid: null, platformCode: null, occurredAt: Date.now(), errorCode: 'AUTHORIZATION_CHANGED', executionPhase: 'BEFORE_PLATFORM_CALL'}
     }

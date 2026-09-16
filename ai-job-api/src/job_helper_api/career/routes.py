@@ -86,6 +86,12 @@ def register_career_routes(app, require_user, writable, internal):
             )
         )
 
+    @app.post("/api/job/career/applications/{ident}/follow-up-binding")
+    async def refresh_follow_up_binding(
+        ident: str, payload: dto.FollowUpBindingRefresh, uid=Depends(writable)
+    ):
+        return envelope(await service().refresh_follow_up_binding(uid, ident, payload))
+
     @app.post("/api/job/career/applications/{ident}/events")
     async def event(ident: str, payload: dto.EventInput, uid=Depends(enabled)):
         return envelope(await service().add_event(uid, ident, payload))

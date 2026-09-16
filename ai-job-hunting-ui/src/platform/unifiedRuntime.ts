@@ -80,7 +80,9 @@ export function browserAutomationReady(context: BrowserAutomationContext, action
     if (action.payload.bossId && context.bossId && action.payload.bossId !== context.bossId) return false
     if (action.payload.conversationKey && context.conversationKey && action.payload.conversationKey !== context.conversationKey) return false
     if (['SEND_RESUME', 'ACCEPT_RESUME', 'ACCEPT_PHONE', 'ACCEPT_WECHAT'].includes(action.kind)) {
-        if (action.approvalStatus !== 'APPROVED') return false
+        const automaticResume = context.kind === 'REPLY' && action.approvalStatus === 'NOT_REQUIRED'
+            && ['SEND_RESUME', 'ACCEPT_RESUME'].includes(action.kind)
+        if (action.approvalStatus !== 'APPROVED' && !automaticResume) return false
         if (action.kind.includes('RESUME') && (!action.payload.platformResumeId || action.payload.platformResumeId !== String(UserStore().user.resumeId || ''))) return false
         if (action.kind.startsWith('ACCEPT_') && action.payload.requestMessageId !== context.inboundMessageMid) return false
     }

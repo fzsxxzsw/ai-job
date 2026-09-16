@@ -325,22 +325,38 @@ export class BossOption {
                 for (const item of preview.items) {
                     if (!item.eligible || item.platformAccount !== account || !item.bossId || !item.conversationKey
                         || !item.anchorOutboundMessageId || !item.anchorOutboundAt) continue
-                    let exactContact = this.followUpContact(item)
+                    let resolvedCandidate = item
+                    let exactContact = this.followUpContact(resolvedCandidate)
                     if (!exactContact) {
                         const numericBossId = Number(item.bossId)
                         if (Number.isSafeInteger(numericBossId) && numericBossId > 0) {
                             try {
-                                // The durable ledger can outlive the in-memory 30-day contact cache. Resolve only
-                                // this already-eligible peer, then re-run the full job/peer/conversation check.
-                                await this.getBossUserInfoByBossId(numericBossId)
+                                // BOSS securityId is request-scoped. Refresh this one already-eligible peer instead
+                                // of returning the same stale cache entry, then rotate the durable binding only when
+                                // the server can re-prove the unchanged acknowledged outbound anchor.
+                                const refreshed = await this.refreshBossUserInfoByBossId(numericBossId)
+                                if (refreshed && String(refreshed.encryptJobId) === item.encryptJobId) {
+                                    const refreshedKey = makeConversationKey(refreshed.encryptBossId, refreshed.securityId)
+                                    if (refreshedKey !== item.conversationKey) {
+                                        const rebound = await axios.post(
+                                            `/api/job/career/applications/${encodeURIComponent(item.applicationId)}/follow-up-binding`,
+                                            {oldConversationKey: item.conversationKey, newConversationKey: refreshedKey,
+                                                bossId: item.bossId, encryptJobId: item.encryptJobId,
+                                                anchorOutboundMessageId: item.anchorOutboundMessageId,
+                                                anchorOutboundAt: item.anchorOutboundAt},
+                                            {timeout: 10_000, suppressGlobalErrorToast: true} as any,
+                                        )
+                                        resolvedCandidate = {...item, conversationKey: rebound.data.data.conversationKey}
+                                    }
+                                }
                             } catch (error) {
                                 BossOption.logRecorder.warn('自动跟进联系人解析失败，已跳过本轮候选', error)
                             }
-                            exactContact = this.followUpContact(item)
+                            exactContact = this.followUpContact(resolvedCandidate)
                         }
                     }
                     if (!exactContact) continue
-                    candidate = item
+                    candidate = resolvedCandidate
                     contact = exactContact
                     break
                 }
@@ -399,7 +415,8 @@ export class BossOption {
             || String(contact.encryptJobId) !== action.payload.encryptJobId || String(contact.bossId) !== action.payload.bossId
             || makeConversationKey(contact.encryptBossId, contact.securityId) !== action.payload.conversationKey
             || checkConversationExclusion(localStorage, String(contact.bossId), userStore.user.preference, contact, context.question || '')) return false
-        if (action.kind === 'SEND_RESUME' && !this.hasSameConversationTwoWayReply(contact)) return false
+        if (action.kind === 'SEND_RESUME' && (!this.hasSameConversationTwoWayReply(contact)
+            || !this.shouldSendResumeForMessage(context.question || ''))) return false
         return ['SEND_TEXT', 'SEND_RESUME', 'ACCEPT_PHONE', 'ACCEPT_WECHAT', 'ACCEPT_RESUME'].includes(action.kind)
     }
 
@@ -1252,7 +1269,7 @@ export class BossOption {
             const lookupMid = exactPlatformId(msgObj.messages[0]?.mid)
             const stillCurrent = () => !recovered && !!lookupMid && lookupScope === captureOutcomeContext()
                 && BossOption.latestLiveInbound.get(`${lookupAccount}:${bossId}`)?.mid === lookupMid
-            const bossUserInfo = await this.getBossUserInfoByBossId(bossId, contact => {
+            const bossUserInfo = await this.refreshBossUserInfoByBossId(bossId, contact => {
                 observeOutcomePeerAssociation(contact, msgObj.messages[0], lookupAccount, lookupScope, stillCurrent)
             });
             if (!bossUserInfo) {
@@ -1680,6 +1697,19 @@ export class BossOption {
         BossOption.bossUserInfoMap.set(bossId, matches[0]);
         onFreshAssociation?.(matches[0])
         return matches[0];
+    }
+
+    public async refreshBossUserInfoByBossId(bossId: number, onFreshAssociation?: (contact: BossUserInfo) => void): Promise<BossUserInfo | undefined> {
+        const scope = captureOutcomeContext()
+        if (BossOption.bossUserInfoScope !== scope) { BossOption.bossUserInfoMap.clear(); BossOption.bossUserInfoScope = scope }
+        const bossUserInfoList = await BossOption.obtainBossUserInfo([bossId])
+        if (scope !== captureOutcomeContext()) return undefined
+        const matches = bossUserInfoList.filter(contact => String(contact.bossId) === String(bossId)
+            && contact.encryptJobId && contact.encryptBossId && contact.securityId)
+        if (matches.length !== 1) return undefined
+        BossOption.bossUserInfoMap.set(bossId, matches[0])
+        onFreshAssociation?.(matches[0])
+        return matches[0]
     }
 
     public static async obtainRecentContactBossId(): Promise<number[]> {

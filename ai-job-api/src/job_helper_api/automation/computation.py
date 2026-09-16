@@ -1,3 +1,5 @@
+import re
+
 from ..contracts import FilterInput
 from ..conversation import generate_draft, is_stopped, system_prompt
 from ..database import dumps, loads
@@ -31,6 +33,30 @@ class FrozenInputs:
 
 def decision(code, reason):
     return {"code": code, "reason": reason}
+
+
+def explicit_resume_request(question):
+    question = str(question or "")
+    requested = re.search(
+        r"(?:发|给|传|提供|看看|看下|看一下).{0,8}简历|简历.{0,8}(?:发|给|传|提供)",
+        question,
+    )
+    refused = re.search(
+        r"不.{0,3}(?:发|传|需要|用)|已.{0,3}(?:发送|收到)|不太合适|不合适|不匹配|拒绝|招满",
+        question,
+    )
+    return bool(requested and not refused)
+
+
+def automatic_resume_authorized(job, input_, kind, payload):
+    if job["kind"] != "REPLY" or kind not in {"SEND_RESUME", "ACCEPT_RESUME"}:
+        return False
+    if kind == "SEND_RESUME":
+        return explicit_resume_request(input_.get("question"))
+    return input_.get("exchangeRequest") == {
+        "kind": "ACCEPT_RESUME",
+        "requestMessageId": payload.get("requestMessageId"),
+    }
 
 
 async def compute(service, job):
@@ -68,13 +94,14 @@ async def compute(service, job):
     def action(kind, extra=None):
         payload = {**binding, **(extra or {})}
         automatic_follow_up = job["kind"] == "FOLLOW_UP" and kind == "SEND_TEXT"
+        automatic_resume = automatic_resume_authorized(job, input_, kind, payload)
         artifact["actions"].append(
             {
                 "kind": kind,
                 "payload": payload,
                 "payloadHash": digest(payload),
                 "approvalStatus": "NOT_REQUIRED"
-                if automatic_follow_up
+                if automatic_follow_up or automatic_resume
                 else "PENDING"
                 if kind in SENSITIVE
                 else "NOT_REQUIRED",
@@ -282,6 +309,7 @@ def validate_artifact(job, artifact):
         expected_approval = (
             "NOT_REQUIRED"
             if job["kind"] == "FOLLOW_UP" and kind == "SEND_TEXT"
+            or automatic_resume_authorized(job, input_, kind, payload)
             else "PENDING"
             if kind in SENSITIVE
             else "NOT_REQUIRED"

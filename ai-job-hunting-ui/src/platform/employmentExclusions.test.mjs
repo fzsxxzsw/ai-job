@@ -67,6 +67,7 @@ function handlers() {
     const instance = new Type()
     instance.preHandlerMsgByMsgType = () => true
     instance.getBossUserInfoByBossId = async () => ({jobTitle: '研发岗位'})
+    instance.refreshBossUserInfoByBossId = instance.getBossUserInfoByBossId
     instance.preHandlerMsgByBodyType = () => {calls.exchange++; return false}
     instance.removeAiReplyFromQueue = key => calls.removed.push(key)
     instance.sendMsg = () => {calls.send++; throw Error('Must not send')}
