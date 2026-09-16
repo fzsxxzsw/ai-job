@@ -294,8 +294,10 @@
 
 <script setup lang="ts">
 import AutomationTasks from './AutomationTasks.vue'
-import {automationRunSummary, stopGreetingContinuation, unifiedAutomationEnabled} from '../../platform/unifiedRuntime'
+import {automationRunSummary, currentAutomationPolicy, stopGreetingContinuation, unifiedAutomationEnabled} from '../../platform/unifiedRuntime'
+import {automationRequestId} from '../../platform/unifiedAutomation'
 import {COMPLETED_DELIVERY_GRACE_MS} from '../../platform/automationReadiness'
+import {clearPushRunLease, PUSH_RUN_LEASE_KEY, readPushRunLease, writePushRunLease} from '../../platform/pushRunLease'
 import {announcePushRunCompletion} from '../../platform/completionSummary'
 import axiosOriginal, {AxiosInstance} from "axios";
 import {IS_PERSONAL_MODE} from "../../deploymentMode";
@@ -651,14 +653,17 @@ const handlerFixedStopPush = () => {
     scrollToTop();
 }
 
-const AUTO_START_PUSH_KEY = 'ai-job-hunting-auto-start-push'
-// 安全迁移：旧版本可能把自动真投保存在 localStorage。新版本永久清除该状态，
-// 进入职位页只能由用户手动点击开始，刷新页面也不会自动恢复投递。
-localStorage.setItem(AUTO_START_PUSH_KEY, 'false')
-
 // 非生产环境支持mock投递
 const mockPush = ref<boolean>(false)
 let preflightAbortController: AbortController | null = null
+let pushStartMode: 'manual' | 'resume' = 'manual'
+let preservePushLeaseForReload = false
+
+const pushLeaseIdentity = async () => ({
+    bossAccountUid: String(Tools.window?._PAGE?.uid || ''),
+    serverBaseUrl: serverStore.baseUrl,
+    automationPolicyFingerprint: await automationRequestId(['push-run-policy', currentAutomationPolicy()]),
+})
 
 const executePushRun = async () => {
     const runId = pushRunStore.runId
@@ -767,7 +772,19 @@ const executePushRun = async () => {
     if (pushRunStore.stopRequested) {
         return {status: 'stopped', reason: '用户在启动预检阶段停止'} as const
     }
+    const leaseIdentity = await pushLeaseIdentity()
+    if (!leaseIdentity.bossAccountUid) {
+        return {status: 'blocked', reason: '未识别到当前 BOSS 账号，未创建自动续跑授权'} as const
+    }
+    const leaseAuthorized = pushStartMode === 'resume'
+        ? !!readPushRunLease(localStorage, leaseIdentity)
+        : !!writePushRunLease(localStorage, leaseIdentity)
+    if (!leaseAuthorized) {
+        return {status: 'blocked', reason: '自动续跑授权已过期，或账号、服务器、投递设置已变化'} as const
+    }
+    preservePushLeaseForReload = false
     if (!pushRunStore.markRunning()) {
+        clearPushRunLease(localStorage)
         return {status: 'stopped', reason: '投递启动已取消'} as const
     }
 
@@ -779,12 +796,14 @@ const executePushRun = async () => {
     try {
         const outcome = await platform.startPush()
         if (outcome.status === 'completed') {
+            clearPushRunLease(localStorage)
             // The run must become completed as soon as scanning ends. A slow
             // summary request must not extend browser authorization for sends.
             announcePushRunCompletion(pushRunStore.runId, {enabled: unifiedAutomationEnabled,
                 summary: automationRunSummary,
                 notify: (message, type, duration) => { ElMessage({message, type, duration}) }})
         } else if (outcome.status === 'blocked') {
+            clearPushRunLease(localStorage)
             ElMessage({
                 message: `平台已阻拦，投递已停止：${outcome.reason || '未知原因'}`,
                 type: 'warning',
@@ -793,6 +812,7 @@ const executePushRun = async () => {
         }
         return outcome
     } catch (error: any) {
+        if (!preservePushLeaseForReload) clearPushRunLease(localStorage)
         logRecorder.error('投递流程异常结束', error?.message || error)
         ElMessage({
             message: `投递流程异常结束：${error?.message || '未知错误'}`,
@@ -805,8 +825,9 @@ const executePushRun = async () => {
     }
 }
 
-const startPush = async () => {
+const startPush = async (mode: 'manual' | 'resume' = 'manual') => {
     if (pushRunStore.isActive || !loginInterceptor()) return
+    pushStartMode = mode
     preflightAbortController = new AbortController()
     try {
         const execution = await pushRunStore.run(executePushRun, () => {
@@ -823,11 +844,14 @@ const startPush = async () => {
     } catch (_) {
         // executePushRun 已记录并展示具体异常；这里避免点击事件产生未处理 Promise。
     } finally {
+        pushStartMode = 'manual'
         preflightAbortController = null
     }
 }
 
 const pausePush = () => {
+    preservePushLeaseForReload = false
+    clearPushRunLease(localStorage)
     pushRunStore.stop()
     platform.pausePush()
     // 停止更新投递记录
@@ -836,7 +860,10 @@ const pausePush = () => {
 
 const stopRunOnPageLeave = () => {
     if (pushRunStore.isActive) {
-        pausePush()
+        preservePushLeaseForReload = !!localStorage.getItem(PUSH_RUN_LEASE_KEY)
+        pushRunStore.stop()
+        platform.pausePush()
+        stopRecordsUpdate()
     } else if (pushRunStore.status === 'completed' && pushRunStore.completedAt
         && Date.now() <= pushRunStore.completedAt + COMPLETED_DELIVERY_GRACE_MS) {
         try { stopGreetingContinuation() }
@@ -1070,7 +1097,9 @@ if (!loginStore.login && !loginStore.loginFailStatus) {
 }
 
 let aiSeatHealthTimer: number | null = null
+let resumeLeaseCancelled = false
 onMounted(() => {
+    resumeLeaseCancelled = false
     window.addEventListener('pagehide', stopRunOnPageLeave)
     // Reconnect only a currently mounted run's transient log view.
     if (pushRunStore.isActive) startRecordsUpdate()
@@ -1123,10 +1152,22 @@ onMounted(() => {
     }
     refreshAiSeatHealth()
     aiSeatHealthTimer = window.setInterval(refreshAiSeatHealth, 1000)
+    if (localStorage.getItem(PUSH_RUN_LEASE_KEY)) {
+        void (async () => {
+            for (let attempt = 0; attempt < 30 && !resumeLeaseCancelled; attempt++) {
+                if (loginStore.login && !pushRunStore.isActive) {
+                    await startPush('resume')
+                    return
+                }
+                await new Promise(resolve => window.setTimeout(resolve, 1000))
+            }
+        })()
+    }
 })
 
 // 组件卸载时清理定时器
 onUnmounted(() => {
+    resumeLeaseCancelled = true
     window.removeEventListener('pagehide', stopRunOnPageLeave)
     stopRunOnPageLeave()
     stopRecordsUpdate();

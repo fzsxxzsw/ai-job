@@ -135,6 +135,9 @@ if ($startScript -match '(?i)\balembic\b') {
 if ($releaseScript -notmatch 'alembic\s+-c\s+/app/alembic\.ini\s+upgrade\s+head') {
     throw "Release must apply the explicit versioned Agent migration."
 }
+if ($releaseScript -notmatch 'docker\s+exec\s+job-helper-backend\s+python\s+-m\s+job_helper_api\.career\.backfill') {
+    throw "A successful release must idempotently reconcile stored career history."
+}
 
 $head = "0123456789abcdef0123456789abcdef01234567"
 $diff = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"

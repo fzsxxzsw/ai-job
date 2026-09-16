@@ -8,6 +8,9 @@ importers:
 
   .:
     dependencies:
+      '@webext-core/messaging':
+        specifier: 4.0.0
+        version: 4.0.0
       axios:
         specifier: ^1.6.8
         version: 1.6.8(debug@4.4.3(supports-color@7.2.0))
@@ -93,6 +96,9 @@ packages:
     peerDependenciesMeta:
       rollup:
         optional: true
+
+  '@aklinker1/zero-serialize-error@1.0.2':
+    resolution: {integrity: sha512-hGVkgFqb8Zs80JJ7MOSCGQXH2SyWfwnJwOl8Qpp1lUdkp5T7GTf8QrAMib42Hnzx6HtnNYdmNaSSg4MQy+MDRQ==}
 
   '@antfu/utils@0.7.7':
     resolution: {integrity: sha512-gFPqTG7otEJ8uP6wrhDv6mqwGWYZKNvAcCq6u9hOj0c+IKCEsY4L1oC9trPq2SaWIzAfHvqfBDxF591JkMf+kg==}
@@ -951,6 +957,14 @@ packages:
 
   '@webext-core/match-patterns@1.1.0':
     resolution: {integrity: sha512-vebVVbcOyva4jyvljIzRJwjFi/OKMLr96LIIxiPeXfA38gE4Z3+H6Y9DwRmn7pWErJGNNHU6XOhOb5ZwicGs7Q==}
+
+  '@webext-core/messaging@4.0.0':
+    resolution: {integrity: sha512-1GWLsiWeIRJ/LpSlI87jU3e4KCDhyTadQEwyhMlLSwXOt5/ui2xkVcE96/clxjxqp/FcUBA00c5iT5I3crjlTQ==}
+    peerDependencies:
+      '@types/chrome': '*'
+    peerDependenciesMeta:
+      '@types/chrome':
+        optional: true
 
   '@wxt-dev/browser@0.1.43':
     resolution: {integrity: sha512-RMB0zgfe7uuiTp18s9taLeKXoOCLBV418797dnEggiMWmM1JDJekiLtlvrNc6QeZg+amDBy2/KKYuQB2kh/K9A==}
@@ -3187,6 +3201,8 @@ snapshots:
     optionalDependencies:
       rollup: 4.63.1
 
+  '@aklinker1/zero-serialize-error@1.0.2': {}
+
   '@antfu/utils@0.7.7': {}
 
   '@babel/code-frame@7.29.7':
@@ -3793,6 +3809,10 @@ snapshots:
       is-potential-custom-element-name: 1.0.1
 
   '@webext-core/match-patterns@1.1.0': {}
+
+  '@webext-core/messaging@4.0.0':
+    dependencies:
+      '@aklinker1/zero-serialize-error': 1.0.2
 
   '@wxt-dev/browser@0.1.43':
     dependencies:

@@ -1,7 +1,7 @@
 {
   "name": "ai-job-hunting",
   "private": true,
-  "version": "0.0.83",
+  "version": "0.0.84",
   "packageManager": "pnpm@9.15.9",
   "type": "module",
   "scripts": {
@@ -24,6 +24,7 @@
     "zip": "pnpm run package:extension"
   },
   "dependencies": {
+    "@webext-core/messaging": "4.0.0",
     "axios": "^1.6.8",
     "element-plus": "^2.6.3",
     "event-source-polyfill": "^1.0.31",

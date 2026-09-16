@@ -2,6 +2,8 @@ import {browser} from 'wxt/browser'
 import {injectScript} from 'wxt/utils/inject-script'
 import {defineContentScript} from 'wxt/utils/define-content-script'
 import {installPageBridge} from '../src/extension/pageBridge'
+import {sendExtensionMessage} from '../src/extension/extensionMessaging'
+import type {BackgroundRequest} from '../src/extension/bridgeProtocol'
 
 // WXT recommends an isolated content script plus an injected unlisted script
 // when page globals and extension APIs are both required:
@@ -14,7 +16,9 @@ export default defineContentScript({
     allFrames: false,
     runAt: 'document_start',
     async main(ctx) {
-        const removeBridge = installPageBridge(window, browser.runtime)
+        const removeBridge = installPageBridge(window, {
+            sendMessage: message => sendExtensionMessage('job-helper.request', message as BackgroundRequest),
+        })
         ctx.onInvalidated(removeBridge)
         const stylesheet = document.createElement('link')
         stylesheet.rel = 'stylesheet'

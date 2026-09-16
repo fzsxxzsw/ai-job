@@ -221,6 +221,15 @@ try {
             }
         }
         & (Join-Path $PSScriptRoot 'start-job-helper.ps1') -ReleaseReceiptPath (Join-Path $pending 'next/receipt.json') -SkipOperationLock
+        # Rebuild canonical career contacts/events after every successful service
+        # activation. The command is idempotent and returns zero counts when the
+        # career feature is disabled, so later restarts never depend on a manual
+        # one-off repair command.
+        $careerReconcileOutput = @(& docker exec job-helper-backend python -m job_helper_api.career.backfill)
+        if ($LASTEXITCODE -ne 0) { throw 'Career history reconciliation failed.' }
+        if ($careerReconcileOutput.Count) {
+            Write-Host "Career history reconciled: $($careerReconcileOutput[-1])"
+        }
         Assert-JobHelperWorkspaceSnapshotEqual -Expected $expectedSnapshot -Actual (Get-JobHelperWorkspaceSnapshot -RepositoryRoot $PSScriptRoot)
 
         # Keep the recovery data untouched until the active pointer is committed.

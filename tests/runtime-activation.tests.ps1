@@ -158,6 +158,12 @@ if ($global:JobHelperCandidateFail) { throw 'Simulated failed health/identity ve
                 }
             }
             if (Test-Path (Join-Path $fixtureRepo '.job-helper-releases/activation.json')) { throw 'Completed activation left an unresolved transaction.' }
+            if (-not $failed) {
+                $reconcileEvents = @($global:JobHelperFakeDocker.events | Where-Object {
+                    $_ -eq 'exec job-helper-backend python -m job_helper_api.career.backfill'
+                })
+                if ($reconcileEvents.Count -lt 1) { throw 'Successful activation did not reconcile stored career history.' }
+            }
             if ($scenario -eq 'second-success') {
                 $audit = Get-Content (Join-Path $fixtureRepo '.job-helper-releases/last-migration.json') -Raw | ConvertFrom-Json
                 if ($audit.status -ne 'applied' -or $audit.ownerReplyPause.userId -ne 3 -or

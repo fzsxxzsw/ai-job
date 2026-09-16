@@ -1,6 +1,7 @@
 import {browser} from 'wxt/browser'
 import {defineBackground} from 'wxt/utils/define-background'
 import {createBackgroundService} from '../src/extension/backgroundService'
+import {onExtensionMessage} from '../src/extension/extensionMessaging'
 import {createOutcomeOutbox} from '../src/extension/outcomeOutbox'
 import {OUTCOME_ALARM} from '../src/extension/outcomesProtocol'
 
@@ -27,7 +28,7 @@ export default defineBackground(() => {
         setTimer: (callback, delay) => setTimeout(callback, delay),
         clearTimer: handle => clearTimeout(handle),
     })
-    browser.runtime.onMessage.addListener((rawMessage, sender) => service.handleMessage(rawMessage, sender))
+    onExtensionMessage('job-helper.request', message => service.handleMessage(message.data, message.sender))
     browser.notifications.onClosed.addListener(notificationId => service.handleNotificationClosed(notificationId))
     browser.notifications.onClicked.addListener(notificationId => service.handleNotificationClicked(notificationId))
     browser.alarms.onAlarm.addListener(alarm => {
