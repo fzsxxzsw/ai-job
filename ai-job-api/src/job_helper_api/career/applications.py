@@ -1,4 +1,4 @@
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from ..application_validity import validity_columns
 from ..automation.storage import digest, identifier
@@ -260,6 +260,76 @@ class Applications(Versions):
             .offset(offset)
         )
         return [await self.application_view(uid, row) for row in rows]
+
+    async def follow_up_candidates(self, uid, limit=50, offset=0, minimum_age_hours=24):
+        """Preview exact read-without-reply applications; never drafts or sends here."""
+        condition = (
+            (self.applications.c.user_id == uid)
+            & (self.applications.c.read_state == "READ")
+            & (self.applications.c.application_status == "SOFT_REJECTED")
+        )
+        total_row = await self.db.one(
+            select(func.count().label("count")).select_from(self.applications).where(condition)
+        )
+        total = total_row["count"] if total_row else 0
+        rows = await self.db.rows(
+            select(self.applications)
+            .where(condition)
+            .order_by(self.applications.c.status_updated_at.desc(), self.applications.c.id)
+            .limit(limit)
+            .offset(offset)
+        )
+        messages = self.db.table("conversation_message")
+        timestamp = now_ms()
+        minimum_age_ms = minimum_age_hours * 60 * 60 * 1000
+        items = []
+        for row in rows:
+            latest = await self.db.one(
+                select(messages)
+                .where(messages.c.user_id == uid, messages.c.application_id == row["id"])
+                .order_by(messages.c.order_at.desc(), messages.c.id.desc())
+                .limit(1)
+            )
+            blocker = None
+            if row["application_validity"] == "INVALID":
+                blocker = "INVALID_APPLICATION"
+            elif not row["platform_account"] or not row["conversation_key"] or not row["boss_id"]:
+                blocker = "MISSING_EXACT_BINDING"
+            elif not latest:
+                blocker = "MISSING_CONVERSATION_HISTORY"
+            elif latest["role"] != "USER":
+                blocker = "LATEST_MESSAGE_IS_NOT_USER"
+            elif latest["delivery_state"] != "ACKNOWLEDGED":
+                blocker = "OUTBOUND_NOT_ACKNOWLEDGED"
+            elif timestamp - latest["order_at"] < minimum_age_ms:
+                blocker = "TOO_RECENT"
+            items.append(
+                {
+                    "applicationId": row["id"],
+                    "platformAccount": row["platform_account"],
+                    "encryptJobId": row["encrypt_job_id"],
+                    "conversationKey": row["conversation_key"],
+                    "bossId": row["boss_id"],
+                    "jobTitle": row["job_title"],
+                    "companyName": row["company_name"],
+                    "recruiterName": row["recruiter_name"],
+                    "salaryText": row["salary_text"],
+                    "applicationValidity": row["application_validity"],
+                    "applicationStatus": row["application_status"],
+                    "readState": row["read_state"],
+                    "anchorOutboundMessageId": latest["message_id"] if latest else None,
+                    "anchorOutboundAt": latest["order_at"] if latest else None,
+                    "eligible": blocker is None,
+                    "blocker": blocker,
+                }
+            )
+        return {
+            "asOf": timestamp,
+            "minimumAgeHours": minimum_age_hours,
+            "exactReadNoReplyCount": int(total or 0),
+            "eligibleCount": sum(item["eligible"] for item in items),
+            "items": items,
+        }
 
     async def insert_application(
         self,

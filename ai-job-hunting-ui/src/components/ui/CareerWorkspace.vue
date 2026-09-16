@@ -22,6 +22,15 @@
                     <p v-if="analytics.sampleSize < 20" class="career-guidance">已有 {{ analytics.sampleSize }} 条记录完成观察周期。继续积累到 20 条后，再判断简历或投递策略是否需要调整。</p>
                     <p v-else class="career-guidance">已有足够记录用于初步复盘。比例只反映已保存的结果，最终建议仍需结合岗位方向和真实反馈确认。</p>
                 </template>
+                <div v-if="followUps" class="career-guidance">
+                    <strong>AI 跟进候选预览：</strong>
+                    已精确确认 {{ followUps.exactReadNoReplyCount }} 条已读未回，其中 {{ followUps.eligibleCount }} 条已满 {{ followUps.minimumAgeHours }} 小时并具备完整发送绑定。
+                    <span v-if="!followUps.exactReadNoReplyCount">当前没有可安全跟进的记录；不会把“未采集到已读”猜成已读。</span>
+                    <details v-if="followUps.items.length"><summary>查看候选与暂缓原因</summary>
+                        <p v-for="item in followUps.items" :key="item.applicationId">{{ item.jobTitle || item.encryptJobId }} · {{ item.companyName || '公司待补' }} · {{ item.eligible ? '可准备跟进草稿' : followUpBlocker(item.blocker) }}</p>
+                    </details>
+                    <p>此处只显示候选，不会发送消息。明确拒绝、已经面试和无效投递不会进入候选。</p>
+                </div>
                 <details class="career-basis">
                     <summary>查看统计依据和历史记录</summary>
                     <template v-if="analytics">
@@ -142,12 +151,13 @@ import {scopedCareerClient} from '../../platform/careerApi'
 import {captureAutomationScope} from '../../platform/unifiedRuntime'
 import {automationJobLabel, automationPhaseLabel} from '../../platform/automationPresentation'
 import {CAREER_EVENT_TYPES, modelAssistanceLabel, metricRateLabel, progressRateLabel, previewMatchesSelection, type CareerEventInput, type ResumeVersion, type CareerApplication, type CareerAnalytics,
-    type CareerProposal, type CareerPreview, type CareerReview, type CareerDeletion, type CareerSelection, type CareerStrategy} from '../../platform/careerProtocol'
+    type CareerProposal, type CareerPreview, type CareerReview, type CareerDeletion, type CareerSelection, type CareerStrategy, type FollowUpPreview} from '../../platform/careerProtocol'
 import type {AutomationJob} from '../../platform/unifiedAutomation'
 const tab = ref('records'), busy = ref(''), error = ref(''), windowDays = ref<7 | 14 | 30>(14), metricVersionId = ref('')
 const versions = ref<ResumeVersion[]>([]), applications = ref<CareerApplication[]>([]), analytics = ref<CareerAnalytics | null>(null)
 const reviewJobs = ref<AutomationJob[]>([]), review = ref<CareerReview | null>(null), deletion = ref<CareerDeletion | null>(null), strategies = ref<CareerStrategy[]>([])
 const selection = ref<CareerSelection>({preparedResumeVersionId: null, strategyPlanId: null})
+const followUps = ref<FollowUpPreview | null>(null)
 const selectedPatches = ref<Record<string, string[]>>({}), previews = ref<Record<string, CareerPreview>>({})
 const resumeText = ref(''), resumeFacts = ref(''), objective = ref(''), budget = ref<number | undefined>()
 const applicationOffset = ref(0), versionOffset = ref(0), showSamples = ref(false), sampleLabel = ref(''), sampleApplications = ref<CareerApplication[]>([])
@@ -191,6 +201,7 @@ const validityLabel = (application: CareerApplication) => application.applicatio
     ? ({ROLE_TESTING: '无效投递：测试方向', ROLE_TRADING_SYSTEM: '无效投递：交易系统方向', ROLE_DATA_ENGINEERING: '无效投递：数据工程方向', ROLE_DATA_ANALYSIS: '无效投递：数据分析方向', ROLE_CV_IMAGE: '无效投递：图像视觉方向', SALARY_OUTSIDE_TARGET: '无效投递：薪资档位超界', EMPLOYMENT_EXCLUSION: '无效投递：用工条件不符'} as Record<string, string>)[application.validityReasonCode || ''] || '无效投递'
     : application.applicationValidity === 'VALID' ? '有效投递' : '投递有效性待补资料'
 const categoryLabel = (value: string) => ({MAIN: '主要方向', EXPLORE: '探索方向', PAUSE: '暂缓'} as Record<string, string>)[value] || value
+const followUpBlocker = (value: string | null) => ({INVALID_APPLICATION: '无效投递，不跟进', MISSING_EXACT_BINDING: '会话绑定不完整', MISSING_CONVERSATION_HISTORY: '缺少聊天记录', LATEST_MESSAGE_IS_NOT_USER: 'HR 已有后续消息', OUTBOUND_NOT_ACKNOWLEDGED: '上一条消息未确认送达', TOO_RECENT: '已读时间不足 24 小时'} as Record<string, string>)[value || ''] || '暂不跟进'
 function reset() {
     versions.value = []; applications.value = []; analytics.value = null; review.value = null; reviewJobs.value = []; strategies.value = []; deletion.value = null
     selectedPatches.value = {}; previews.value = {}; resumeText.value = ''; resumeFacts.value = ''; objective.value = ''; budget.value = undefined
@@ -198,6 +209,7 @@ function reset() {
     sampleApplications.value = []; sampleMembership.value = {}; showSamples.value = false; sampleLabel.value = ''
     showEvent.value = false; eventApplication.value = null; eventRequest = null; eventQuote.value = ''; eventVersionId.value = ''; eventTime.value = null
     metricVersionId.value = ''; applicationOffset.value = 0; versionOffset.value = 0
+    followUps.value = null
 }
 async function operate(name: string, operation: (client: NonNullable<typeof session>['client']) => Promise<void>) {
     if (busy.value || !session) return
@@ -211,9 +223,9 @@ async function load() {
     busy.value = 'load'; error.value = ''
     try {
         const next = await scopedCareerClient(); if (!session || session.scope !== next.scope) reset(); session = next
-        const [v, a, s, j, selected, stats] = await Promise.all([next.client.versions(versionOffset.value), next.client.applications(applicationOffset.value), next.client.strategies(), next.client.reviews(), next.client.selection(), next.client.analytics(windowDays.value, Date.now(), metricVersionId.value)])
+        const [v, a, s, j, selected, stats, followUpPreview] = await Promise.all([next.client.versions(versionOffset.value), next.client.applications(applicationOffset.value), next.client.strategies(), next.client.reviews(), next.client.selection(), next.client.analytics(windowDays.value, Date.now(), metricVersionId.value), next.client.followUpCandidates()])
         if (disposed || next.scope !== captureAutomationScope()) return
-        versions.value = v; applications.value = a; strategies.value = s; reviewJobs.value = j; selection.value = selected; analytics.value = stats
+        versions.value = v; applications.value = a; strategies.value = s; reviewJobs.value = j; selection.value = selected; analytics.value = stats; followUps.value = followUpPreview
     } catch { error.value = '复盘服务尚未连接，未读取到记录；请确认服务状态后重试。' }
     finally { busy.value = '' }
 }

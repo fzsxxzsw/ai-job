@@ -53,6 +53,11 @@ export type CareerReview = {job: AutomationJob; confirmation: {confirmationId: s
 export type CareerDeletion = {jobId: string; status: 'DELETING' | 'DELETED'; checkpointDeleted: boolean}
 export type CareerPreview = {proposalId: string; baseVersionId: string; selectedPatchIds: string[]; content: string; previewHash: string}
 export type CareerSelection = {preparedResumeVersionId: string | null; strategyPlanId: string | null}
+export type FollowUpCandidate = {applicationId: string; platformAccount: string; encryptJobId: string; conversationKey: string | null
+    bossId: string | null; jobTitle: string | null; companyName: string | null; recruiterName: string | null; salaryText: string | null
+    applicationValidity: 'UNKNOWN' | 'VALID' | 'INVALID'; applicationStatus: 'SOFT_REJECTED'; readState: 'READ'
+    anchorOutboundMessageId: string | null; anchorOutboundAt: number | null; eligible: boolean; blocker: string | null}
+export type FollowUpPreview = {asOf: number; minimumAgeHours: number; exactReadNoReplyCount: number; eligibleCount: number; items: FollowUpCandidate[]}
 export const metricRateLabel = (metric: Pick<CareerMetric, 'denominator' | 'rate'>) => metric.denominator === 0 || metric.rate === null ? '暂无可计算比例' : `${(metric.rate * 100).toFixed(1)}%`
 export const progressRateLabel = (numerator: number, denominator: number) => denominator === 0 ? '暂无记录' : `${(numerator / denominator * 100).toFixed(1)}%`
 export const previewMatchesSelection = (preview: CareerPreview | null, proposal: CareerProposal, selected: string[]) =>

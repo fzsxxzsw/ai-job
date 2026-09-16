@@ -3,6 +3,7 @@ import pytest
 from job_helper_api.application_validity import (
     classify_application,
     role_mismatch,
+    salary_fit,
     salary_within_target,
 )
 
@@ -45,13 +46,6 @@ PREFERENCE = {
             "10-14K",
             "ROLE_DATA_ENGINEERING",
             "EMPLOYMENT_EXCLUSION",
-        ),
-        (
-            "后端工程师",
-            "Python、FastAPI 服务开发",
-            "15-30K·13薪",
-            "SALARY_OUTSIDE_TARGET",
-            None,
         ),
         ("自动化测试工程师（HZ）", "自动化测试", "10-12K", "ROLE_TESTING", None),
     ],
@@ -105,10 +99,29 @@ def test_ai_prematch_cannot_turn_experience_wording_into_a_hard_invalid_reason()
     assert result["evidence"]["reasons"] == []
 
 
-def test_complete_salary_band_must_fit_the_configured_range():
+def test_salary_policy_has_tolerance_and_a_high_match_stretch_band():
     assert salary_within_target("13-18", "15-18K") is True
-    assert salary_within_target("13-18", "15-30K·13薪") is False
+    assert salary_fit("13-15", "13-18K") == "TOLERATED"
+    assert salary_fit("13-18", "15-30K·13薪") == "STRETCH"
+    assert salary_within_target("13-18", "15-30K·13薪") is True
+    assert salary_fit("13-18", "25-50K") == "OUTSIDE"
     assert salary_within_target("13-18", "面议") is None
+
+
+def test_salary_stretch_is_an_advisory_not_an_invalid_application():
+    result = classify_application(
+        {
+            "jobTitle": "AI 应用全栈工程师",
+            "salaryText": "15-30K·13薪",
+            "jdText": "Python、FastAPI、Vue 和 Agent 应用开发",
+        },
+        PREFERENCE,
+    )
+    assert result["validity"] == "UNKNOWN"
+    assert result["primaryReasonCode"] is None
+    assert result["evidence"]["reasons"] == []
+    assert result["evidence"]["advisories"][0]["code"] == "SALARY_STRETCH"
+    assert result["evidence"]["salaryFit"] == "STRETCH"
 
 
 def test_user_confirmed_data_analysis_title_stays_invalid_even_when_only_partial_metadata_exists():

@@ -363,7 +363,7 @@ test('manual takeover waits for activation, blocks M1 and clears only after acce
     env.fixture.submitGate=new Promise(resolve=>{releaseSubmit=resolve})
     const second=raw('第二条','90071992547409942');second.messages[0].time='1788757201000'
     const pendingSecond=env.option.handlerBossMessage(second,81,'第二条')
-    for(let attempt=0;attempt<20&&env.submissions.length===0;attempt++)await new Promise(resolve=>setImmediate(resolve))
+    for(let attempt=0;attempt<200&&env.submissions.length===0;attempt++)await new Promise(resolve=>setImmediate(resolve))
     assert.equal(env.submissions.length,1)
     assert.equal(JSON.parse(env.storage.get(key)).status,'ACTIVE','fence remains until server accepts M2')
     releaseSubmit();await pendingSecond

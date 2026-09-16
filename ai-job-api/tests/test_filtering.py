@@ -149,3 +149,57 @@ def test_experience_range_is_advisory_for_a_target_role(client, world):
     assert result["decisionStatus"] == "MATCH"
     assert result["filter"] is False
     assert world["fake"].calls == []
+
+
+def test_salary_tolerance_accepts_target_max_plus_three(client, world):
+    result = client.post(
+        "/api/job/filter/one",
+        json=browser_payload(
+            configuredSalaryRange="13-15",
+            offeredSalaryRange="13-18K",
+        ),
+    ).json()["data"]
+    assert result["decisionStatus"] == "MATCH"
+    assert result["filter"] is False
+    assert result["salaryFit"] == "TOLERATED"
+
+
+def test_salary_stretch_requires_an_exceptionally_high_resume_match(client, world):
+    rejected = client.post(
+        "/api/job/filter/one",
+        json=browser_payload(
+            configuredSalaryRange="13-15",
+            offeredSalaryRange="15-30K",
+        ),
+    ).json()["data"]
+    assert rejected["decisionStatus"] == "REJECT"
+    assert rejected["engine"] == "SALARY_STRETCH_GATE"
+    assert rejected["salaryFit"] == "STRETCH"
+
+    passed = client.post(
+        "/api/job/filter/one",
+        json=browser_payload(
+            jobBaseInfo=json.dumps({"jobName": "Python开发", "skills": ["Python"]}),
+            jobExtInfo=json.dumps({"postDescription": "要求熟悉Python"}),
+            configuredSalaryRange="13-15",
+            offeredSalaryRange="15-30K",
+        ),
+    ).json()["data"]
+    assert passed["score"] == 100
+    assert passed["decisionStatus"] == "MATCH"
+    assert passed["filter"] is False
+    assert passed["salaryFit"] == "STRETCH"
+
+
+def test_salary_band_far_above_target_is_rejected_before_model_use(client, world):
+    result = client.post(
+        "/api/job/filter/one",
+        json=browser_payload(
+            configuredSalaryRange="13-15",
+            offeredSalaryRange="25-50K",
+        ),
+    ).json()["data"]
+    assert result["decisionStatus"] == "REJECT"
+    assert result["engine"] == "LOCAL_SALARY_GATE"
+    assert result["salaryFit"] == "OUTSIDE"
+    assert world["fake"].calls == []

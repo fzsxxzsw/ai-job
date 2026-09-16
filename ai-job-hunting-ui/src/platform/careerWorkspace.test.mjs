@@ -51,6 +51,7 @@ function backend() {
         if(path.endsWith('/applications/application-A'))return structuredClone(application)
         if(path.includes('/applications?'))return [structuredClone(application)]
         if(path.includes('/analytics?'))return {windowDays:14,sampleSize:0,progressCounts:{contacted:1,replied:0,interviewed:0,offers:0},progressSampleIds:{contacted:['application-A'],replied:[],interviewed:[],offers:[]},metrics:{replyRate:emptyMetric,interviewRate:emptyMetric,resumeInterviewRate:emptyMetric,offerRate:emptyMetric},excludedCounts:{immature:1,unverifiedContact:0,unknownExposure:1,mixedExposure:0},uncertainties:[]}
+        if(path.includes('/follow-ups/candidates?'))return {asOf:Date.now(),minimumAgeHours:24,exactReadNoReplyCount:0,eligibleCount:0,items:[]}
         if(path.includes('/strategies?')||path.includes('/automation/jobs?'))return []
         throw Error('Unexpected '+path)
     })

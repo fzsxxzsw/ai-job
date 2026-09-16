@@ -10,7 +10,7 @@ import re
 import unicodedata
 from typing import Any
 
-from .application_validity import role_mismatch
+from .application_validity import role_mismatch, salary_fit
 from .config import Settings
 from .contracts import FilterInput, FilterOutput
 from .database import Database, loads
@@ -63,6 +63,7 @@ SPECIFICITY = {
 }
 REQUIRED = re.compile(r"必须|必备|硬性|要求|至少|精通|熟练|掌握|及以上|以上经验", re.I)
 PREFERRED = re.compile(r"优先|加分|最好|preferred|nice[- ]?to[- ]?have", re.I)
+SALARY_STRETCH_MIN_SCORE = 85
 
 
 def parse_object(value: str) -> dict[str, Any]:
@@ -182,11 +183,51 @@ def academic_mismatch(payload: FilterInput, education: str) -> str | None:
     return None
 
 
+def apply_salary_gate(payload: FilterInput, result: dict[str, Any]) -> dict[str, Any]:
+    fit = salary_fit(payload.configuredSalaryRange, payload.offeredSalaryRange)
+    if fit == "UNRESTRICTED":
+        return result
+    response = {**result, "salaryFit": fit}
+    if fit != "STRETCH":
+        return response
+    score = response.get("score")
+    if not payload.resumeMatchEnabled or not isinstance(score, (int, float)):
+        return {
+            "decisionStatus": "REJECT",
+            "filter": True,
+            "engine": "SALARY_STRETCH_GATE",
+            "salaryFit": fit,
+            "reason": "薪资上限超过 3K 容忍带，且无法证明简历与 JD 达到高匹配",
+        }
+    if score < SALARY_STRETCH_MIN_SCORE:
+        return {
+            "decisionStatus": "REJECT",
+            "filter": True,
+            "engine": "SALARY_STRETCH_GATE",
+            "salaryFit": fit,
+            "score": score,
+            "reason": f"薪资上限超过 3K 容忍带，简历匹配度需达到 {SALARY_STRETCH_MIN_SCORE} 分（当前 {score} 分）",
+        }
+    response["reason"] = f"薪资为高匹配例外；{response.get('reason') or '已通过筛选'}"
+    return response
+
+
 async def filter_job(
     db: Database, model: ModelClient, settings: Settings, uid: int, payload: FilterInput
 ) -> dict[str, Any]:
     user = await db.user(uid)
     pref = loads((user or {}).get("preference"), {})
+    salary_decision = salary_fit(payload.configuredSalaryRange, payload.offeredSalaryRange)
+    if salary_decision in {"OUTSIDE", "UNKNOWN"}:
+        return {
+            "decisionStatus": "UNKNOWN" if salary_decision == "UNKNOWN" else "REJECT",
+            "filter": True,
+            "engine": "LOCAL_SALARY_GATE",
+            "salaryFit": salary_decision,
+            "reason": "无法确认岗位薪资"
+            if salary_decision == "UNKNOWN"
+            else "岗位薪资与目标范围的差距超过 3K 容忍带",
+        }
     if mismatch := target_role_mismatch(payload):
         return {
             "decisionStatus": "REJECT",
@@ -218,14 +259,17 @@ async def filter_job(
         if mismatch := academic_mismatch(payload, settings.confirmed_education):
             return {"decisionStatus": "REJECT", "filter": True, "score": 0, "reason": mismatch}
         if not payload.prompt:
-            return local_match(payload, resume_text)
+            return apply_salary_gate(payload, local_match(payload, resume_text))
     elif not payload.prompt:
-        return {
-            "decisionStatus": "MATCH",
-            "filter": False,
-            "engine": "LOCAL_RULES",
-            "reason": "已通过岗位名、通勤、待遇及本地排除规则",
-        }
+        return apply_salary_gate(
+            payload,
+            {
+                "decisionStatus": "MATCH",
+                "filter": False,
+                "engine": "LOCAL_RULES",
+                "reason": "已通过岗位名、通勤、待遇及本地排除规则",
+            },
+        )
 
     config = effective_config(settings, await db.ai_config(uid))
     system = FILTER
@@ -266,4 +310,4 @@ async def filter_job(
     response = result.model_dump(exclude_none=True)
     if payload.resumeMatchEnabled:
         response.update(decisionStatus="REJECT" if result.filter else "MATCH", engine="AI")
-    return response
+    return apply_salary_gate(payload, response)

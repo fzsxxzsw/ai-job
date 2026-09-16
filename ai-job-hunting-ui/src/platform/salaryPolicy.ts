@@ -8,16 +8,29 @@ function parseSalaryRange(value: string): [number, number] | null {
     return start <= end ? [start, end] : [end, start]
 }
 
-/**
- * A configured salary range is a hard application boundary for the complete
- * advertised band. A partial overlap is not enough: 15-30K is outside 13-18K.
- * Unknown or unparsable job salaries fail closed.
- */
-export function isSalaryWithinConfiguredRange(configuredRange: string, jobSalary: string): boolean {
+export type SalaryFit = 'UNRESTRICTED' | 'PREFERRED' | 'TOLERATED' | 'STRETCH' | 'OUTSIDE' | 'UNKNOWN'
+
+export const SALARY_TOLERANCE_K = 3
+
+export function evaluateSalaryRange(
+    configuredRange: string,
+    jobSalary: string,
+    toleranceK = SALARY_TOLERANCE_K,
+): SalaryFit {
     const configured = parseSalaryRange(configuredRange)
-    if (!configured) return true
+    if (!configured) return 'UNRESTRICTED'
 
     const offered = parseSalaryRange(jobSalary)
-    if (!offered) return false
-    return configured[0] <= offered[0] && offered[1] <= configured[1]
+    if (!offered) return 'UNKNOWN'
+    const lowerBoundary = configured[0] - toleranceK
+    const upperBoundary = configured[1] + toleranceK
+    if (offered[1] < lowerBoundary || offered[0] > upperBoundary) return 'OUTSIDE'
+    if (offered[1] > upperBoundary) return 'STRETCH'
+    if (configured[0] <= offered[0] && offered[1] <= configured[1]) return 'PREFERRED'
+    return 'TOLERATED'
+}
+
+/** Compatibility wrapper for callers that only need a safe yes/no gate. */
+export function isSalaryWithinConfiguredRange(configuredRange: string, jobSalary: string): boolean {
+    return !['OUTSIDE', 'UNKNOWN'].includes(evaluateSalaryRange(configuredRange, jobSalary))
 }

@@ -12,7 +12,8 @@ from typing import Any
 from .database import dumps, loads
 from .employment_exclusions import match_employment_exclusion
 
-CLASSIFIER_VERSION = "application-validity-v1"
+CLASSIFIER_VERSION = "application-validity-v2"
+SALARY_TOLERANCE_K = 3.0
 
 NON_TECHNICAL_ROLE = re.compile(
     r"主播|直播带货|美妆|调解|催收|销售|客服|招聘|人事|行政|文员|商务拓展|商务推广|商务bd|"
@@ -104,13 +105,28 @@ def salary_range(value: Any) -> tuple[float, float] | None:
 
 
 def salary_within_target(configured: Any, offered: Any) -> bool | None:
+    decision = salary_fit(configured, offered)
+    if decision in {"UNRESTRICTED", "UNKNOWN"}:
+        return None
+    return decision != "OUTSIDE"
+
+
+def salary_fit(configured: Any, offered: Any) -> str:
     target = salary_range(configured)
     if not target:
-        return None
+        return "UNRESTRICTED"
     actual = salary_range(offered)
     if not actual:
-        return None
-    return target[0] <= actual[0] and actual[1] <= target[1]
+        return "UNKNOWN"
+    lower_boundary = target[0] - SALARY_TOLERANCE_K
+    upper_boundary = target[1] + SALARY_TOLERANCE_K
+    if actual[1] < lower_boundary or actual[0] > upper_boundary:
+        return "OUTSIDE"
+    if actual[1] > upper_boundary:
+        return "STRETCH"
+    if target[0] <= actual[0] and actual[1] <= target[1]:
+        return "PREFERRED"
+    return "TOLERATED"
 
 
 def _preference(snapshot: dict[str, Any], current: Any) -> dict[str, Any]:
@@ -135,6 +151,7 @@ def classify_application(snapshot: Any, current_preference: Any = None) -> dict[
     )
     preference = _preference(value, current_preference)
     reasons: list[dict[str, Any]] = []
+    advisories: list[dict[str, Any]] = []
 
     if issue := role_mismatch(title, jd):
         reasons.append({**issue, "observed": str(title)[:500]})
@@ -151,12 +168,22 @@ def classify_application(snapshot: Any, current_preference: Any = None) -> dict[
         )
 
     configured_salary = str(preference.get("sr") or "").strip()
-    salary_decision = salary_within_target(configured_salary, salary)
-    if salary_decision is False:
+    salary_decision = salary_fit(configured_salary, salary)
+    if salary_decision == "OUTSIDE":
         reasons.append(
             {
                 "code": "SALARY_OUTSIDE_TARGET",
-                "reason": "岗位完整薪资区间超出当前配置的硬范围",
+                "reason": "岗位薪资与当前配置的差距超过 3K 容忍带",
+                "field": "salaryText",
+                "observed": str(salary)[:200],
+                "configuredRange": configured_salary[:100],
+            }
+        )
+    elif salary_decision == "STRETCH":
+        advisories.append(
+            {
+                "code": "SALARY_STRETCH",
+                "reason": "岗位薪资上限超过 3K 容忍带，仅在简历与 JD 高匹配时例外考虑",
                 "field": "salaryText",
                 "observed": str(salary)[:200],
                 "configuredRange": configured_salary[:100],
@@ -192,6 +219,8 @@ def classify_application(snapshot: Any, current_preference: Any = None) -> dict[
         "evidence": {
             "classifierVersion": CLASSIFIER_VERSION,
             "reasons": reasons,
+            "advisories": advisories,
+            "salaryFit": salary_decision,
             "experienceYearsUsedAsHardGate": False,
         },
     }

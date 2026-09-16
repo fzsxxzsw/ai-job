@@ -73,7 +73,7 @@ import {
 } from "./greetingPolicy";
 import {greetingLockIdentity, makeGreetingTaskKey, migrateAndDedupeGreetingTasks, reserveNewGreetingTask} from "./greetingIdentity";
 import {findBossMountTarget} from "../runtime/routeHost";
-import {isSalaryWithinConfiguredRange} from "./salaryPolicy";
+import {evaluateSalaryRange} from "./salaryPolicy";
 import {weekendBenefitStatus} from './weekendPolicy';
 import {greetingDispatchAuthorized, waitForPushDelay} from './deliveryRunWait';
 import {serializableBossJobDetail} from './boss/automationJob';
@@ -1613,13 +1613,19 @@ class BossPlatform extends AbsPlatform {
             throw new NotMatchException(jobTitle, jobDetail.jobName, '满足排除工作名')
         }
 
-        // 只要填写了薪资范围，就把它作为硬限制；不能被旧版 srE=false 迁移值绕过。
+        // 薪资允许 3K 容忍带；超出容忍带的上沿只在简历高匹配时例外放行。
         const configuredSalaryRange = String(userStore.user.preference.sr || '').trim()
         const pageSalaryRange = String(jobDetail.salaryDesc || '').split(".")[0]
-        if (configuredSalaryRange
-            && !isSalaryWithinConfiguredRange(configuredSalaryRange, pageSalaryRange)) {
+        const salaryFit = evaluateSalaryRange(configuredSalaryRange, pageSalaryRange)
+        if (salaryFit === 'OUTSIDE' || salaryFit === 'UNKNOWN') {
             throw new NotMatchException(jobTitle, pageSalaryRange || '薪资未知',
-                `不满足薪资硬范围 ${configuredSalaryRange}K`)
+                salaryFit === 'UNKNOWN'
+                    ? `无法确认岗位薪资是否落在 ${configuredSalaryRange}K 附近`
+                    : `岗位薪资与 ${configuredSalaryRange}K 的差距超过 3K 容忍带`)
+        }
+        if (salaryFit === 'STRETCH' && !userStore.user.preference.resumeMatchE) {
+            throw new NotMatchException(jobTitle, pageSalaryRange,
+                '薪资上限超过 3K 容忍带，需开启简历匹配后才允许高匹配例外')
         }
 
         // 公司规模
@@ -1716,6 +1722,7 @@ class BossPlatform extends AbsPlatform {
                 prompt: filterPrompt, jobBaseInfo: snapshotJobBaseInfo, jobExtInfo: snapshotJobExtInfo, resumeMatchEnabled: !!resumeMatchEnabled,
                 minMatchScore: Number(userStore.user.preference.resumeMatchMinScore) || 0,
                 titleRuleStatus: jobTitleDecision.status, titleMatchedKeywords: [...jobTitleDecision.matchedKeywords],
+                configuredSalaryRange, offeredSalaryRange: pageSalaryRange,
             },
         })
         if (resumeMatchEnabled && !unified) {
@@ -1770,6 +1777,10 @@ class BossPlatform extends AbsPlatform {
             if (filterResult.status === 'REJECT') {
                 const source = filterResult.engine?.startsWith('LOCAL_RULES') ? '本地简历匹配' : 'AI过滤'
                 throw new NotMatchException(jobTitle, filterResult.reason, source)
+            }
+            if (salaryFit === 'STRETCH' && (!Number.isFinite(filterResult.score) || Number(filterResult.score) < 85)) {
+                throw new NotMatchException(jobTitle, pageSalaryRange,
+                    `薪资上限超过容忍带，简历匹配度需达到 85 分（当前 ${filterResult.score ?? '未知'} 分）`)
             }
             preMatchResult = filterResult
         }

@@ -1,18 +1,25 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import {isSalaryWithinConfiguredRange} from './salaryPolicy.ts'
+import {evaluateSalaryRange, isSalaryWithinConfiguredRange} from './salaryPolicy.ts'
 
 test('configured 13-18K salary range rejects a 25-50K job', () => {
     assert.equal(isSalaryWithinConfiguredRange('13-18', '25-50K·16薪'), false)
+    assert.equal(evaluateSalaryRange('13-18', '25-50K·16薪'), 'OUTSIDE')
 })
 
-test('partial overlap is rejected when the advertised maximum is excessive', () => {
-    assert.equal(isSalaryWithinConfiguredRange('13-18', '15-30K·13薪'), false)
-    assert.equal(isSalaryWithinConfiguredRange('13-18', '18-25K'), false)
+test('three thousand tolerance keeps a nearby salary eligible', () => {
+    assert.equal(evaluateSalaryRange('13-15', '13-18K'), 'TOLERATED')
+    assert.equal(isSalaryWithinConfiguredRange('13-15', '13-18K'), true)
+})
+
+test('an excessive maximum becomes a high-match stretch instead of an absolute rejection', () => {
+    assert.equal(evaluateSalaryRange('13-18', '15-30K·13薪'), 'STRETCH')
+    assert.equal(evaluateSalaryRange('13-18', '18-25K'), 'STRETCH')
 })
 
 test('a salary band fully contained by the configured range remains eligible', () => {
     assert.equal(isSalaryWithinConfiguredRange('13-18', '15-18K'), true)
+    assert.equal(evaluateSalaryRange('13-18', '15-18K'), 'PREFERRED')
 })
 
 test('an unknown job salary fails closed when a hard range is configured', () => {

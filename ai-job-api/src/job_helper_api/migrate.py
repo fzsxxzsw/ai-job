@@ -27,7 +27,7 @@ from .outcomes.schema import outcome_metadata
 from .schema import rejection_metadata
 
 PAUSE_MARKER = "migration:legacy-session-pauses-v1"
-APPLICATION_LEDGER_MARKER = "migration:application-ledger-v1"
+APPLICATION_LEDGER_MARKER = "migration:application-ledger-v2"
 LONG_TEXT_COLUMNS = {
     "job_application_snapshot": (
         "job_base_info",

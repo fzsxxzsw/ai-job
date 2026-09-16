@@ -444,7 +444,7 @@ def test_invalid_role_and_salary_are_persisted_but_excluded_from_rejection_analy
             stamp=stamp + 1,
             application=manual_descriptor(
                 jobTitle="后端工程师",
-                salaryText="15-30K·13薪",
+                salaryText="25-50K·13薪",
                 jdText="Python、FastAPI 服务开发，要求3-5年经验",
                 missingFields=[],
             ),
@@ -514,6 +514,15 @@ def test_application_statuses_persist_read_soft_explicit_and_interview_evidence(
             "SELECT application_status,read_state FROM career_application "
             "WHERE encrypt_job_id='Manual-Soft'"
         ).fetchone() == ("SOFT_REJECTED", "READ")
+
+    preview = ledger_client.get(
+        "/api/job/career/follow-ups/candidates", params={"minimumAgeHours": 0}
+    ).json()["data"]
+    assert preview["exactReadNoReplyCount"] == 1
+    assert preview["eligibleCount"] == 1
+    assert preview["items"][0]["encryptJobId"] == "Manual-Soft"
+    assert preview["items"][0]["anchorOutboundMessageId"] == "920002"
+    assert preview["items"][0]["eligible"] is True
 
     rejected = observation(
         "这个岗位已经招满了，暂不继续推进。",

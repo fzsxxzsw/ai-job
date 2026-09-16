@@ -30,6 +30,8 @@ class FilterInput(Input):
     minMatchScore: int = Field(default=0, ge=0, le=100)
     titleRuleStatus: str | None = Field(default=None, max_length=32)
     titleMatchedKeywords: list[str] = Field(default_factory=list, max_length=100)
+    configuredSalaryRange: str = Field(default="", max_length=100)
+    offeredSalaryRange: str = Field(default="", max_length=255)
 
 
 class FilterOutput(Input):

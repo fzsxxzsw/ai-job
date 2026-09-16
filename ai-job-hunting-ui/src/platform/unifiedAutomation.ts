@@ -25,7 +25,7 @@ export type AutomationStatus = {
     outcomes: {enabled: boolean; caseCount: number; reportCount: number; lastObservedAt: number | null
         tasks?: {counts: Record<string, number>; total: number; items: OutcomeTask[]}}
 }
-export type FilterInput = {prompt: string; jobBaseInfo: string; jobExtInfo: string; resumeMatchEnabled: boolean; minMatchScore: number; titleRuleStatus?: string; titleMatchedKeywords: string[]}
+export type FilterInput = {prompt: string; jobBaseInfo: string; jobExtInfo: string; resumeMatchEnabled: boolean; minMatchScore: number; titleRuleStatus?: string; titleMatchedKeywords: string[]; configuredSalaryRange?: string; offeredSalaryRange?: string}
 export type AutomationSubmission = {
     requestId: string; kind: 'REPLY' | 'APPLICATION'; platformAccount: string; conversationKey: string | null; encryptJobId: string; bossId: string | null
     input: {inboundMessageId: string; inboundSentAt: number | null; question: string; jobKey: string; jobInfo: Record<string, unknown>; platformResumeId: string | null

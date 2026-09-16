@@ -5,6 +5,7 @@ import {runInNewContext} from 'node:vm'
 import ts from 'typescript'
 import {checkConversationExclusion, matchEmploymentExclusion} from './employmentExclusions.ts'
 import {hasPotentialDeveloperTitle, isClearlyNonDeveloperTitle} from './boss/jobTitleRule.ts'
+import {evaluateSalaryRange} from './salaryPolicy.ts'
 
 const pref = {fhE: true, employmentExcludeE: true, employmentExcludeKeywords: ['外包', '劳务派遣', '驻场', '外派']}
 const fixture = JSON.parse(readFileSync(new URL('../../../ai-job-api/tests/fixtures/employment-exclusions.json', import.meta.url), 'utf8'))
@@ -102,6 +103,7 @@ test('actual job matcher blocks platform / title before details and JD before la
     }).outputText
     const Type = runInNewContext(code, {
         userStore: {user: {preference: pref}}, matchEmploymentExclusion,
+        evaluateSalaryRange,
         hasPotentialDeveloperTitle, isClearlyNonDeveloperTitle,
         Tools: {isHardBlockedCompany: () => false},
         NotMatchException: class extends Error {constructor(title, hit, reason) {super(reason + ':' + hit)}},

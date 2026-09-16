@@ -414,7 +414,7 @@ def test_application_ledger_backfill_links_only_unique_exact_cycles(world):
         marker = json.loads(
             connection.execute(
                 "SELECT value_json FROM py_api_control "
-                "WHERE user_id=3 AND control_key='migration:application-ledger-v1'"
+                "WHERE user_id=3 AND control_key='migration:application-ledger-v2'"
             ).fetchone()[0]
         )
         assert marker["linkedMessages"] == 1
@@ -589,7 +589,7 @@ def test_application_ledger_creates_missing_manual_and_assistant_records(world):
         marker = json.loads(
             connection.execute(
                 "SELECT value_json FROM py_api_control "
-                "WHERE user_id=3 AND control_key='migration:application-ledger-v1'"
+                "WHERE user_id=3 AND control_key='migration:application-ledger-v2'"
             ).fetchone()[0]
         )
         assert marker["createdApplications"] == 2
