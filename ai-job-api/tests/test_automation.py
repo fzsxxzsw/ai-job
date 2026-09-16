@@ -85,7 +85,7 @@ def follow_up_input():
             "applicationId": "application-case",
             "anchorOutboundMessageId": "90001",
             "anchorOutboundAt": now_ms() - 48 * 60 * 60 * 1000,
-            "evidenceTrack": "ACKNOWLEDGED_WAITING",
+            "evidenceTrack": "EXACT_UNREAD_NO_REPLY",
             "jobKey": "JobCase:boss-owner",
             "jobInfo": {"jobTitle": "AI 应用开发", "jdText": "Python FastAPI"},
         },

@@ -56,7 +56,7 @@ export type CareerSelection = {preparedResumeVersionId: string | null; strategyP
 export type FollowUpCandidate = {applicationId: string; platformAccount: string; encryptJobId: string; conversationKey: string | null
     bossId: string | null; jobTitle: string | null; companyName: string | null; recruiterName: string | null; salaryText: string | null
     applicationValidity: 'UNKNOWN' | 'VALID' | 'INVALID'; applicationStatus: string; readState: 'READ' | 'UNREAD' | 'UNKNOWN'
-    evidenceTrack: 'EXACT_READ_NO_REPLY' | 'ACKNOWLEDGED_WAITING'; requiredAgeHours: number; jdText: string
+    evidenceTrack: 'EXACT_READ_NO_REPLY' | 'EXACT_UNREAD_NO_REPLY' | 'ACKNOWLEDGED_WAITING'; requiredAgeHours: number; jdText: string
     anchorOutboundMessageId: string | null; anchorOutboundAt: number | null; eligible: boolean; blocker: string | null}
 export type FollowUpPreview = {asOf: number; minimumAgeHours: number; fallbackAgeHours: number; exactReadNoReplyCount: number; eligibleCount: number; items: FollowUpCandidate[]}
 export const metricRateLabel = (metric: Pick<CareerMetric, 'denominator' | 'rate'>) => metric.denominator === 0 || metric.rate === null ? '暂无可计算比例' : `${(metric.rate * 100).toFixed(1)}%`

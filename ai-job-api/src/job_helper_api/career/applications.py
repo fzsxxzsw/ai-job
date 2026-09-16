@@ -333,9 +333,10 @@ class Applications(Versions):
                     if event["confirmation"] != "INFERRED"
                 ]
             )
-            evidence_track = (
-                "EXACT_READ_NO_REPLY" if row["read_state"] == "READ" else "ACKNOWLEDGED_WAITING"
-            )
+            evidence_track = {
+                "READ": "EXACT_READ_NO_REPLY",
+                "UNREAD": "EXACT_UNREAD_NO_REPLY",
+            }.get(row["read_state"], "ACKNOWLEDGED_WAITING")
             required_age_ms = (
                 minimum_age_ms if evidence_track == "EXACT_READ_NO_REPLY" else fallback_age_ms
             )

@@ -597,6 +597,24 @@ def test_application_statuses_persist_read_soft_explicit_and_interview_evidence(
     }
     ingest(ledger_client, unread)
 
+    with sqlite3.connect(world["path"]) as db:
+        db.execute(
+            "UPDATE career_application SET application_validity='VALID',"
+            "job_title='AI 应用开发',company_name='未读示例公司',jd_text='Python FastAPI' "
+            "WHERE encrypt_job_id='Manual-Unread'"
+        )
+    preview = ledger_client.get(
+        "/api/job/career/follow-ups/candidates",
+        params={"minimumAgeHours": 0, "fallbackAgeHours": 0},
+    ).json()["data"]
+    unread_candidate = next(
+        item for item in preview["items"] if item["encryptJobId"] == "Manual-Unread"
+    )
+    assert unread_candidate["eligible"] is True
+    assert unread_candidate["readState"] == "UNREAD"
+    assert unread_candidate["evidenceTrack"] == "EXACT_UNREAD_NO_REPLY"
+    assert unread_candidate["requiredAgeHours"] == 0
+
     interview = observation(
         "明天下午方便来公司面试吗？",
         event="interview-invitation",

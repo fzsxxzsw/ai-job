@@ -31,7 +31,7 @@ export type AutomationSubmission = {
     input: {inboundMessageId: string; inboundSentAt: number | null; question: string; jobKey: string; jobInfo: Record<string, unknown>; platformResumeId: string | null
         exchangeRequest: null | {kind: 'ACCEPT_PHONE' | 'ACCEPT_WECHAT' | 'ACCEPT_RESUME'; requestMessageId: string}}
         | {cycleKey: string; filterInput: FilterInput; localAssessment: {passed: boolean; reason: string}; greeting: {enabled: boolean; text: string}; preparedResumeVersionId: string | null; strategyPlanId: string | null}
-        | {applicationId: string; anchorOutboundMessageId: string; anchorOutboundAt: number; evidenceTrack: 'EXACT_READ_NO_REPLY' | 'ACKNOWLEDGED_WAITING'; jobKey: string; jobInfo: Record<string, unknown>}
+        | {applicationId: string; anchorOutboundMessageId: string; anchorOutboundAt: number; evidenceTrack: 'EXACT_READ_NO_REPLY' | 'EXACT_UNREAD_NO_REPLY' | 'ACKNOWLEDGED_WAITING'; jobKey: string; jobInfo: Record<string, unknown>}
 }
 export type ActionReceipt = {status: 'ACKNOWLEDGED' | 'FAILED' | 'UNKNOWN'; serverMid: string | null; platformCode: number | null; occurredAt: number; errorCode: string | null; executionPhase?: 'BEFORE_PLATFORM_CALL' | 'PLATFORM_RESULT'}
 export type AutomationSnapshot = {status: AutomationStatus | null; jobs: AutomationJob[]; error: string; held: number; updatedAt: number}
