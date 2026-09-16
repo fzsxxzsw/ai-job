@@ -1,14 +1,8 @@
 from __future__ import annotations
 
-import importlib.util
 from pathlib import Path
 
-
-SCRIPT_PATH = Path(__file__).parents[1] / "scripts" / "summarize_application_data.py"
-SPEC = importlib.util.spec_from_file_location("summarize_application_data", SCRIPT_PATH)
-assert SPEC and SPEC.loader
-MODULE = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(MODULE)
+from job_helper_agent import application_data_cleaning as MODULE
 
 
 def message(role: str, text: str, order_at: int, message_id: str) -> dict:
@@ -135,8 +129,8 @@ def test_resume_profile_and_mismatch_use_historical_resume() -> None:
     assert profile["short_stints_under_6_months"] == 1
     assert "Python" in profile["skills"]
     assert "LangGraph" in profile["skills"]
-    assert mismatch["required_experience_months"] == 36
-    assert "EXPERIENCE_GAP" in mismatch["reason_flags"]
+    assert "required_experience_months" not in mismatch
+    assert "EXPERIENCE_GAP" not in mismatch["reason_flags"]
     assert mismatch["missing_skills"] == ["Kubernetes", "RAG"]
 
 
@@ -189,3 +183,36 @@ def test_snapshot_resume_sources_are_aggregated_instead_of_repeated() -> None:
     assert versions[0]["application_count"] == 2
     assert len(versions[0]["sources"]) == 1
     assert versions[0]["sources"][0]["source"] == "job_application_snapshot"
+
+
+def test_public_cleaning_function_is_reusable(monkeypatch, tmp_path: Path) -> None:
+    empty_data = {
+        "snapshots": [],
+        "messages": [],
+        "outcomes": [],
+        "user_resumes": [],
+        "career_resumes": [],
+    }
+    monkeypatch.setattr(
+        MODULE,
+        "load_database",
+        lambda reader, user_id: empty_data,
+    )
+    report_dir = tmp_path / "application-summary"
+
+    result = MODULE.summarize_application_data(
+        user_id=3,
+        mature_hours=72,
+        as_of="2026-09-16T00:00:00+00:00",
+        output_dir=report_dir,
+        reader=object(),
+    )
+
+    assert result == report_dir.resolve()
+    assert {path.name for path in report_dir.iterdir()} == {
+        "cleaned_conversations.jsonl",
+        "cleaned_resumes.jsonl",
+        "job_details.csv",
+        "summary.json",
+        "summary.md",
+    }
