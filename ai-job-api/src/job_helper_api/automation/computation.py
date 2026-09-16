@@ -308,7 +308,8 @@ def validate_artifact(job, artifact):
                 return False
         expected_approval = (
             "NOT_REQUIRED"
-            if job["kind"] == "FOLLOW_UP" and kind == "SEND_TEXT"
+            if job["kind"] == "FOLLOW_UP"
+            and kind == "SEND_TEXT"
             or automatic_resume_authorized(job, input_, kind, payload)
             else "PENDING"
             if kind in SENSITIVE

@@ -272,24 +272,33 @@ def test_follow_up_binding_rotates_only_with_the_exact_unchanged_outbound_anchor
         "updated": True,
     }
     with sqlite3.connect(world["path"]) as db:
-        assert db.execute(
-            "SELECT conversation_key FROM career_application WHERE id='application-case'"
-        ).fetchone()[0] == "peer:fresh-security"
+        assert (
+            db.execute(
+                "SELECT conversation_key FROM career_application WHERE id='application-case'"
+            ).fetchone()[0]
+            == "peer:fresh-security"
+        )
         message = db.execute(
             "SELECT conversation_key,conversation_id FROM conversation_message WHERE id='message-case'"
         ).fetchone()
         assert message[0] == "peer:fresh-security"
         assert message[1] != "conversation-case"
-    assert response(
-        auto.post(
-            "/api/job/career/applications/application-case/follow-up-binding",
-            json=payload,
-        )
-    )["updated"] is False
+    assert (
+        response(
+            auto.post(
+                "/api/job/career/applications/application-case/follow-up-binding",
+                json=payload,
+            )
+        )["updated"]
+        is False
+    )
     wrong = {**payload, "anchorOutboundMessageId": "different-message"}
-    assert auto.post(
-        "/api/job/career/applications/application-case/follow-up-binding", json=wrong
-    ).status_code == 409
+    assert (
+        auto.post(
+            "/api/job/career/applications/application-case/follow-up-binding", json=wrong
+        ).status_code
+        == 409
+    )
 
 
 def test_explicit_resume_requests_execute_without_manual_approval(auto, world):

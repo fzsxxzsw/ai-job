@@ -523,10 +523,12 @@ class Applications(Versions):
                 payload.encryptJobId,
             )
             conflict = await self.db.one(
-                select(messages.c.id).where(
+                select(messages.c.id)
+                .where(
                     messages.c.user_id == uid,
                     messages.c.conversation_id == new_conversation_id,
-                ).limit(1),
+                )
+                .limit(1),
                 c,
             )
             if conflict:
