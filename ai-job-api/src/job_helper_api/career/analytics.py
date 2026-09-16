@@ -10,6 +10,7 @@ METRIC_VERSION = "career-cohort-v1"
 DAY_MS = 86_400_000
 CONFIRMED = {"OBSERVED", "USER_CONFIRMED"}
 CONTACT_REASONS = (
+    "invalidApplication",
     "immature",
     "unverifiedContact",
     "unknownExposure",
@@ -68,6 +69,8 @@ def actual_exposure(events, exposures):
 
 
 def exact_filter_reason(app, exposure, filters):
+    if app.get("application_validity", "UNKNOWN") == "INVALID":
+        return "invalidApplication"
     if (
         filters["strategyPlanId"] is not None
         and app["strategy_plan_id"] != filters["strategyPlanId"]
@@ -229,6 +232,7 @@ def cohort_metrics(
     uncertainties = [
         "仅反映已记录的关联，不作因果结论。",
         "迟到记录按发生时间归属；已保存报告保留生成时的固定数据。",
+        "岗位方向、薪资或用工条件不符合的无效投递单独保留，但不进入拒绝率和策略效果样本。",
         "岗位类别、级别和投递渠道的可比性尚未核实；即使达到20个成熟样本，也仅作描述，不进行版本排名。",
     ]
     if size < 20:

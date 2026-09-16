@@ -310,3 +310,307 @@ def test_conversation_history_v2_backfill_materializes_snapshot_causal_chain(wor
             ("12002", "88003", "88003", 1),
             ("76001", "12002", "88003", 2),
         ]
+
+
+def test_application_ledger_backfill_links_only_unique_exact_cycles(world):
+    stamp = 1_700_000_008_000
+    with sqlite3.connect(world["path"]) as connection:
+        connection.execute("UPDATE user_info SET ai_seat_status=0 WHERE id=3")
+        applications = [
+            ("unique-app", "key-unique", "unique-job", "unique-conversation", "unique-peer"),
+            (
+                "ambiguous-a",
+                "key-ambiguous-a",
+                "ambiguous-job",
+                "ambiguous-conversation",
+                "ambiguous-peer",
+            ),
+            (
+                "ambiguous-b",
+                "key-ambiguous-b",
+                "ambiguous-job",
+                "ambiguous-conversation",
+                "ambiguous-peer",
+            ),
+        ]
+        for app_id, application_key, job, conversation, peer in applications:
+            connection.execute(
+                "INSERT INTO career_application("
+                "id,user_id,application_key,platform_account,encrypt_job_id,conversation_key,boss_id,"
+                "cycle_key,data_json,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                (
+                    app_id,
+                    3,
+                    application_key,
+                    "boss-owner",
+                    job,
+                    conversation,
+                    peer,
+                    application_key,
+                    json.dumps({"jobTitle": job}),
+                    stamp,
+                ),
+            )
+        connection.execute(
+            "UPDATE career_application SET contacted_at=?, application_status='EXPLICIT_REJECTED', "
+            "status_updated_at=? WHERE id='unique-app'",
+            (stamp - 100, stamp - 50),
+        )
+        messages = [
+            ("unique-message", "unique-job", "unique-conversation", "unique-peer", "980001"),
+            (
+                "ambiguous-message",
+                "ambiguous-job",
+                "ambiguous-conversation",
+                "ambiguous-peer",
+                "980002",
+            ),
+        ]
+        for row_id, job, conversation, peer, message_id in messages:
+            connection.execute(
+                "INSERT INTO conversation_message("
+                "id,user_id,conversation_id,platform_account,conversation_key,boss_id,encrypt_job_id,"
+                "message_id,role,author_kind,text,text_hash,observed_at,order_at,order_confidence,"
+                "causal_root_message_id,causal_depth,delivery_state,model_eligible,sources_json,"
+                "created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (
+                    row_id,
+                    3,
+                    row_id + "-conversation-id",
+                    "boss-owner",
+                    conversation,
+                    peer,
+                    job,
+                    message_id,
+                    "HR",
+                    "HR",
+                    "历史消息",
+                    "0" * 64,
+                    stamp,
+                    stamp,
+                    "PLATFORM",
+                    message_id,
+                    0,
+                    "OBSERVED",
+                    1,
+                    "[]",
+                    stamp,
+                    stamp,
+                ),
+            )
+
+    plan = asyncio.run(migration.migrate(world["settings"], apply=True))
+    assert "backfill unified application ledger" in plan
+    with sqlite3.connect(world["path"]) as connection:
+        assert connection.execute(
+            "SELECT application_id FROM conversation_message WHERE id='unique-message'"
+        ).fetchone() == ("unique-app",)
+        assert connection.execute(
+            "SELECT application_status FROM career_application WHERE id='unique-app'"
+        ).fetchone() == ("EXPLICIT_REJECTED",)
+        assert connection.execute(
+            "SELECT application_id FROM conversation_message WHERE id='ambiguous-message'"
+        ).fetchone() == (None,)
+        marker = json.loads(
+            connection.execute(
+                "SELECT value_json FROM py_api_control "
+                "WHERE user_id=3 AND control_key='migration:application-ledger-v1'"
+            ).fetchone()[0]
+        )
+        assert marker["linkedMessages"] == 1
+        assert marker["ambiguousMessages"] == 1
+    assert asyncio.run(migration.migrate(world["settings"], apply=False)) == []
+
+
+def test_application_ledger_creates_missing_manual_and_assistant_records(world):
+    stamp = 1_700_000_009_000
+    with sqlite3.connect(world["path"]) as connection:
+        connection.execute(
+            "UPDATE user_info SET ai_seat_status=0, preference=? WHERE id=3",
+            (json.dumps({"sr": "13-18"}),),
+        )
+        connection.execute(
+            "INSERT INTO job_application_snapshot("
+            "user_id,encrypt_job_id,applied_at,job_base_info,job_ext_info,jd_hash,"
+            "resume_record_id,resume_content,resume_hash,preference_snapshot,pre_match_result,created_at"
+            ") VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                3,
+                "assistant-job",
+                stamp - 500,
+                json.dumps(
+                    {
+                        "jobName": "后端工程师",
+                        "brandName": "完整公司",
+                        "salaryDesc": "25-35K",
+                        "cityName": "上海",
+                        "areaDistrict": "浦东新区",
+                    },
+                    ensure_ascii=False,
+                ),
+                json.dumps(
+                    {"address": "张江", "postDescription": "负责 Python 服务"},
+                    ensure_ascii=False,
+                ),
+                "a" * 64,
+                7,
+                "投递时简历全文",
+                "b" * 64,
+                json.dumps({"city": "上海"}, ensure_ascii=False),
+                json.dumps({"matched": True}),
+                stamp - 500,
+            ),
+        )
+        messages = [
+            (
+                "manual-history-message",
+                "manual-job",
+                "manual-conversation",
+                "manual-peer",
+                "990001",
+            ),
+            (
+                "assistant-history-message",
+                "assistant-job",
+                "assistant-conversation",
+                "assistant-peer",
+                "990002",
+            ),
+        ]
+        for row_id, job, conversation, peer, message_id in messages:
+            connection.execute(
+                "INSERT INTO conversation_message("
+                "id,user_id,conversation_id,platform_account,conversation_key,boss_id,encrypt_job_id,"
+                "message_id,role,author_kind,text,text_hash,observed_at,order_at,order_confidence,"
+                "causal_root_message_id,causal_depth,delivery_state,model_eligible,sources_json,"
+                "created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (
+                    row_id,
+                    3,
+                    row_id + "-conversation-id",
+                    "boss-owner",
+                    conversation,
+                    peer,
+                    job,
+                    message_id,
+                    "HR",
+                    "HR",
+                    "历史消息",
+                    "0" * 64,
+                    stamp,
+                    stamp,
+                    "PLATFORM",
+                    message_id,
+                    0,
+                    "OBSERVED",
+                    1,
+                    "[]",
+                    stamp,
+                    stamp,
+                ),
+            )
+        connection.execute(
+            "INSERT INTO outcome_case("
+            "id,user_id,case_key,encrypt_job_id,conversation_key,boss_id,revision,facts_json,"
+            "status,last_observed_at,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                "manual-outcome-case",
+                3,
+                "manual-outcome-key",
+                "manual-job",
+                "manual-conversation",
+                "manual-peer",
+                1,
+                json.dumps(
+                    {
+                        "projection": {
+                            "outcome": "NO_REPLY",
+                            "readState": "READ",
+                            "waitingOn": "HR",
+                            "asOf": stamp + 100,
+                            "evidence": [],
+                        }
+                    }
+                ),
+                "COMPLETE",
+                stamp + 100,
+                stamp,
+                stamp,
+            ),
+        )
+
+    asyncio.run(migration.migrate(world["settings"], apply=True))
+    with sqlite3.connect(world["path"]) as connection:
+        connection.row_factory = sqlite3.Row
+        manual = connection.execute(
+            "SELECT * FROM career_application WHERE encrypt_job_id='manual-job'"
+        ).fetchone()
+        assistant = connection.execute(
+            "SELECT * FROM career_application WHERE encrypt_job_id='assistant-job'"
+        ).fetchone()
+        assert manual["origin"] == "MANUAL_DISCOVERED"
+        assert manual["snapshot_completeness"] == "PARTIAL"
+        assert manual["read_state"] == "READ"
+        assert manual["application_status"] == "SOFT_REJECTED"
+        assert set(json.loads(manual["data_json"])["missingFields"]) == {
+            "jobTitle",
+            "companyName",
+            "recruiterName",
+            "salaryText",
+            "locationText",
+            "jdText",
+        }
+        assert assistant["origin"] == "ASSISTANT"
+        assert assistant["application_status"] == "APPLIED"
+        assert assistant["job_title"] == "后端工程师"
+        assert assistant["company_name"] == "完整公司"
+        assert assistant["salary_text"] == "25-35K"
+        assert assistant["application_validity"] == "INVALID"
+        assert assistant["validity_reason_code"] == "SALARY_OUTSIDE_TARGET"
+        assert assistant["location_text"] == "上海 浦东新区 张江"
+        assert assistant["jd_text"] == "负责 Python 服务"
+        assert json.loads(assistant["data_json"])["capturedResumeContent"] == "投递时简历全文"
+        linked = connection.execute(
+            "SELECT encrypt_job_id,application_id FROM conversation_message "
+            "WHERE id IN ('manual-history-message','assistant-history-message') "
+            "ORDER BY encrypt_job_id"
+        ).fetchall()
+        assert [(row[0], row[1]) for row in linked] == [
+            ("assistant-job", assistant["id"]),
+            ("manual-job", manual["id"]),
+        ]
+        assert (
+            connection.execute(
+                "SELECT event_type FROM career_application_event WHERE application_id=?",
+                (manual["id"],),
+            ).fetchone()[0]
+            == "APPLICATION_DISCOVERED"
+        )
+        marker = json.loads(
+            connection.execute(
+                "SELECT value_json FROM py_api_control "
+                "WHERE user_id=3 AND control_key='migration:application-ledger-v1'"
+            ).fetchone()[0]
+        )
+        assert marker["createdApplications"] == 2
+        assert marker["linkedMessages"] == 2
+        assert marker["statusApplications"] == 1
+        assert marker["invalidApplications"] == 1
+    assert asyncio.run(migration.migrate(world["settings"], apply=False)) == []
+
+
+def test_application_ledger_repairs_missing_message_link_column_idempotently(world):
+    with sqlite3.connect(world["path"]) as connection:
+        connection.execute("UPDATE user_info SET ai_seat_status=0 WHERE id=3")
+        connection.execute("DROP INDEX ix_conversation_message_application")
+        connection.execute("ALTER TABLE conversation_message DROP COLUMN application_id")
+
+    plan = asyncio.run(migration.migrate(world["settings"], apply=True))
+    assert any("ADD COLUMN application_id" in step for step in plan)
+    assert any("CREATE INDEX ix_conversation_message_application" in step for step in plan)
+    with sqlite3.connect(world["path"]) as connection:
+        columns = {row[1] for row in connection.execute("PRAGMA table_info(conversation_message)")}
+        indexes = {row[1] for row in connection.execute("PRAGMA index_list(conversation_message)")}
+        assert "application_id" in columns
+        assert "ix_conversation_message_application" in indexes
+    assert asyncio.run(migration.migrate(world["settings"], apply=False)) == []

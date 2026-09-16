@@ -233,7 +233,7 @@ test('APPLICATION rechecks the captured policy immediately before the platform a
     let releaseSubmit
     env.fixture.submitGate=new Promise(resolve=>{releaseSubmit=resolve})
     const pending=assert.rejects(env.platform.doPush(job),/沟通动作已被平台明确拒绝/)
-    for(let attempt=0;attempt<20&&env.submissions.length===0;attempt++)await new Promise(resolve=>setImmediate(resolve))
+    for(let attempt=0;attempt<200&&env.submissions.length===0;attempt++)await new Promise(resolve=>setTimeout(resolve,1))
     assert.equal(env.submissions[0].context.policy,'policy-A')
     env.fixture.policy='policy-B';releaseSubmit();await pending
     assert.equal(env.requests.filter(request=>request.url.includes('/friend/add.json')).length,0)

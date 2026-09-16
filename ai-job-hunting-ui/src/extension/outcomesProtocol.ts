@@ -12,6 +12,14 @@ export type OutcomeReadEvidence = {
 export type OutcomeCoverage = {
     anchorMessageId: string; latestMessageId: string; checkedAt: number; completeAfterAnchor: true
 }
+export type OutcomeApplicationField = 'jobTitle' | 'companyName' | 'recruiterName' | 'salaryText' | 'locationText' | 'jdText'
+export type OutcomeApplicationDescriptor = {
+    origin: 'ASSISTANT' | 'MANUAL_DISCOVERED'; source: 'ASSISTANT_SNAPSHOT' | 'BOSS_FRIEND_LIST'
+    cycleKey: string | null; jobTitle: string | null; companyName: string | null; recruiterName: string | null
+    salaryText: string | null; locationText: string | null; jdText: string | null
+    jobBaseInfo: string | null; jobExtInfo: string | null; sourceData: string | null
+    missingFields: OutcomeApplicationField[]
+}
 export type OutcomeAnchor = {
     binding: {encryptJobId: string; conversationKey: string; bossId: string; observedAt: number}
     message: OutcomeMessage; clientMid: string; serverMid: string; acceptedAt: number
@@ -21,10 +29,11 @@ export type OutcomeEvidence = {
     role: 'HR' | 'USER' | null; quote: string
 }
 export type OutcomeObservation = {
-    eventId: string; encryptJobId: string; conversationKey: string | null; bossId: string | null
-    source: 'APPLICATION_FLOW' | 'BOSS_PASSIVE_MESSAGE' | 'BOSS_SEND_ACK' | 'BOSS_CONVERSATION_SNAPSHOT' | 'BOSS_EXACT_MESSAGE_STATUS'
+    eventId: string; platformAccount: string | null; encryptJobId: string; conversationKey: string | null; bossId: string | null
+    source: 'APPLICATION_FLOW' | 'BOSS_CONTACT_DISCOVERED' | 'BOSS_PASSIVE_MESSAGE' | 'BOSS_SEND_ACK' | 'BOSS_CONVERSATION_SNAPSHOT' | 'BOSS_EXACT_MESSAGE_STATUS'
     observedAt: number; bindingObservedAt: number; messages: OutcomeMessage[]
     readEvidence: OutcomeReadEvidence | null; coverage: OutcomeCoverage | null
+    application: OutcomeApplicationDescriptor | null
 }
 export type OutcomeReport = {
     reportId: string; caseId: string; revision: number; outcome: Outcome; readState: 'READ' | 'UNREAD' | 'UNKNOWN'
@@ -88,12 +97,32 @@ function text(value: unknown, max: number): value is string {
     return typeof value === 'string' && value.length > 0 && value.length <= max && !value.includes('\u0000')
 }
 function time(value: unknown): value is number { return Number.isSafeInteger(value) && Number(value) > 0 }
+function optionalText(value: unknown, max: number): value is string | null {
+    return value === null || text(value, max)
+}
+const APPLICATION_FIELDS: OutcomeApplicationField[] = ['jobTitle', 'companyName', 'recruiterName', 'salaryText', 'locationText', 'jdText']
+function normalizeApplicationDescriptor(value: unknown): OutcomeApplicationDescriptor | null {
+    if (!record(value) || !keys(value, ['origin', 'source', 'cycleKey', 'jobTitle', 'companyName', 'recruiterName', 'salaryText',
+        'locationText', 'jdText', 'jobBaseInfo', 'jobExtInfo', 'sourceData', 'missingFields'])
+        || !['ASSISTANT', 'MANUAL_DISCOVERED'].includes(value.origin)
+        || !['ASSISTANT_SNAPSHOT', 'BOSS_FRIEND_LIST'].includes(value.source)
+        || !optionalText(value.cycleKey, 128) || !optionalText(value.jobTitle, 255)
+        || !optionalText(value.companyName, 255) || !optionalText(value.recruiterName, 255)
+        || !optionalText(value.salaryText, 255) || !optionalText(value.locationText, 500)
+        || !optionalText(value.jdText, 60000) || !optionalText(value.jobBaseInfo, 30000)
+        || !optionalText(value.jobExtInfo, 60000) || !optionalText(value.sourceData, 20000)
+        || !Array.isArray(value.missingFields) || value.missingFields.length > APPLICATION_FIELDS.length
+        || new Set(value.missingFields).size !== value.missingFields.length
+        || !value.missingFields.every((field: unknown) => APPLICATION_FIELDS.includes(field as OutcomeApplicationField))) return null
+    return {...value, missingFields: [...value.missingFields]} as OutcomeApplicationDescriptor
+}
 
 export function normalizeOutcomeObservation(value: unknown): OutcomeObservation | null {
-    if (!record(value) || !keys(value, ['eventId', 'encryptJobId', 'conversationKey', 'bossId', 'source', 'observedAt', 'bindingObservedAt', 'messages', 'readEvidence', 'coverage'])
+    if (!record(value) || !keys(value, ['eventId', 'platformAccount', 'encryptJobId', 'conversationKey', 'bossId', 'source', 'observedAt', 'bindingObservedAt', 'messages', 'readEvidence', 'coverage', 'application'])
         || !text(value.eventId, 128) || !text(value.encryptJobId, 255)
+        || (value.platformAccount != null && !text(value.platformAccount, 255))
         || !time(value.observedAt) || !time(value.bindingObservedAt)
-        || !['APPLICATION_FLOW', 'BOSS_PASSIVE_MESSAGE', 'BOSS_SEND_ACK', 'BOSS_CONVERSATION_SNAPSHOT', 'BOSS_EXACT_MESSAGE_STATUS'].includes(value.source)
+        || !['APPLICATION_FLOW', 'BOSS_CONTACT_DISCOVERED', 'BOSS_PASSIVE_MESSAGE', 'BOSS_SEND_ACK', 'BOSS_CONVERSATION_SNAPSHOT', 'BOSS_EXACT_MESSAGE_STATUS'].includes(value.source)
         || !Array.isArray(value.messages) || value.messages.length > 40) return null
     const application = value.source === 'APPLICATION_FLOW'
     if ((!text(value.conversationKey, 255) || !text(value.bossId, 80))
@@ -120,12 +149,18 @@ export function normalizeOutcomeObservation(value: unknown): OutcomeObservation 
         || !keys(coverage, ['anchorMessageId', 'latestMessageId', 'checkedAt', 'completeAfterAnchor'])
         || !text(coverage.anchorMessageId, 160) || !text(coverage.latestMessageId, 160)
         || !time(coverage.checkedAt) || coverage.completeAfterAnchor !== true)) return null
+    const descriptor = value.application === null || value.application === undefined
+        ? null : normalizeApplicationDescriptor(value.application)
+    if (value.application != null && !descriptor) return null
+    const discovery = value.source === 'BOSS_CONTACT_DISCOVERED'
+    if (discovery && (!descriptor || descriptor.origin !== 'MANUAL_DISCOVERED' || messages.length || read || coverage)) return null
     if (application && (messages.length || read || coverage)) return null
-    if (!application && !messages.length && !read && !coverage) return null
+    if (!application && !discovery && !messages.length && !read && !coverage) return null
     if (value.source === 'BOSS_SEND_ACK' && !messages.length) return null
-    return {eventId: value.eventId, encryptJobId: value.encryptJobId, conversationKey: value.conversationKey,
+    return {eventId: value.eventId, platformAccount: value.platformAccount ?? null, encryptJobId: value.encryptJobId, conversationKey: value.conversationKey,
         bossId: value.bossId, source: value.source, observedAt: value.observedAt, bindingObservedAt: value.bindingObservedAt,
-        messages, readEvidence: read ? {...read} as OutcomeReadEvidence : null, coverage: coverage ? {...coverage} as OutcomeCoverage : null}
+        messages, readEvidence: read ? {...read} as OutcomeReadEvidence : null, coverage: coverage ? {...coverage} as OutcomeCoverage : null,
+        application: descriptor}
 }
 
 export function normalizeOutcomeCommand(value: unknown): OutcomeCommand | null {

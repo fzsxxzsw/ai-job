@@ -43,6 +43,44 @@ def task_view(job) -> dict:
     )
 
 
+async def _case_for_observation(db, connection, table, uid, item):
+    rows = (
+        (
+            await connection.execute(
+                select(table).where(
+                    table.c.user_id == uid,
+                    db.exact(table.c.encrypt_job_id, item.encryptJobId),
+                )
+            )
+        )
+        .mappings()
+        .all()
+    )
+    if item.conversationKey and item.bossId:
+        exact = [
+            row
+            for row in rows
+            if row["conversation_key"] == item.conversationKey and row["boss_id"] == item.bossId
+        ]
+        if len(exact) == 1:
+            return dict(exact[0]), None
+        if len(exact) > 1:
+            raise ApiError("同一岗位会话对应多个结果周期，需要人工核对", 409)
+        unbound = [row for row in rows if not row["conversation_key"] and not row["boss_id"]]
+        if len(unbound) == 1:
+            return dict(unbound[0]), None
+        if len(unbound) > 1:
+            raise ApiError("同一岗位存在多个未绑定投递周期，不能猜测聊天归属", 409)
+        if any(row["conversation_key"] or row["boss_id"] for row in rows) and not item.application:
+            raise ApiError("岗位与会话或联系人绑定冲突，不能合并聊天", 409)
+        key = digest(["boss", uid, item.encryptJobId, item.conversationKey, item.bossId])
+    else:
+        cycle = item.application.cycleKey if item.application else item.eventId
+        key = digest(["boss", uid, item.encryptJobId, "cycle", cycle])
+    previous = next((dict(row) for row in rows if row["case_key"] == key), None)
+    return previous, key
+
+
 class OutcomeStorage:
     def __init__(self, db: Database, settings: Settings) -> None:
         self.db, self.settings = db, settings
@@ -115,6 +153,7 @@ class OutcomeStorage:
 
     async def ingest(self, uid: int, batch: ObservationBatch) -> dict:
         accepted, duplicates, cases, projected = [], [], {}, []
+        projections, snapshots = {}, {}
         events, case_table = self.db.table("outcome_observation"), self.db.table("outcome_case")
         async with self.transaction(uid) as connection:
             for item in batch.observations:
@@ -133,17 +172,12 @@ class OutcomeStorage:
                     existing = await self.row("outcome_case", uid, previous["case_id"], connection)
                     cases[existing["id"]] = existing
                     continue
-                key = digest(["boss", uid, item.encryptJobId])
-                case = await self.db.one(
-                    select(case_table).where(
-                        case_table.c.user_id == uid, case_table.c.case_key == key
-                    ),
-                    connection,
-                )
-                if item.source == "APPLICATION_FLOW" and not await snapshot_row(
-                    self.db, uid, item.encryptJobId, connection
-                ):
-                    raise ApiError("请先成功保存该岗位的投递快照", 422)
+                case, key = await _case_for_observation(self.db, connection, case_table, uid, item)
+                if item.source == "APPLICATION_FLOW":
+                    snapshot = await snapshot_row(self.db, uid, item.encryptJobId, connection)
+                    if not snapshot:
+                        raise ApiError("请先成功保存该岗位的投递快照", 422)
+                    snapshots[item.eventId] = snapshot
                 if not case:
                     case = dict(
                         id=ident(),
@@ -211,12 +245,26 @@ class OutcomeStorage:
                 )
                 accepted.append(item.eventId)
                 projected.append(item)
+                projections[item.eventId] = projection
                 cases[case["id"]] = case
             if projected:
-                await project_observations(self.db, connection, uid, projected)
-            from ..career.observations import record_observations
+                from ..career.observations import record_observations
 
-            await record_observations(self, connection, uid, batch.observations)
+                application_ids = await record_observations(
+                    self,
+                    connection,
+                    uid,
+                    projected,
+                    projections=projections,
+                    snapshots=snapshots,
+                )
+                await project_observations(
+                    self.db,
+                    connection,
+                    uid,
+                    projected,
+                    application_ids=application_ids,
+                )
         return dict(
             acceptedEventIds=accepted,
             duplicateEventIds=duplicates,

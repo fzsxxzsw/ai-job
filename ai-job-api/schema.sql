@@ -321,6 +321,7 @@ CREATE TABLE IF NOT EXISTS automation_job (
 CREATE TABLE IF NOT EXISTS conversation_message (
 	id VARCHAR(36) COLLATE utf8mb4_bin NOT NULL,
 	user_id BIGINT NOT NULL,
+	application_id VARCHAR(36) COLLATE utf8mb4_bin,
 	conversation_id VARCHAR(64) COLLATE utf8mb4_bin NOT NULL,
 	platform_account VARCHAR(255) COLLATE utf8mb4_bin NOT NULL,
 	conversation_key VARCHAR(255) COLLATE utf8mb4_bin NOT NULL,
@@ -350,7 +351,9 @@ CREATE TABLE IF NOT EXISTS conversation_message (
 	CONSTRAINT uq_conversation_message_client_mid
 		UNIQUE (user_id, conversation_id, client_mid),
 	KEY ix_conversation_message_model
-		(user_id, conversation_id, model_eligible, order_at, id)
+		(user_id, conversation_id, model_eligible, order_at, id),
+	KEY ix_conversation_message_application
+		(user_id, application_id, order_at, id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Immutable career facts, resume drafts and approved strategy plans.
@@ -367,12 +370,34 @@ CREATE TABLE IF NOT EXISTS career_application (
 	prepared_resume_version_id VARCHAR(36) COLLATE utf8mb4_bin,
 	strategy_plan_id VARCHAR(36) COLLATE utf8mb4_bin,
 	contacted_at BIGINT,
+	origin VARCHAR(32) NOT NULL DEFAULT 'UNKNOWN',
+	job_title VARCHAR(255),
+	company_name VARCHAR(255),
+	recruiter_name VARCHAR(255),
+	salary_text VARCHAR(255),
+	location_text VARCHAR(500),
+	jd_text LONGTEXT,
+	snapshot_completeness VARCHAR(16) NOT NULL DEFAULT 'PARTIAL',
+	application_validity VARCHAR(16) NOT NULL DEFAULT 'UNKNOWN',
+	validity_reason_code VARCHAR(64),
+	validity_evidence_json LONGTEXT,
+	validity_updated_at BIGINT,
+	read_state VARCHAR(16) NOT NULL DEFAULT 'UNKNOWN',
+	read_state_updated_at BIGINT,
+	application_status VARCHAR(32) NOT NULL DEFAULT 'DISCOVERED',
+	status_updated_at BIGINT,
+	status_evidence_json LONGTEXT,
+	first_observed_at BIGINT,
 	data_json LONGTEXT NOT NULL,
 	legacy_snapshot_id BIGINT,
 	created_at BIGINT NOT NULL,
+	updated_at BIGINT NOT NULL DEFAULT 0,
 	PRIMARY KEY (id),
 	CONSTRAINT uq_career_application_cycle UNIQUE (user_id, application_key),
-	KEY ix_career_application_cohort (user_id, contacted_at)
+	KEY ix_career_application_cohort (user_id, contacted_at),
+	KEY ix_career_application_status (user_id, application_status, updated_at),
+	KEY ix_career_application_validity (user_id, application_validity, updated_at),
+	KEY ix_career_application_job (user_id, encrypt_job_id, created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS career_application_event (

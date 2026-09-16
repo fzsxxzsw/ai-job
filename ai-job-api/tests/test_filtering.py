@@ -101,6 +101,12 @@ def test_clear_non_target_role_is_rejected_even_when_browser_title_rule_is_off(c
         "前端开发工程师",
         "Java后端开发",
         "算法训练工程师",
+        "测试开发工程师",
+        "自动化测试工程师（HZ）",
+        "策略与交易系统工程师（Rust，校招/初级）",
+        "数据开发",
+        "数据分析与处理工程师",
+        "大数据工程师（驻场宁波）",
     ):
         result = client.post(
             "/api/job/filter/one",

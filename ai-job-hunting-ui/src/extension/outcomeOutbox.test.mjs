@@ -43,6 +43,23 @@ test('observation contract preserves large opaque IDs, rejects identity injectio
     assert.equal(normalizeOutcomeObservation({...observation(), source: 'APPLICATION_FLOW', bossId: null, conversationKey: null, messages: []})?.source, 'APPLICATION_FLOW')
 })
 
+test('manual application discovery accepts only bounded explicit job fields and remains backward compatible', () => {
+    const application = {origin: 'MANUAL_DISCOVERED', source: 'BOSS_FRIEND_LIST', cycleKey: null,
+        jobTitle: '后端工程师', companyName: '示例科技', recruiterName: '招聘经理', salaryText: '20-30K',
+        locationText: '上海 浦东', jdText: null, jobBaseInfo: null, jobExtInfo: null,
+        sourceData: JSON.stringify({jobExperience: '3-5年'}), missingFields: ['jdText']}
+    const discovered = {...observation('manual-discovery'), platformAccount: '42', source: 'BOSS_CONTACT_DISCOVERED',
+        messages: [], application}
+    const normalized = normalizeOutcomeObservation(discovered)
+    assert.equal(normalized.application.origin, 'MANUAL_DISCOVERED')
+    assert.equal(normalized.application.sourceData.includes('3-5年'), true)
+    assert.deepEqual(normalized.application.missingFields, ['jdText'])
+    assert.equal(normalizeOutcomeObservation({...discovered, application: {...application, token: 'forbidden'}}), null)
+    assert.equal(normalizeOutcomeObservation({...discovered, application: {...application, missingFields: ['jdText', 'jdText']}}), null)
+    assert.equal(normalizeOutcomeObservation({...discovered, application: null}), null)
+    assert.ok(normalizeOutcomeObservation(observation('legacy-without-descriptor')))
+})
+
 test('durable outbox survives restart, never stores token with facts, retries identical first observation and deduplicates repeated stream', async () => {
     const rig = setup()
     let box = rig.create()

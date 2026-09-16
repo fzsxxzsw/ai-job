@@ -8,6 +8,7 @@ from ..database import dumps
 
 Window = Literal[7, 14, 30]
 EventType = Literal[
+    "APPLICATION_DISCOVERED",
     "CONTACT_INITIATED",
     "RESUME_SENT",
     "HR_REPLIED",

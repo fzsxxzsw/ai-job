@@ -8,11 +8,36 @@ Outcome = Literal["WAITING", "NO_REPLY", "REPLIED", "POSITIVE", "REJECTED", "UNK
 ReadState = Literal["READ", "UNREAD", "UNKNOWN"]
 Source = Literal[
     "APPLICATION_FLOW",
+    "BOSS_CONTACT_DISCOVERED",
     "BOSS_PASSIVE_MESSAGE",
     "BOSS_SEND_ACK",
     "BOSS_CONVERSATION_SNAPSHOT",
     "BOSS_EXACT_MESSAGE_STATUS",
 ]
+ApplicationField = Literal[
+    "jobTitle",
+    "companyName",
+    "recruiterName",
+    "salaryText",
+    "locationText",
+    "jdText",
+]
+
+
+class ApplicationDescriptor(Input):
+    origin: Literal["ASSISTANT", "MANUAL_DISCOVERED"]
+    source: Literal["ASSISTANT_SNAPSHOT", "BOSS_FRIEND_LIST"]
+    cycleKey: str | None = Field(default=None, min_length=1, max_length=128)
+    jobTitle: str | None = Field(default=None, min_length=1, max_length=255)
+    companyName: str | None = Field(default=None, min_length=1, max_length=255)
+    recruiterName: str | None = Field(default=None, min_length=1, max_length=255)
+    salaryText: str | None = Field(default=None, min_length=1, max_length=255)
+    locationText: str | None = Field(default=None, min_length=1, max_length=500)
+    jdText: str | None = Field(default=None, min_length=1, max_length=60000)
+    jobBaseInfo: str | None = Field(default=None, max_length=30000)
+    jobExtInfo: str | None = Field(default=None, max_length=60000)
+    sourceData: str | None = Field(default=None, max_length=20000)
+    missingFields: list[ApplicationField] = Field(default_factory=list, max_length=6)
 
 
 class Message(Input):
@@ -46,6 +71,7 @@ class Coverage(Input):
 
 class Observation(Input):
     eventId: str = Field(min_length=1, max_length=128)
+    platformAccount: str | None = Field(default=None, min_length=1, max_length=255)
     encryptJobId: str = Field(min_length=1, max_length=255)
     conversationKey: str | None = Field(default=None, min_length=1, max_length=255)
     bossId: str | None = Field(default=None, min_length=1, max_length=80)
@@ -55,6 +81,7 @@ class Observation(Input):
     messages: list[Message] = Field(default_factory=list, max_length=40)
     readEvidence: ReadEvidence | None = None
     coverage: Coverage | None = None
+    application: ApplicationDescriptor | None = None
 
     @model_validator(mode="after")
     def coherent(self) -> Self:
@@ -63,6 +90,11 @@ class Observation(Input):
                 raise ValueError("Application intent cannot assert message evidence")
         elif not self.conversationKey or not self.bossId:
             raise ValueError("Message evidence requires verified conversation/peer binding")
+        elif self.source == "BOSS_CONTACT_DISCOVERED":
+            if not self.application or self.application.origin != "MANUAL_DISCOVERED":
+                raise ValueError("Contact discovery requires a manual application descriptor")
+            if self.messages or self.readEvidence or self.coverage:
+                raise ValueError("Contact discovery cannot assert message or status evidence")
         elif not (self.messages or self.readEvidence or self.coverage):
             raise ValueError("An observation requires actual message or status evidence")
         if self.coverage and self.source != "BOSS_CONVERSATION_SNAPSHOT":

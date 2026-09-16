@@ -363,6 +363,9 @@ implementation_context:
 - [inferred] Manual submissions do not need a fabricated contact timestamp. Use `APPLICATION_DISCOVERED` and exact observation time; only assistant cycles use `CONTACT_INITIATED` for causal filtering.
 - [inferred] “已读未回就是婉拒” is implemented after the existing no-reply deadline/coverage proof, preventing an immediate read receipt from becoming a false rejection.
 - [verified] Experience-year wording is stored as raw job data only; it is explicitly excluded from hard rejection/risk logic.
+- [verified] User-confirmed off-target samples require an orthogonal application-validity projection. `INVALID` never replaces read/rejection/interview status; it only makes the application ineligible for rejection-rate and strategy-effect cohorts.
+- [verified] Invalidity reasons are multi-evidence and auditable: off-target role family, configured employment exclusion, and the complete advertised salary band falling outside the configured hard range. A partial salary overlap is not eligible.
+- [verified] The screenshot examples are covered by deterministic fixtures: testing/QA, Rust trading systems, data engineering, the specific data-analysis-and-processing role, CV/image work, on-site/dispatch exclusions, and excessive salary maximum. No live BOSS interaction is required.
 
 ### Deferred follow-up
 
@@ -373,6 +376,9 @@ implementation_context:
 
 - One exact canonical application row is created/enriched for both assistant and manually submitted/observed application cycles.
 - Origin, exact binding, normalized title/company/recruiter/salary/location/JD, raw snapshot, completeness/missing fields, read state, current business status, evidence, and timestamps are queryable.
+- Application validity, primary reason code, all reason evidence, evaluation timestamp, and the derived rejection-analysis eligibility are queryable without erasing the original outcome.
+- Historical rows are reclassified during the ledger backfill, and future assistant/manual observations are classified at insert and enrichment time.
+- Invalid applications are retained and visible but excluded from reply/rejection/interview strategy cohorts; experience-year wording remains advisory.
 - Exact conversation messages reference the correct application where resolution is unique; ambiguous history remains unlinked and reported.
 - `UNREAD`, `READ`, `SOFT_REJECTED`, `EXPLICIT_REJECTED`, and `INTERVIEW_SCHEDULED` mappings are covered by deterministic tests and do not regress under replay/out-of-order evidence.
 - Assistant and passive/manual observations are idempotent and converge without duplicate applications or events.

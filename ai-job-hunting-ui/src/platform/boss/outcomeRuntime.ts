@@ -21,6 +21,7 @@ let syncInFlight: Promise<void> | null = null
 let inspectAfterRestore: (() => void) | null = null
 let restoredAnchors = ''
 let captureDiagnostic = {identity: '', message: ''}
+const MAX_PENDING_OUTCOME_FACTS = 512
 
 function sessionContext() {
     const authorization = localStorage.getItem('Authorization') || ''
@@ -89,7 +90,7 @@ function queue(observation: Omit<OutcomeObservation, 'eventId'>) {
     }
     void semanticId(first).then(eventId => {
         if (captured !== identity || pending.has(eventId) || deliveredFacts.has(eventId)) return
-        if (pending.size >= 128) { snapshot.error = '本页分析观察队列已满，等待后台恢复'; notify(); return }
+        if (pending.size >= MAX_PENDING_OUTCOME_FACTS) { snapshot.error = '本页分析观察队列已满，等待后台恢复'; notify(); return }
         pending.set(eventId, {identity: captured, observation: {...first, eventId}})
         void synchronize()
     }).catch(() => { snapshot.error = '观察暂未保存'; notify() })
@@ -176,8 +177,12 @@ export function observeOutcomeApplication(encryptJobId: string, expectedContext:
         if (!expectedContext || expectedContext !== captureOutcomeContext()) return
         ensureIdentity()
         const now = Date.now()
-        queue({encryptJobId, conversationKey: null, bossId: null, source: 'APPLICATION_FLOW', observedAt: now,
-            bindingObservedAt: now, messages: [], readEvidence: null, coverage: null})
+        const missingFields = ['jobTitle', 'companyName', 'recruiterName', 'salaryText', 'locationText', 'jdText'] as const
+        queue({platformAccount: sessionContext().platformAccount || null, encryptJobId, conversationKey: null, bossId: null,
+            source: 'APPLICATION_FLOW', observedAt: now, bindingObservedAt: now, messages: [], readEvidence: null,
+            coverage: null, application: {origin: 'ASSISTANT', source: 'ASSISTANT_SNAPSHOT', cycleKey: `assistant:${now}`,
+                jobTitle: null, companyName: null, recruiterName: null, salaryText: null, locationText: null, jdText: null,
+                jobBaseInfo: null, jobExtInfo: null, sourceData: null, missingFields: [...missingFields]}})
         start()
     } catch { /* successful delivery/snapshot remain successful */ }
 }

@@ -9,8 +9,9 @@ function parseSalaryRange(value: string): [number, number] | null {
 }
 
 /**
- * A configured salary range is a hard application boundary. Unknown or
- * unparsable job salaries fail closed so the assistant cannot apply outside it.
+ * A configured salary range is a hard application boundary for the complete
+ * advertised band. A partial overlap is not enough: 15-30K is outside 13-18K.
+ * Unknown or unparsable job salaries fail closed.
  */
 export function isSalaryWithinConfiguredRange(configuredRange: string, jobSalary: string): boolean {
     const configured = parseSalaryRange(configuredRange)
@@ -18,5 +19,5 @@ export function isSalaryWithinConfiguredRange(configuredRange: string, jobSalary
 
     const offered = parseSalaryRange(jobSalary)
     if (!offered) return false
-    return !(configured[1] < offered[0] || offered[1] < configured[0])
+    return configured[0] <= offered[0] && offered[1] <= configured[1]
 }

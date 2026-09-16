@@ -30,12 +30,13 @@
                             <tbody><tr v-for="row in metricRows" :key="row.key"><td>{{ row.label }}</td><td>{{ row.numerator }} / {{ row.denominator }}</td><td>{{ row.rateLabel }}</td><td>{{ row.readiness }}</td><td><el-button size="small" :disabled="!!busy" @click="drilldown(row)">查看记录</el-button></td></tr></tbody>
                         </table>
                         <p>当前比例用于跟踪真实进展；满 {{ analytics.windowDays }} 天且证据完整的记录才进入稳定复盘，供智能体调整投递方向、简历版本和回复建议。</p>
-                        <p>尚未到观察时间 {{ analytics.excludedCounts.immature }} · 沟通记录未确认 {{ analytics.excludedCounts.unverifiedContact }} · 发送的简历版本未知 {{ analytics.excludedCounts.unknownExposure }} · 同一投递出现多个版本 {{ analytics.excludedCounts.mixedExposure }}</p>
+                        <p>无效投递（不计入拒绝分析） {{ analytics.excludedCounts.invalidApplication || 0 }} · 尚未到观察时间 {{ analytics.excludedCounts.immature }} · 沟通记录未确认 {{ analytics.excludedCounts.unverifiedContact }} · 发送的简历版本未知 {{ analytics.excludedCounts.unknownExposure }} · 同一投递出现多个版本 {{ analytics.excludedCounts.mixedExposure }}</p>
                         <ul><li v-for="item in analytics.uncertainties" :key="item">{{ item }}</li></ul>
                     </template>
                     <p v-if="!applications.length">当前页没有投递记录。导入历史记录后，系统会保留当时资料；无法确认的附件版本会明确标为未知。</p>
                     <details v-for="application in applications" :key="application.applicationId">
-                        <summary>{{ application.jobTitle || application.encryptJobId }} · 当前进展：{{ eventLabel(application.currentStage) }} · 最终结果：{{ eventLabel(application.outcome) }}</summary>
+                        <summary>{{ application.jobTitle || application.encryptJobId }} · {{ validityLabel(application) }} · 当前进展：{{ eventLabel(application.currentStage) }} · 最终结果：{{ eventLabel(application.outcome) }}</summary>
+                        <p v-if="!application.analysisEligible" class="career-warning">这条投递仍保留完整结果和聊天证据，但不会用于判断简历拒绝率或调整投递策略。</p>
                         <p>发起沟通 {{ formatTime(application.contactedAt) }} · 实际发送的简历：{{ exposureLabel(application.resumeExposure) }}</p>
                         <p>准备版本 {{ application.preparedResumeVersionId || '未选择' }} · 下一轮策略 {{ application.strategyPlanId || '未选择' }}</p>
                         <ol><li v-for="event in application.events" :key="event.eventId">{{ formatTime(event.occurredAt) }} · {{ eventLabel(event.eventType) }} · {{ confirmationLabel(event.confirmation) }}<blockquote v-if="event.evidence.quote">{{ event.evidence.quote }}</blockquote><small v-if="event.supersedesEventId">纠正原事件 {{ event.supersedesEventId }}，原记录保留。</small><el-button size="small" :disabled="!!busy" @click="openEvent(application, event.eventId)">追加纠正</el-button></li></ol>
@@ -186,6 +187,9 @@ const versionName = (version: ResumeVersion) => `${formatTime(version.createdAt)
 const exposureLabel = (exposure: CareerApplication['resumeExposure']) => exposure.state === 'MIXED' ? '混合版本' : exposure.state === 'VERIFIED' && exposure.verificationKind === 'USER_CONFIRMED' ? '你已确认版本' : '未知'
 const confirmationLabel = (value: string) => ({OBSERVED: '已观察', USER_CONFIRMED: '你已确认', INFERRED: '推断，未计入确认指标'} as Record<string, string>)[value] || value
 const eventLabel = (value: string) => ({UNKNOWN: '尚未核实', OPEN: '尚无终局结果', CONTACT_INITIATED: '发起沟通', RESUME_SENT: '发送简历', HR_REPLIED: 'HR 回复', INTERVIEW_INVITED: '面试邀约', INTERVIEW_COMPLETED: '面试完成', REJECTED: '拒绝', OFFER_RECEIVED: '收到 Offer', WITHDRAWN: '撤回', CORRECTION: '纠正'} as Record<string, string>)[value] || value || '尚未核实'
+const validityLabel = (application: CareerApplication) => application.applicationValidity === 'INVALID'
+    ? ({ROLE_TESTING: '无效投递：测试方向', ROLE_TRADING_SYSTEM: '无效投递：交易系统方向', ROLE_DATA_ENGINEERING: '无效投递：数据工程方向', ROLE_DATA_ANALYSIS: '无效投递：数据分析方向', ROLE_CV_IMAGE: '无效投递：图像视觉方向', SALARY_OUTSIDE_TARGET: '无效投递：薪资档位超界', EMPLOYMENT_EXCLUSION: '无效投递：用工条件不符'} as Record<string, string>)[application.validityReasonCode || ''] || '无效投递'
+    : application.applicationValidity === 'VALID' ? '有效投递' : '投递有效性待补资料'
 const categoryLabel = (value: string) => ({MAIN: '主要方向', EXPLORE: '探索方向', PAUSE: '暂缓'} as Record<string, string>)[value] || value
 function reset() {
     versions.value = []; applications.value = []; analytics.value = null; review.value = null; reviewJobs.value = []; strategies.value = []; deletion.value = null

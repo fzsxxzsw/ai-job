@@ -11,7 +11,8 @@ export type CareerEventInput = {requestId: string; eventType: typeof CAREER_EVEN
     evidence: {source: 'USER_CONFIRMATION' | 'USER_NOTE'; referenceId: string | null; quote: string; resumeVersionId?: string; contentHash?: string}
     confirmation: 'USER_CONFIRMED' | 'INFERRED'; supersedesEventId: string | null}
 export type CareerApplication = {applicationId: string; platformAccount: string; encryptJobId: string; conversationKey: string | null
-    bossId: string | null; cycleKey: string; jobTitle: string; createdAt: number; contactedAt: number | null; status: string
+    bossId: string | null; cycleKey: string; jobTitle: string; salaryText: string | null; createdAt: number; contactedAt: number | null; status: string
+    applicationValidity: 'UNKNOWN' | 'VALID' | 'INVALID'; validityReasonCode: string | null; analysisEligible: boolean
     currentStage: 'UNKNOWN' | 'CONTACT_INITIATED' | 'HR_REPLIED' | 'INTERVIEW_INVITED' | 'INTERVIEW_COMPLETED' | 'OFFER_RECEIVED'
     outcome: 'OPEN' | 'REJECTED' | 'OFFER_RECEIVED' | 'WITHDRAWN'
     preparedResumeVersionId: string | null; strategyPlanId: string | null
@@ -27,7 +28,7 @@ export type CareerAnalytics = {metricVersion: 'career-cohort-v1'; windowDays: 7 
     progressCounts: {contacted: number; replied: number; interviewed: number; offers: number}
     progressSampleIds: {contacted: string[]; replied: string[]; interviewed: string[]; offers: string[]}
     metrics: {replyRate: CareerMetric; interviewRate: CareerMetric; offerRate: CareerMetric; resumeInterviewRate: CareerMetric}; withdrawnCount: number; everInterviewedCount: number
-    excludedCounts: {immature: number; unverifiedContact: number; unknownExposure: number; mixedExposure: number}; uncertainties: string[]}
+    excludedCounts: {invalidApplication: number; immature: number; unverifiedContact: number; unknownExposure: number; mixedExposure: number}; uncertainties: string[]}
 export type CareerPatch = {patchId: string; sectionId: string; originalText: string; proposedText: string; reasonType: string
     factIds: string[]; feedbackEventIds: string[]; jdRefs: string[]; unansweredQuestions: string[]
     verificationStatus: 'SOURCE_SUPPORTED' | 'NEEDS_USER_INPUT'}

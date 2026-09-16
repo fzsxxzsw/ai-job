@@ -1,12 +1,38 @@
-import type {OutcomeAnchor, OutcomeCoverage, OutcomeMessage, OutcomeObservation, OutcomeReadEvidence} from '../../extension/outcomesProtocol.ts'
+import type {OutcomeAnchor, OutcomeApplicationDescriptor, OutcomeApplicationField, OutcomeCoverage, OutcomeMessage, OutcomeObservation, OutcomeReadEvidence} from '../../extension/outcomesProtocol.ts'
 
-export type OutcomeBinding = {encryptJobId: string; conversationKey: string; bossId: string; observedAt: number}
+export type OutcomeBinding = {encryptJobId: string; conversationKey: string; bossId: string; observedAt: number; application: OutcomeApplicationDescriptor | null}
 export type KnownOutbound = {binding: OutcomeBinding; message: OutcomeMessage; clientMid: string; serverMid: string}
 export type TerminalProof = {
     conversationKey: string; bossId: string; checkedAt: number; latestMessageId: string
     terminalVerified: true; continuousAfterAnchor: boolean; messageIds: string[]
 }
 const BINDING_TTL = 30 * 60_000
+
+function boundedText(value: unknown, limit: number): string | null {
+    const text = typeof value === 'string' || typeof value === 'number' ? String(value).trim() : ''
+    return text ? text.slice(0, limit) : null
+}
+export function passiveApplicationDescriptor(friend: any): OutcomeApplicationDescriptor {
+    const locationText = [friend?.cityName, friend?.areaDistrict, friend?.businessDistrict, friend?.address]
+        .map(value => boundedText(value, 200)).filter(Boolean).filter((value, index, values) => values.indexOf(value) === index).join(' ') || null
+    const descriptor: OutcomeApplicationDescriptor = {
+        origin: 'MANUAL_DISCOVERED', source: 'BOSS_FRIEND_LIST', cycleKey: null,
+        jobTitle: boundedText(friend?.title ?? friend?.jobName ?? friend?.positionTitle, 255),
+        companyName: boundedText(friend?.brandName ?? friend?.companyName, 255),
+        recruiterName: boundedText(friend?.name ?? friend?.recruiterName, 255),
+        salaryText: boundedText(friend?.salaryDesc ?? friend?.salary, 255), locationText,
+        jdText: boundedText(friend?.postDescription ?? friend?.jobDescription, 60000),
+        jobBaseInfo: null, jobExtInfo: null,
+        sourceData: JSON.stringify({brandName: boundedText(friend?.brandName, 255), title: boundedText(friend?.title, 255),
+            recruiterName: boundedText(friend?.name, 255), salaryDesc: boundedText(friend?.salaryDesc, 255),
+            cityName: boundedText(friend?.cityName, 120), areaDistrict: boundedText(friend?.areaDistrict, 120),
+            businessDistrict: boundedText(friend?.businessDistrict, 120), jobExperience: boundedText(friend?.jobExperience, 120),
+            jobDegree: boundedText(friend?.jobDegree, 120)}).slice(0, 20000), missingFields: [],
+    }
+    const fields: OutcomeApplicationField[] = ['jobTitle', 'companyName', 'recruiterName', 'salaryText', 'locationText', 'jdText']
+    descriptor.missingFields = fields.filter(field => !descriptor[field])
+    return descriptor
+}
 
 export function exactPlatformId(value: unknown): string {
     if (typeof value === 'number' && !Number.isSafeInteger(value)) return ''
@@ -74,17 +100,18 @@ export function createPassiveOutcomeCollector(emit: (observation: Omit<OutcomeOb
     const outbounds = new Map<string, KnownOutbound>()
     const acks = new Map<string, {serverMid: string; observedAt: number}>()
     const sentReads = new Set<string>()
+    const discoveries = new Map<string, string>()
     const pending = new Map<string, PendingMessage>()
     let discarded = 0
     let account = ''
     function changeAccount(next: string) {
         if (next === account) return
-        account = next; bindings.clear(); outbounds.clear(); acks.clear(); sentReads.clear(); pending.clear(); discarded = 0
+        account = next; bindings.clear(); outbounds.clear(); acks.clear(); sentReads.clear(); discoveries.clear(); pending.clear(); discarded = 0
     }
     function publish(binding: OutcomeBinding, source: OutcomeObservation['source'], messages: OutcomeMessage[], observedAt: number,
         readEvidence: OutcomeReadEvidence | null = null, coverage: OutcomeCoverage | null = null) {
-        emit({encryptJobId: binding.encryptJobId, conversationKey: binding.conversationKey, bossId: binding.bossId,
-            source, observedAt, bindingObservedAt: binding.observedAt, messages, readEvidence, coverage})
+        emit({platformAccount: account, encryptJobId: binding.encryptJobId, conversationKey: binding.conversationKey, bossId: binding.bossId,
+            source, observedAt, bindingObservedAt: binding.observedAt, messages, readEvidence, coverage, application: binding.application})
     }
     function acknowledge(clientMid: string, serverMid: string, observedAt: number) {
         if (!exactPlatformId(clientMid) || !exactPlatformId(serverMid) || clientMid === serverMid) return
@@ -144,7 +171,7 @@ export function createPassiveOutcomeCollector(emit: (observation: Omit<OutcomeOb
                 const key = anchor.clientMid || `server:${anchor.binding.encryptJobId}:${anchor.serverMid}`
                 const previous = outbounds.get(key)
                 if (previous && (previous.binding.encryptJobId !== anchor.binding.encryptJobId || previous.serverMid && previous.serverMid !== anchor.serverMid)) continue
-                outbounds.set(key, {binding: {...anchor.binding}, message: {...anchor.message}, clientMid: anchor.clientMid, serverMid: anchor.serverMid})
+                outbounds.set(key, {binding: {...anchor.binding, application: null}, message: {...anchor.message}, clientMid: anchor.clientMid, serverMid: anchor.serverMid})
             }
         },
         bind(raw: any[], ownAccount: unknown, observedAt: number, proof?: MessageBindingProof) {
@@ -157,8 +184,17 @@ export function createPassiveOutcomeCollector(emit: (observation: Omit<OutcomeOb
                 const boss = typeof friend?.encryptBossId === 'string' ? friend.encryptBossId : ''
                 const security = typeof friend?.securityId === 'string' ? friend.securityId : ''
                 if (!bossId || !job || !boss || !security) continue
-                const binding = {encryptJobId: job, conversationKey: `${boss}:${security}`, bossId, observedAt}
+                const application = passiveApplicationDescriptor(friend)
+                const binding = {encryptJobId: job, conversationKey: `${boss}:${security}`, bossId, observedAt, application}
                 bindings.set(bossId, binding)
+                const discoveryKey = `${job}:${binding.conversationKey}:${bossId}`
+                const discoveryValue = JSON.stringify(application)
+                const hasJobMetadata = !!(application.jobTitle || application.companyName || application.recruiterName
+                    || application.salaryText || application.locationText || application.jdText)
+                if (hasJobMetadata && discoveries.get(discoveryKey) !== discoveryValue) {
+                    discoveries.set(discoveryKey, discoveryValue)
+                    publish(binding, 'BOSS_CONTACT_DISCOVERED', [], observedAt)
+                }
                 for (const [key, item] of pending) {
                     if (!provesBinding(item, binding, proof)) continue
                     deliver(item.raw, item.text, item.observedAt, binding)

@@ -272,6 +272,43 @@ def test_five_confirmed_or_corrected_required_and_corrections_clear(client, worl
         )
 
 
+def test_confirmed_invalid_application_is_excluded_from_rejection_summary(client, world):
+    reports = [
+        analysis(client, {**ANALYSIS, "encryptJobId": f"Eligible-Job-{index}"})
+        for index in range(5)
+    ]
+    for report in reports:
+        client.post(BASE + f"/{report['id']}/feedback", json={"action": "CONFIRM"})
+    assert client.get(BASE + "/summary").json()["data"]["totalConfirmed"] == 5
+
+    now = int(time.time() * 1000)
+    with sqlite3.connect(world["path"]) as connection:
+        connection.execute(
+            "INSERT INTO career_application("
+            "id,user_id,application_key,platform_account,encrypt_job_id,cycle_key,origin,"
+            "application_validity,validity_reason_code,data_json,created_at,updated_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                "invalid-summary-application",
+                3,
+                "invalid-summary-key",
+                "boss-owner",
+                "Eligible-Job-0",
+                "manual:invalid-summary",
+                "MANUAL_DISCOVERED",
+                "INVALID",
+                "ROLE_TESTING",
+                "{}",
+                now,
+                now,
+            ),
+        )
+    summary = client.get(BASE + "/summary").json()["data"]
+    assert summary["visible"] is False
+    assert summary["totalConfirmed"] == 4
+    assert summary["categoryCounts"] == {}
+
+
 def test_old_reports_remain_readable_and_malformed_data_is_not_destroyed(client, world):
     report = analysis(client)
     legacy = {

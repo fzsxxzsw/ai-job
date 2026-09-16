@@ -255,6 +255,9 @@ def _merged_values(existing: dict, incoming: dict) -> dict:
     if existing["text"] and incoming["text"]:
         if existing["text_hash"] != incoming["text_hash"]:
             raise ApiError("CONVERSATION_TEXT_CONFLICT", 409)
+    if existing["application_id"] and incoming["application_id"]:
+        if existing["application_id"] != incoming["application_id"]:
+            raise ApiError("CONVERSATION_APPLICATION_CONFLICT", 409)
 
     author = existing["author_kind"]
     incoming_author = incoming["author_kind"]
@@ -291,6 +294,7 @@ def _merged_values(existing: dict, incoming: dict) -> dict:
 
     text = existing["text"] or incoming["text"]
     values = dict(
+        application_id=existing["application_id"] or incoming["application_id"],
         client_mid=existing["client_mid"] or incoming["client_mid"],
         author_kind=author,
         text=text,
@@ -329,6 +333,7 @@ async def upsert_message(
     delivery_state: str,
     order_confidence: str,
     source: str,
+    application_id: str | None = None,
     model_eligible: bool = True,
     causal_after_message_id: str | None = None,
 ) -> dict:
@@ -355,6 +360,7 @@ async def upsert_message(
     incoming = dict(
         id=str(uuid4()),
         user_id=uid,
+        application_id=application_id,
         conversation_id=cid,
         platform_account=platform_account,
         conversation_key=conversation_key,
@@ -452,13 +458,20 @@ async def upsert_message(
 
 
 async def project_observations(
-    db, c, uid: int, observations, *, platform_account: str | None = None
+    db,
+    c,
+    uid: int,
+    observations,
+    *,
+    platform_account: str | None = None,
+    application_ids: dict[str, str] | None = None,
 ) -> dict:
     """Project exact observation messages without coupling model history to outcome JSON."""
     stats = {"inserted": 0, "updated": 0, "skipped": 0}
     if not platform_account:
         owner = await db.user(uid, c)
         platform_account = (owner or {}).get("unique_id")
+    application_ids = application_ids or {}
     for observation in observations:
         binding = dict(
             platform_account=_value(observation, "platformAccount", "") or platform_account or "",
@@ -502,6 +515,7 @@ async def project_observations(
                 if sent_at
                 else ("ACK" if delivery == "ACKNOWLEDGED" else "OBSERVED"),
                 source="OUTCOME:" + str(source),
+                application_id=application_ids.get(_value(observation, "eventId")),
                 causal_after_message_id=previous_snapshot_mid
                 if source == "BOSS_CONVERSATION_SNAPSHOT"
                 else None,

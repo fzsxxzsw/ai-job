@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {readFileSync} from 'node:fs'
-import {createPassiveOutcomeCollector, exactDomReadEvidence, exactPlatformId, verifiedOutcomeCoverage} from './outcomeCollector.ts'
+import {createPassiveOutcomeCollector, exactDomReadEvidence, exactPlatformId, passiveApplicationDescriptor, verifiedOutcomeCoverage} from './outcomeCollector.ts'
 import {normalizeOutcomeObservation} from '../../extension/outcomesProtocol.ts'
 
 const now = 1788757200000, own = '40', peer = '81', cmid = '90071992547409931', mid = '90071992547409932'
@@ -137,4 +137,36 @@ test('page restart restores accepted historical anchors, including server-ID-onl
     assert.equal(read.readEvidence.messageId, mid)
     assert.ok(normalizeOutcomeObservation({...read, eventId: 'read-recovered'}))
     assert.equal(normalizeOutcomeObservation({...read, eventId: 'invalid-old-read', messages: [outbound.message]}), null)
+})
+
+test('friend-list metadata emits one passive manual application snapshot and records missing fields honestly', () => {
+    const events = [], collector = createPassiveOutcomeCollector(value => events.push(value))
+    const rich = {...friend, title: '后端工程师', brandName: '示例科技', name: '招聘经理', salaryDesc: '20-30K',
+        cityName: '上海', areaDistrict: '浦东', jobExperience: '3-5年'}
+    const descriptor = passiveApplicationDescriptor(rich)
+    assert.equal(descriptor.jobTitle, '后端工程师')
+    assert.equal(descriptor.locationText, '上海 浦东')
+    assert.equal(descriptor.sourceData.includes('3-5年'), true)
+    assert.deepEqual(descriptor.missingFields, ['jdText'])
+    collector.bind([rich], own, now)
+    assert.equal(events.length, 1)
+    assert.equal(events[0].source, 'BOSS_CONTACT_DISCOVERED')
+    assert.equal(events[0].platformAccount, own)
+    assert.deepEqual(events[0].messages, [])
+    assert.equal(events[0].application.companyName, '示例科技')
+    assert.ok(normalizeOutcomeObservation({...events[0], eventId: 'manual-friend-discovery'}))
+    collector.bind([rich], own, now + 1)
+    assert.equal(events.length, 1)
+})
+
+test('a full 199-contact response is discoverable without overflowing the page observation queue', () => {
+    const events = [], collector = createPassiveOutcomeCollector(value => events.push(value))
+    const contacts = Array.from({length: 199}, (_, index) => ({uid: String(1000 + index),
+        encryptJobId: `Job-${index}`, encryptBossId: `Boss-${index}`, securityId: `Security-${index}`,
+        title: `工程师-${index}`, brandName: `公司-${index}`, name: `招聘-${index}`}))
+    collector.bind(contacts, own, now)
+    assert.equal(events.length, 199)
+    assert.equal(events.every(event => event.source === 'BOSS_CONTACT_DISCOVERED'), true)
+    const runtime = readFileSync(new URL('./outcomeRuntime.ts', import.meta.url), 'utf8')
+    assert.match(runtime, /MAX_PENDING_OUTCOME_FACTS\s*=\s*512/)
 })

@@ -240,6 +240,26 @@ async def summary(db, uid: int) -> dict:
     rows = await db.rows(
         select(table).where(table.c.user_id == uid, table.c.status.in_(["CONFIRMED", "CORRECTED"]))
     )
+    applications = await db.rows(
+        select(db.table("career_application")).where(
+            db.table("career_application").c.user_id == uid
+        )
+    )
+    by_job: dict[str, list] = {}
+    by_snapshot: dict[int, list] = {}
+    for application in applications:
+        by_job.setdefault(application["encrypt_job_id"], []).append(application)
+        if application["legacy_snapshot_id"] is not None:
+            by_snapshot.setdefault(application["legacy_snapshot_id"], []).append(application)
+
+    def invalid_application(row) -> bool:
+        exact = by_snapshot.get(row["application_snapshot_id"], [])
+        if len(exact) == 1:
+            return exact[0]["application_validity"] == "INVALID"
+        candidates = by_job.get(row["encrypt_job_id"], [])
+        return len(candidates) == 1 and candidates[0]["application_validity"] == "INVALID"
+
+    rows = [row for row in rows if not invalid_application(row)]
     counts: dict[str, int] = {}
     for row in rows:
         report = report_view(row)
