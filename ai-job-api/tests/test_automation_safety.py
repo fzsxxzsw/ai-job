@@ -2,7 +2,9 @@ import json
 import sqlite3
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
+from threading import Event
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 from test_automation import (
@@ -190,6 +192,91 @@ def test_concurrent_compute_uses_one_durable_artifact(auto, world):
         )
     assert results[0]["artifactId"] == results[1]["artifactId"]
     assert len(world["fake"].calls) == 1
+
+
+def test_session_stop_after_claim_prevents_model_and_send_artifact(auto, world):
+    job = response(auto.post(BASE + "/jobs", json=reply_input()))
+    claim = response(
+        auto.post("/internal/automation/claim", json={"workerId": "worker"}, headers=INTERNAL)
+    )
+    lease = {key: claim[key] for key in ("leaseToken", "revision", "inputHash")}
+    root = "/internal/automation/jobs/" + job["jobId"]
+    response(auto.post(root + "/gather", json=lease, headers=INTERNAL))
+    response(
+        auto.post(
+            "/api/job/seeker/cloned/change/session/status",
+            params={"jobKey": "JobCase:boss-owner", "stop": True},
+        )
+    )
+
+    response(auto.post(root + "/compute", json=lease, headers=INTERNAL))
+
+    with sqlite3.connect(world["path"]) as connection:
+        artifact = json.loads(
+            connection.execute(
+                "SELECT artifact_json FROM automation_job WHERE id=?", (job["jobId"],)
+            ).fetchone()[0]
+        )
+    assert artifact["actions"] == []
+    assert artifact["result"]["decision"]["code"] == "STOP"
+    assert world["fake"].calls == []
+
+
+def test_session_stop_during_graph_model_discards_stale_send_artifact(world):
+    started, release = Event(), Event()
+
+    def waiting_model(_request):
+        started.set()
+        assert release.wait(5)
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"content": "模型生成但已经失去权限的回复"}}]},
+        )
+
+    cfg = replace(
+        world["settings"],
+        automation_enabled=True,
+        outcome_internal_token=INTERNAL["X-Internal-Token"],
+    )
+    with TestClient(create_app(cfg, httpx.MockTransport(waiting_model))) as client:
+        client.headers["Authorization"] = response(
+            client.post("/api/user/silently/login", params={"uniqueId": "boss-owner"})
+        )
+        job = response(client.post(BASE + "/jobs", json=reply_input()))
+        claim = response(
+            client.post("/internal/automation/claim", json={"workerId": "worker"}, headers=INTERNAL)
+        )
+        lease = {key: claim[key] for key in ("leaseToken", "revision", "inputHash")}
+        root = "/internal/automation/jobs/" + job["jobId"]
+        response(client.post(root + "/gather", json=lease, headers=INTERNAL))
+        with ThreadPoolExecutor(1) as pool:
+            pending = pool.submit(
+                lambda: response(client.post(root + "/compute", json=lease, headers=INTERNAL))
+            )
+            assert started.wait(5)
+            with sqlite3.connect(world["path"]) as connection:
+                connection.execute(
+                    "INSERT OR REPLACE INTO py_api_control VALUES(3,?,?,1)",
+                    ("stop:JobCase:boss-owner", json.dumps(True)),
+                )
+                connection.execute(
+                    "INSERT OR REPLACE INTO py_api_control VALUES(3,?,?,1)",
+                    (
+                        "automation:session-authority-epoch:JobCase:boss-owner",
+                        json.dumps(1),
+                    ),
+                )
+            release.set()
+            pending.result(timeout=5)
+
+    with sqlite3.connect(world["path"]) as connection:
+        artifact = json.loads(
+            connection.execute(
+                "SELECT artifact_json FROM automation_job WHERE id=?", (job["jobId"],)
+            ).fetchone()[0]
+        )
+    assert artifact["actions"] == []
+    assert artifact["result"]["decision"]["code"] == "STOP"
 
 
 def test_foreign_owner_cannot_read_or_approve_job(auto, world):

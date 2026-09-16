@@ -3,6 +3,7 @@ import logger from "../logging";
 import {BossOption} from '../platform/bossPlatform';
 import {Tools} from "../platform/utils";
 import {TechwolfChatProtocol} from "./protobuf";
+import axios from "../axios";
 import {AiPower} from "../platform/aiPower";
 import {LogRecorder} from "../logging/record";
 import {UserStore} from "../stores";
@@ -18,8 +19,19 @@ import {shouldHandleManualOutgoingEcho} from "./manualOutgoing";
 import {appendRejectionMessage} from "../platform/boss/rejectionAnalysis";
 import {makeConversationKey} from "../platform/deliveryAudit";
 import {observeOutcomeAcknowledgement, observeOutcomeMessage} from '../platform/boss/outcomeRuntime';
-import {acknowledgeUnifiedAutomation} from '../platform/unifiedRuntime';
+import {acknowledgeUnifiedAutomation, unifiedAutomationEnabled} from '../platform/unifiedRuntime';
 import {classifyBossMessage, isOutcomeMessage} from '../platform/boss/messageClassifier';
+import {platformMessageTime} from '../platform/boss/outcomeCollector';
+import {automationRequestId} from '../platform/unifiedAutomation';
+import {
+    bindManualTakeoverFence,
+    confirmManualOutgoingEcho,
+    dispatchManualTakeoverMode,
+    markManualTakeoverPermanent,
+    markManualTakeoverSyncFailed,
+    recordProvisionalManualOutgoing,
+    synchronizeManualTakeoverFence,
+} from './manualTakeover';
 
 const WS_HOOK_LOCK_KEY = '__AI_JOB_HELPER_WS_HOOK_V2__'
 const existingHookStatus = Tools.window[WS_HOOK_LOCK_KEY]
@@ -61,6 +73,7 @@ const clientMidAliasCreatedAt = new Map<string, number>()
 const recentMessageAcks = new Map<string, {serverMid: string, receivedAt: number}>()
 const automatedOutgoingClientMids = new Map<string, number>()
 const recentManualOutgoingEvents = new Map<string, number>()
+const legacyManualStopPromises = new Map<string, Promise<{jobTitle: string, response: any}>>()
 const RECENT_ACK_TTL_MS = 10 * 60 * 1000
 const MANUAL_EVENT_TTL_MS = 15_000
 
@@ -107,25 +120,56 @@ function isAutomatedOutgoingMessage(message: any): boolean {
         .some(confirmation => confirmation.serverMid === messageMid)
 }
 
-function claimManualOutgoingEvent(message: any, toUid: number, text: string): boolean {
+function claimManualOutgoingEvent(
+    message: any,
+    toUid: number,
+    text: string,
+    phase: 'PROVISIONAL' | 'CONFIRMED',
+): boolean {
     const now = Date.now()
     for (const [key, handledAt] of recentManualOutgoingEvents) {
         if (now - handledAt >= MANUAL_EVENT_TTL_MS) recentManualOutgoingEvents.delete(key)
     }
-    const protocolId = normalizeProtocolId(message?.cmid ?? message?.clientMid
-        ?? message?.mid ?? message?.messageId)
+    const clientMid = normalizeProtocolId(message?.cmid ?? message?.clientMid)
+    const serverMid = normalizeProtocolId(message?.mid ?? message?.messageId)
+    const protocolId = phase === 'CONFIRMED'
+        ? [clientMid, serverMid].filter(Boolean).join(':')
+        : clientMid || serverMid
     let contentHash = 2166136261
     for (let index = 0; index < text.length; index++) {
         contentHash ^= text.charCodeAt(index)
         contentHash = Math.imul(contentHash, 16777619)
     }
     const keys = [
-        protocolId ? `id:${protocolId}` : '',
-        `content:${toUid}:${text.length}:${contentHash >>> 0}`,
+        protocolId ? `${phase}:id:${protocolId}` : '',
+        `${phase}:content:${toUid}:${text.length}:${contentHash >>> 0}`,
     ].filter(Boolean)
     if (keys.some(key => recentManualOutgoingEvents.has(key))) return false
     keys.forEach(key => recentManualOutgoingEvents.set(key, now))
     return true
+}
+
+function stopLegacyManualSession(
+    account: string,
+    bossId: string,
+    clientMid: string,
+    toUid: number,
+): Promise<{jobTitle: string, response: any}> {
+    const key = `${account}:${bossId}:${clientMid}`
+    const existing = legacyManualStopPromises.get(key)
+    if (existing) return existing
+    const operation = (async () => {
+        const bossUserInfo = BossOption.getBossUserInfoByCache(toUid)
+            || await new BossOption().getBossUserInfoByBossId(toUid)
+        if (!bossUserInfo) throw new Error('MANUAL_TAKEOVER_CONTACT_UNRESOLVED')
+        const response = await AiPower.updateAskStatus(BossOption.buildJobKey(bossUserInfo), true)
+        return {jobTitle: bossUserInfo.jobTitle, response}
+    })()
+    legacyManualStopPromises.set(key, operation)
+    setTimeout(() => {
+        if (legacyManualStopPromises.get(key) === operation) legacyManualStopPromises.delete(key)
+    }, MANUAL_EVENT_TTL_MS)
+    return operation
 }
 
 function getOpenChatSocket(): WebSocket | undefined {
@@ -452,31 +496,98 @@ setSendInterceptor((data) => {
         return data;
     }
 
-    // 不是 AI 发送的消息；用户手动介入后统一关闭该会话 AI。
-    if (claimManualOutgoingEvent(wsData.messages[0], toUid, msgText)) {
-        handleManualOutgoing(toUid)
+    // The send attempt establishes only a local fail-closed fence. Durable
+    // takeover starts after the platform publishes a distinct server MID.
+    if (claimManualOutgoingEvent(wsData.messages[0], toUid, msgText, 'PROVISIONAL')) {
+        handleManualOutgoing(wsData.messages[0], toUid, msgText, false)
     }
     return data;
 });
 
-function handleManualOutgoing(toUid: number): void {
-    void (async () => {
+function handleManualOutgoing(message: any, toUid: number, text: string, confirmed: boolean): void {
+    const account = normalizeProtocolId(Tools.window._PAGE?.uid)
+    const bossId = String(toUid)
+    const clientMid = normalizeProtocolId(message?.cmid ?? message?.clientMid ?? message?.mid)
+    const sentAt = platformMessageTime(message?.time, Date.now()) ?? Date.now()
+    if (!account || !clientMid) return
+    if (!confirmed) {
+        recordProvisionalManualOutgoing({account, bossId, clientMid, text, sentAt})
+        logRecorder.info(`手动回复已建立本地安全水位：bossId=${bossId}`)
+        void dispatchManualTakeoverMode(unifiedAutomationEnabled, {
+            unified: async () => undefined,
+            legacy: async () => {
+                const stopped = await stopLegacyManualSession(account, bossId, clientMid, toUid)
+                markManualTakeoverPermanent(account, bossId)
+                logRecorder.info(`[${stopped.jobTitle}] 旧版模式保持手动介入永久暂停：${stopped.response?.data?.data ?? ''}`)
+            },
+        }).catch(error => {
+            markManualTakeoverSyncFailed(account, bossId)
+            logRecorder.error('无法确认自动化模式或暂停旧版会话；当前会话保持本地阻断', error)
+        })
+        return
+    }
+    const serverMid = normalizeProtocolId(message?.mid ?? message?.messageId)
+    const fence = confirmManualOutgoingEcho({account, bossId, clientMid, serverMid, text, sentAt})
+    if (!fence) return
+    const activation = (async () => {
         try {
-            const bossUserInfo = BossOption.getBossUserInfoByCache(toUid)
-                || await new BossOption().getBossUserInfoByBossId(toUid)
-            if (!bossUserInfo) {
-                logRecorder.warn(`手动介入未能定位联系人：bossId=${toUid}`)
-                return
-            }
-            const response = await AiPower.updateAskStatus(
-                BossOption.buildJobKey(bossUserInfo),
-                true,
-            )
-            logRecorder.info(`[${bossUserInfo.jobTitle}] 手动介入关闭AI交流：${response.data.data}`)
+            await dispatchManualTakeoverMode(unifiedAutomationEnabled, {
+                legacy: async () => {
+                    const stopped = await stopLegacyManualSession(account, bossId, clientMid, toUid)
+                    markManualTakeoverPermanent(account, bossId)
+                    logRecorder.info(`[${stopped.jobTitle}] 旧版模式保持手动介入永久暂停：${stopped.response?.data?.data ?? ''}`)
+                },
+                unified: async () => {
+                    const bossUserInfo = BossOption.getBossUserInfoByCache(toUid)
+                        || await new BossOption().getBossUserInfoByBossId(toUid)
+                    if (!bossUserInfo) {
+                        throw new Error('MANUAL_TAKEOVER_CONTACT_UNRESOLVED')
+                    }
+                    const conversationKey = makeConversationKey(
+                        bossUserInfo.encryptBossId,
+                        bossUserInfo.securityId,
+                    )
+                    const encryptJobId = String(bossUserInfo.encryptJobId || '')
+                    const jobKey = BossOption.buildJobKey(bossUserInfo)
+                    const bound = bindManualTakeoverFence(account, bossId, {
+                        conversationKey,
+                        encryptJobId,
+                        jobKey,
+                    })
+                    if (!bound?.serverMid || !bound.throughInboundMessageId || !bound.throughInboundText
+                        || bound.uncertain || !conversationKey || !encryptJobId || !jobKey) {
+                        throw new Error('MANUAL_TAKEOVER_INBOUND_UNCERTAIN')
+                    }
+                    const requestId = await automationRequestId([
+                        'manual-takeover', account, bossId, bound.serverMid,
+                    ])
+                    const expectedAccount = account
+                    const result = await synchronizeManualTakeoverFence(account, bossId, requestId,
+                        async payload => (await axios.post('/api/job/automation/sessions/manual-takeover', payload, {
+                            timeout: 10_000,
+                            suppressGlobalErrorToast: true,
+                            jobHelperScopeGuard: () => normalizeProtocolId(Tools.window._PAGE?.uid) === expectedAccount,
+                        } as any)).data.data || {})
+                    if (normalizeProtocolId(Tools.window._PAGE?.uid) !== expectedAccount) {
+                        throw new Error('AUTOMATION_SCOPE_CHANGED')
+                    }
+                    BossOption.finalizeManualTakeoverInbound(
+                        toUid,
+                        bound.throughInboundMessageId,
+                        bound.throughInboundMessageId,
+                    )
+                    logRecorder.info(result.permanentPaused
+                        ? `[${bossUserInfo.jobTitle}] 本轮已人工处理；会话仍处于显式永久暂停`
+                        : `[${bossUserInfo.jobTitle}] 本轮已人工处理；下一条HR消息将恢复AI`)
+                },
+            })
         } catch (error) {
-            logRecorder.error('手动介入关闭AI交流失败', error)
+            markManualTakeoverSyncFailed(account, bossId)
+            logRecorder.error('人工接管水位同步失败；当前会话保持本地阻断', error)
+            throw error
         }
     })()
+    void activation.catch(() => undefined)
 }
 
 let userConfigLoad: Promise<void> | null = null
@@ -549,8 +660,11 @@ async function handleSingleReceivedChatMessage(wsData: TechwolfChatProtocol): Pr
             endChar: Tools.getEndChar(),
         })) {
             const toUid = normalizeNumber(message.to?.uid)
-            if (toUid && claimManualOutgoingEvent(message, toUid, msgBody)) {
-                handleManualOutgoing(toUid)
+            const clientMid = normalizeProtocolId(message?.cmid ?? message?.clientMid)
+            const serverMid = normalizeProtocolId(message?.mid ?? message?.messageId)
+            if (toUid && clientMid && serverMid && clientMid !== serverMid
+                && claimManualOutgoingEvent(message, toUid, msgBody, 'CONFIRMED')) {
+                handleManualOutgoing(message, toUid, msgBody, true)
             }
         }
         return;

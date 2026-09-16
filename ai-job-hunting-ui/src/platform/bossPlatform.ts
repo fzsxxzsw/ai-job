@@ -1,4 +1,5 @@
 import axiosOriginal from "axios";
+import axios from "../axios";
 import {captureOutcomeContext, observeOutcomeContacts, observeOutcomePeerAssociation} from './boss/outcomeRuntime';
 import {automationRequestId, type AutomationAction} from './unifiedAutomation';
 import {unifiedAutomationEnabled, submitAutomation, registerAutomationExecutor, holdUnifiedAutomation,
@@ -48,6 +49,16 @@ import {
     EMPTY_AI_REPLY_WARNING,
     normalizeSendableAiReply,
 } from "./aiReplySafety";
+import {
+    awaitManualTakeoverReadyForInbound,
+    bindManualTakeoverFence,
+    clearManualTakeoverFence,
+    consumeManualTakeoverAfterAcceptedInbound,
+    manualFenceBlocks,
+    observeManualTakeoverInbound,
+    readManualTakeoverFence,
+    synchronizeManualTakeoverFence,
+} from '../webSocket/manualTakeover';
 
 let userStore = null as any;
 
@@ -266,12 +277,31 @@ export class BossOption {
         const latest = BossOption.latestLiveInbound.get(`${context.account}:${context.bossId}`)
         if (latest && (latest.uncertain || latest.mid !== context.inboundMessageMid
             || latest.conversationKey && latest.conversationKey !== context.conversationKey)) return false
+        if (context.bossId && manualFenceBlocks(context.account, context.bossId)) return false
         if (!contact || !browserAutomationReady(context, action) || Tools.isHardBlockedCompany(contact.jobTitle)
             || String(contact.encryptJobId) !== action.payload.encryptJobId || String(contact.bossId) !== action.payload.bossId
             || makeConversationKey(contact.encryptBossId, contact.securityId) !== action.payload.conversationKey
             || checkConversationExclusion(localStorage, String(contact.bossId), userStore.user.preference, contact, context.question || '')) return false
         if (action.kind === 'SEND_RESUME' && !this.hasSameConversationTwoWayReply(contact)) return false
         return ['SEND_TEXT', 'SEND_RESUME', 'ACCEPT_PHONE', 'ACCEPT_WECHAT', 'ACCEPT_RESUME'].includes(action.kind)
+    }
+
+    public static finalizeManualTakeoverInbound(
+        bossId: number,
+        inboundMessageId: string,
+        inboundMessageMid: string | undefined,
+    ): void {
+        if (!BossOption.messageCache.isMessageProcessed(bossId, inboundMessageId)) {
+            BossOption.messageCache.markMessageAsProcessed(bossId, inboundMessageId)
+            if (inboundMessageMid) {
+                void new MessageRead({
+                    userId: bossId as any,
+                    messageId: inboundMessageMid as any,
+                }).send()
+            }
+        }
+        // Do not clear the DOM badge here. A newer HR message may have arrived
+        // while the takeover API was in flight; its unread state must survive.
     }
 
     private readConversationReplyLedger(): Record<string, ConversationReplyState> {
@@ -1022,11 +1052,19 @@ export class BossOption {
         const mid = exactPlatformId(msgObj.messages[0]?.mid)
         if (!recovered && mid) {
             const key = `${Tools.window._PAGE?.uid}:${bossId}`
+            const sentAt = platformMessageTime(msgObj.messages[0]?.time, Date.now())
             const contact = BossOption.bossUserInfoScope === captureOutcomeContext() ? BossOption.bossUserInfoMap.get(bossId) : undefined
             const conversationKey = contact ? makeConversationKey(contact.encryptBossId, contact.securityId) : null
             const observed = advanceInboundWatermark(BossOption.latestLiveInbound.get(key), mid,
-                platformMessageTime(msgObj.messages[0]?.time, Date.now()), BossOption.messageCache.isMessageProcessed(bossId, mid), conversationKey)
-            if (observed.state) BossOption.latestLiveInbound.set(key, observed.state)
+                sentAt, BossOption.messageCache.isMessageProcessed(bossId, mid), conversationKey)
+            if (observed.state) {
+                BossOption.latestLiveInbound.set(key, observed.state)
+            }
+            if (observed.accept && observed.state) {
+                observeManualTakeoverInbound({account: exactPlatformId(Tools.window._PAGE?.uid), bossId: String(bossId),
+                    mid: observed.state.mid, sentAt: observed.state.sentAt, text,
+                    conversationKey: observed.state.conversationKey, uncertain: observed.state.uncertain})
+            }
             if (!observed.accept) return Promise.resolve()
         }
         // One recruiter can emit several messages before the first AI request returns.
@@ -1088,7 +1126,12 @@ export class BossOption {
                 return;
             }
             const watermark = BossOption.latestLiveInbound.get(`${lookupAccount}:${bossId}`)
-            if (watermark?.mid === lookupMid) watermark.conversationKey = makeConversationKey(bossUserInfo.encryptBossId, bossUserInfo.securityId)
+            if (watermark?.mid === lookupMid) {
+                watermark.conversationKey = makeConversationKey(bossUserInfo.encryptBossId, bossUserInfo.securityId)
+                observeManualTakeoverInbound({account: lookupAccount, bossId: String(bossId), mid: watermark.mid,
+                    sentAt: watermark.sentAt, text, conversationKey: watermark.conversationKey,
+                    uncertain: watermark.uncertain})
+            }
 
             // 潮一相关联系人永久禁用 AI 坐席：不请求 AI、不自动发消息、不执行发送简历等动作。
             if (Tools.isHardBlockedCompany(bossUserInfo.jobTitle)) {
@@ -1125,11 +1168,65 @@ export class BossOption {
                 if (raw.body.type !== 1 && !exchangeKind) return
                 const conversationKey = makeConversationKey(bossUserInfo.encryptBossId, bossUserInfo.securityId)
                 const encryptJobId = String(bossUserInfo.encryptJobId)
+                const inboundSentAt = platformMessageTime(raw.time, Date.now())
+                const jobKey = BossOption.buildJobKey(bossUserInfo)
+                let localFence = readManualTakeoverFence(ownAccount, String(bossId))
+                if (localFence && ['CONFIRMED', 'SYNC_FAILED'].includes(localFence.status)) {
+                    localFence = bindManualTakeoverFence(ownAccount, String(bossId), {
+                        conversationKey, encryptJobId, jobKey,
+                    })
+                    if (!localFence?.serverMid) {
+                        holdUnifiedAutomation('人工接管水位与当前会话绑定不一致，已阻止自动回复')
+                        return
+                    }
+                    try {
+                        const retryRequestId = await automationRequestId([
+                            'manual-takeover', ownAccount, String(bossId), localFence.serverMid,
+                        ])
+                        await synchronizeManualTakeoverFence(ownAccount, String(bossId), retryRequestId,
+                            async payload => (await axios.post('/api/job/automation/sessions/manual-takeover', payload, {
+                                timeout: 10_000,
+                                suppressGlobalErrorToast: true,
+                                jobHelperScopeGuard: () => exactPlatformId(Tools.window._PAGE?.uid) === ownAccount,
+                            } as any)).data.data || {})
+                        localFence = readManualTakeoverFence(ownAccount, String(bossId))
+                    } catch (_) {
+                        holdUnifiedAutomation('人工接管水位重试失败，已保持阻断且不会自动发送')
+                        return
+                    }
+                }
+                if (localFence?.status === 'PERMANENT_PAUSED') {
+                    try {
+                        const status = (await axios.post('/api/job/automation/sessions/manual-takeover/status', {
+                            platformAccount: ownAccount,
+                            conversationKey,
+                            encryptJobId,
+                            bossId: String(bossId),
+                            jobKey,
+                        }, {suppressGlobalErrorToast: true} as any)).data.data
+                        if (status?.permanentPaused) {
+                            holdUnifiedAutomation('当前会话仍为显式永久暂停；请先点击“恢复当前会话 AI 回复”')
+                            return
+                        }
+                        clearManualTakeoverFence(ownAccount, String(bossId))
+                    } catch (_) {
+                        holdUnifiedAutomation('无法确认当前会话是否已恢复，已保持人工接管阻断')
+                        return
+                    }
+                }
+                const takeover = await awaitManualTakeoverReadyForInbound({account: ownAccount,
+                    bossId: String(bossId), mid: exactMid, sentAt: inboundSentAt, conversationKey})
+                if (!takeover.allowed) {
+                    holdUnifiedAutomation(takeover.reason === 'MANUAL_TAKEOVER_ACTIVE'
+                        ? '本轮消息已由人工处理，等待下一条HR消息'
+                        : '人工接管水位尚未安全同步，已阻止自动回复')
+                    return
+                }
                 const requestId = await automationRequestId(['reply', ownAccount, String(bossId), encryptJobId, exactMid])
                 this.markHrReply(bossUserInfo, exactMid)
                 await submitAutomation({requestId, kind: 'REPLY', platformAccount: ownAccount, conversationKey, encryptJobId, bossId: String(bossId),
-                    input: {inboundMessageId: exactMid, inboundSentAt: platformMessageTime(raw.time, Date.now()), question: text,
-                        jobKey: BossOption.buildJobKey(bossUserInfo), jobInfo: {jobTitle: bossUserInfo.jobTitle, brandName: bossUserInfo.brandName,
+                    input: {inboundMessageId: exactMid, inboundSentAt, question: text,
+                        jobKey, jobInfo: {jobTitle: bossUserInfo.jobTitle, brandName: bossUserInfo.brandName,
                             positionTitle: bossUserInfo.positionTitle, recruiterName: bossUserInfo.recruiterName},
                         platformResumeId: userStore.user.resumeId ? String(userStore.user.resumeId) : null,
                         exchangeRequest: exchangeKind ? {kind: exchangeKind, requestMessageId: exactMid} : null}},
@@ -1137,6 +1234,8 @@ export class BossOption {
                         bossId: String(bossId), contact: {...bossUserInfo}, inboundMessageId: exactMid, inboundMessageMid: exactMid, question: text})
                 const accepted = BossOption.latestLiveInbound.get(`${ownAccount}:${bossId}`)
                 if (accepted?.mid === exactMid) accepted.submitted = true
+                if (takeover.candidate) consumeManualTakeoverAfterAcceptedInbound({account: ownAccount,
+                    bossId: String(bossId), mid: exactMid, sentAt: inboundSentAt, conversationKey})
                 return
             }
             if (!this.preHandlerMsgByBodyType(msgObj, bossUserInfo, text)) {

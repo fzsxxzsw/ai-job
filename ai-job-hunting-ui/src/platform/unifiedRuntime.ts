@@ -23,6 +23,28 @@ let runtime: ReturnType<typeof createUnifiedAutomation<BrowserAutomationContext>
 let timer: ReturnType<typeof setInterval> | undefined
 const account = () => String(Tools.window?._PAGE?.uid || '')
 const identity = () => JSON.stringify([ServerStore().baseUrl, localStorage.getItem('Authorization') || '', account()])
+function authorizationPrincipal(token: string): string {
+    try {
+        const parts = token.split('.')
+        if (parts.length !== 3 || parts[0] !== 'py1' || !parts[1] || !parts[2] || typeof globalThis.atob !== 'function') return ''
+        const encoded = parts[1].replace(/-/g, '+').replace(/_/g, '/')
+        const json = globalThis.atob(encoded + '='.repeat((4 - encoded.length % 4) % 4))
+        const claims = JSON.parse(json)
+        if (!claims || typeof claims !== 'object' || claims.iss !== 'job-helper-python' || typeof claims.sub !== 'number') return ''
+        // Preserve the exact decimal text. Parsing a BIGINT uid as a JS number can
+        // round two different users to the same local recovery identity.
+        const subjects = [...json.matchAll(/"sub"\s*:\s*([1-9]\d*)\s*[,}]/g)]
+        return subjects.length === 1 ? subjects[0][1] : ''
+    } catch { return '' }
+}
+const recoveryIdentity = () => {
+    if (!scope || rawIdentity !== identity()) return ''
+    const token = localStorage.getItem('Authorization') || ''
+    const principal = authorizationPrincipal(token)
+    // Opaque/legacy tokens remain token-bound. Only a py1 token with an exact
+    // subject may survive token rotation; every replay is still server-authenticated.
+    return JSON.stringify([ServerStore().baseUrl, account(), principal ? ['user', principal] : ['scope', scope]])
+}
 export const currentAutomationPolicy = () => JSON.stringify([UserStore().user.preference, UserStore().user.resumeId || null])
 async function ensureIdentity() {
     if (rawIdentity === identity() && scope) return
@@ -60,6 +82,19 @@ function getRuntime() {
     if (runtime) return runtime
     runtime = createUnifiedAutomation<BrowserAutomationContext>({
         scope: () => rawIdentity === identity() ? scope : '', account, executorId: crypto.randomUUID(), flags, storage: localStorage,
+        recoveryIdentity,
+        recoverSubmissionContext(stored, body, proposed, proposedBody) {
+            const push = PushRunStore()
+            if (body.kind !== 'APPLICATION' || stored.kind !== 'APPLICATION' || !flags().deliveryEnabled || !push.runId
+                || stored.account !== account() || body.platformAccount !== account()
+                || stored.encryptJobId !== body.encryptJobId || stored.policy !== currentAutomationPolicy()) return null
+            if (proposed && (proposed.kind !== 'APPLICATION' || proposed.account !== account()
+                || proposed.encryptJobId !== stored.encryptJobId || proposed.policy !== stored.policy
+                || proposed.runId !== push.runId)) return null
+            if (proposedBody && (proposedBody.kind !== 'APPLICATION' || proposedBody.platformAccount !== account()
+                || proposedBody.encryptJobId !== body.encryptJobId)) return null
+            return {...stored, runId: push.runId}
+        },
         capabilities: () => ACTION_KINDS.filter(kind => kind !== 'CONTACT_JOB' || flags().deliveryEnabled),
         clientMid: () => Message.createClientMid(),
         acknowledgement: mid => Tools.window.AIJobHelperChatBridge?.getAcknowledgement?.(mid) || null,

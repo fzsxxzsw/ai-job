@@ -30,6 +30,20 @@ def test_current_chrome_payload_uses_local_scoring_without_any_model_call(client
     assert "Docker" in result["gaps"] and world["fake"].calls == []
 
 
+def test_disabled_resume_and_ai_filters_stay_local(client, world):
+    result = client.post(
+        "/api/job/filter/one",
+        json=browser_payload(resumeMatchEnabled=False, prompt=""),
+    ).json()["data"]
+    assert result == {
+        "decisionStatus": "MATCH",
+        "filter": False,
+        "engine": "LOCAL_RULES",
+        "reason": "已通过岗位名、通勤、待遇及本地排除规则",
+    }
+    assert world["fake"].calls == []
+
+
 def test_local_match_uses_whole_skill_terms_and_advisory_score(client, world):
     with sqlite3.connect(world["path"]) as connection:
         connection.execute(

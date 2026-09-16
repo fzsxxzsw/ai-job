@@ -239,6 +239,13 @@ async def filter_job(
             return {"decisionStatus": "REJECT", "filter": True, "score": 0, "reason": mismatch}
         if not payload.prompt:
             return local_match(payload, resume_text)
+    elif not payload.prompt:
+        return {
+            "decisionStatus": "MATCH",
+            "filter": False,
+            "engine": "LOCAL_RULES",
+            "reason": "已通过岗位名、通勤、待遇及本地排除规则",
+        }
 
     config = effective_config(settings, await db.ai_config(uid))
     system = FILTER

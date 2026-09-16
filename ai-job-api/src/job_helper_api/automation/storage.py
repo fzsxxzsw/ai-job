@@ -6,13 +6,13 @@ from uuid import uuid4
 
 from sqlalchemy import select
 
-from ..conversation import safe_history
 from ..database import dumps, loads, now_ms
 from ..errors import ApiError
 from ..execution_authority import session_authority_key
 from ..model import effective_config
 from ..model_routing import quota_scope
-from .history import current_rounds, history_key
+from .conversation_history import freeze_for_reply
+from .history import current_rounds
 
 TERMINAL = {"COMPLETED", "CANCELLED", "SUPERSEDED", "FAILED"}
 SENSITIVE = {"SEND_RESUME", "ACCEPT_RESUME", "ACCEPT_PHONE", "ACCEPT_WECHAT"}
@@ -189,21 +189,7 @@ class Storage:
             bundle["sessionAuthorityEpoch"] = await self.db.control(
                 uid, session_authority_key(payload.input.jobKey), 0, c
             )
-            key = history_key(raw)
-            sessions = self.db.table("msg_session")
-            session = await self.db.one(
-                select(sessions)
-                .where(
-                    sessions.c.user_id == uid,
-                    self.db.exact(sessions.c.session_key, key),
-                    sessions.c.is_active.is_(True),
-                    sessions.c.status == 1,
-                )
-                .order_by(sessions.c.id.desc())
-                .limit(1),
-                c,
-            )
-            bundle["history"] = safe_history(session["msg_context"]) if session else []
+            bundle.update(await freeze_for_reply(self.db, c, uid, payload))
             bundle["rounds"], _ = await current_rounds(self.db, uid, raw, c)
             if not resume:
                 bundle["missingMaterials"].append("RESUME")

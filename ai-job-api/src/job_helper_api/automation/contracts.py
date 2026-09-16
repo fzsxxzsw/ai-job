@@ -59,6 +59,49 @@ class ReplyInput(Input):
         return self
 
 
+class ManualTakeoverInput(RequestId):
+    platformAccount: Subject
+    conversationKey: Subject
+    encryptJobId: Subject
+    bossId: Subject
+    jobKey: str = Field(min_length=1, max_length=64)
+    throughInboundMessageId: Id
+    throughInboundSentAt: int | None = Field(default=None, gt=0)
+    throughInboundText: str = Field(min_length=1, max_length=5000)
+    manualOutboundClientMid: Id
+    manualOutboundMessageId: Id
+    manualOutboundSentAt: int = Field(gt=0)
+    manualText: str = Field(min_length=1, max_length=5000)
+
+    @model_validator(mode="after")
+    def coherent(self):
+        if self.jobKey != self.encryptJobId + ":" + self.platformAccount:
+            raise ValueError("Manual takeover jobKey does not match the authenticated job/account")
+        if (
+            not self.manualOutboundClientMid.isdigit()
+            or int(self.manualOutboundClientMid) <= 0
+            or not self.manualOutboundMessageId.isdigit()
+            or int(self.manualOutboundMessageId) <= 0
+            or self.manualOutboundMessageId == self.manualOutboundClientMid
+        ):
+            raise ValueError("Manual takeover requires distinct positive client and server MIDs")
+        return self
+
+
+class ManualTakeoverStatusInput(Input):
+    platformAccount: Subject
+    conversationKey: Subject
+    encryptJobId: Subject
+    bossId: Subject
+    jobKey: str = Field(min_length=1, max_length=64)
+
+    @model_validator(mode="after")
+    def coherent(self):
+        if self.jobKey != self.encryptJobId + ":" + self.platformAccount:
+            raise ValueError("Manual takeover jobKey does not match the authenticated job/account")
+        return self
+
+
 class LocalAssessment(Input):
     passed: StrictBool
     reason: str = Field(max_length=2000)

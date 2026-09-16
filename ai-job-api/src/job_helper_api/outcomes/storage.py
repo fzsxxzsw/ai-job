@@ -5,6 +5,7 @@ from uuid import uuid4
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncConnection
 
+from ..automation.conversation_history import project_observations
 from ..config import Settings
 from ..database import Database, dumps, loads, now_ms
 from ..errors import ApiError
@@ -113,7 +114,7 @@ class OutcomeStorage:
         return case
 
     async def ingest(self, uid: int, batch: ObservationBatch) -> dict:
-        accepted, duplicates, cases = [], [], {}
+        accepted, duplicates, cases, projected = [], [], {}, []
         events, case_table = self.db.table("outcome_observation"), self.db.table("outcome_case")
         async with self.transaction(uid) as connection:
             for item in batch.observations:
@@ -209,7 +210,10 @@ class OutcomeStorage:
                     )
                 )
                 accepted.append(item.eventId)
+                projected.append(item)
                 cases[case["id"]] = case
+            if projected:
+                await project_observations(self.db, connection, uid, projected)
             from ..career.observations import record_observations
 
             await record_observations(self, connection, uid, batch.observations)

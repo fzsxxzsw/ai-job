@@ -329,6 +329,54 @@ def test_contact_ack_does_not_depend_on_lookup_and_greeting_is_separate(auto):
     assert greeting["kind"] == "SEND_GREETING" and greeting["payload"]["bossId"] == "peer"
 
 
+def test_application_dedup_is_server_authoritative_across_new_cycles(auto):
+    first = application_input()
+    response(auto.post(BASE + "/jobs", json=first))
+    second = application_input()
+    second["input"]["cycleKey"] = "cycle-2"
+    response(auto.post(BASE + "/jobs", json=second), 409)
+
+
+def test_acknowledged_contact_blocks_recontact_after_job_completion(auto):
+    first = application_input()
+    first["input"]["greeting"] = {"enabled": False, "text": ""}
+    job = response(auto.post(BASE + "/jobs", json=first))
+    worker(auto, job)
+    scope, contact = executor(auto, job, "CONTACT_JOB")
+    response(
+        auto.post(
+            BASE + "/actions/" + contact["actionId"] + "/receipt",
+            json=dispatch(auto, scope, contact, None),
+        )
+    )
+    cancelled = response(
+        auto.post(
+            BASE + "/jobs/" + job["jobId"] + "/cancel", json={"requestId": "cancel-after-ack"}
+        )
+    )
+    assert cancelled["status"] == "CANCELLED"
+
+    second = application_input()
+    second["input"]["cycleKey"] = "cycle-after-contact"
+    response(auto.post(BASE + "/jobs", json=second), 409)
+
+
+def test_terminal_application_without_contact_proof_can_be_reassessed(auto):
+    first = application_input()
+    first["input"]["localAssessment"] = {"passed": False, "reason": "本轮本地规则拒绝"}
+    job = response(auto.post(BASE + "/jobs", json=first))
+    root, body, saved = worker(auto, job)
+    assert saved["waitFor"] == "NONE"
+    assert (
+        response(auto.post(root + "/complete", json=body, headers=INTERNAL))["status"]
+        == "COMPLETED"
+    )
+
+    second = application_input()
+    second["input"]["cycleKey"] = "cycle-reassess"
+    assert response(auto.post(BASE + "/jobs", json=second))["jobId"] != job["jobId"]
+
+
 @pytest.mark.parametrize("server_mid", [None, "12345", "-1", "not-mid", "０１２", "0"])
 def test_text_ack_requires_real_distinct_platform_mid(auto, server_mid):
     job = response(auto.post(BASE + "/jobs", json=reply_input()))

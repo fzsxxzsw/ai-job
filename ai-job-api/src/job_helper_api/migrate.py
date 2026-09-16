@@ -6,6 +6,7 @@ import asyncio
 from sqlalchemy import MetaData, Table, inspect, select, text
 from sqlalchemy.dialects.mysql import LONGTEXT
 
+from .automation.conversation_history import MIGRATION_MARKER, backfill_exact
 from .automation.schema import automation_metadata
 from .career.schema import career_metadata
 from .config import Settings, load_settings
@@ -62,6 +63,7 @@ async def migrate(settings: Settings | None = None, *, apply: bool = True) -> li
             if not owner:
                 raise RuntimeError("The configured Python owner does not exist or is inactive")
             seeded = False
+            history_seeded = False
             if "py_api_control" in names:
                 marker = await connection.scalar(
                     text(
@@ -70,10 +72,19 @@ async def migrate(settings: Settings | None = None, *, apply: bool = True) -> li
                     {"uid": config.owner_user_id, "key": PAUSE_MARKER},
                 )
                 seeded = loads(marker, False) is True
+                history_marker = await connection.scalar(
+                    text(
+                        "SELECT value_json FROM py_api_control WHERE user_id=:uid AND control_key=:key"
+                    ),
+                    {"uid": config.owner_user_id, "key": MIGRATION_MARKER},
+                )
+                history_seeded = bool(loads(history_marker, None))
             plan = [
                 "create " + name for name in (*OWN_TABLES, *sorted(optional)) if name not in names
             ]
             alterations: list[str] = []
+            post_alterations: list[str] = []
+            history_schema_changed = False
             if "automation_job" in names:
                 automation_columns = await connection.run_sync(
                     lambda c: {col["name"] for col in inspect(c).get_columns("automation_job")}
@@ -81,6 +92,44 @@ async def migrate(settings: Settings | None = None, *, apply: bool = True) -> li
                 if "graph_finalized" not in automation_columns:
                     alterations.append(
                         "ALTER TABLE automation_job ADD COLUMN graph_finalized INTEGER NOT NULL DEFAULT 1"
+                    )
+            if "conversation_message" in names:
+                history_columns = {
+                    column["name"]: column
+                    for column in await connection.run_sync(
+                        lambda c: inspect(c).get_columns("conversation_message")
+                    )
+                }
+                binary_mid = (
+                    "VARCHAR(160) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin"
+                    if db.engine.dialect.name == "mysql"
+                    else "VARCHAR(160)"
+                )
+                if "causal_after_message_id" not in history_columns:
+                    alterations.append(
+                        "ALTER TABLE conversation_message ADD COLUMN "
+                        f"causal_after_message_id {binary_mid} NULL"
+                    )
+                    history_schema_changed = True
+                if "causal_root_message_id" not in history_columns:
+                    alterations.append(
+                        "ALTER TABLE conversation_message ADD COLUMN "
+                        f"causal_root_message_id {binary_mid} NULL"
+                    )
+                    history_schema_changed = True
+                if "causal_depth" not in history_columns:
+                    alterations.append(
+                        "ALTER TABLE conversation_message ADD COLUMN "
+                        "causal_depth INTEGER NOT NULL DEFAULT 0"
+                    )
+                    history_schema_changed = True
+                root_column = history_columns.get("causal_root_message_id")
+                if db.engine.dialect.name == "mysql" and (
+                    root_column is None or root_column["nullable"]
+                ):
+                    post_alterations.append(
+                        "ALTER TABLE conversation_message MODIFY COLUMN "
+                        f"causal_root_message_id {binary_mid} NOT NULL"
                     )
             for table_name in sorted(LONG_TEXT_COLUMNS.keys() | BINARY_KEY_COLUMNS.keys()):
                 long_columns = LONG_TEXT_COLUMNS.get(table_name, ())
@@ -121,6 +170,12 @@ async def migrate(settings: Settings | None = None, *, apply: bool = True) -> li
                             f"ALTER TABLE `{table_name}` MODIFY COLUMN `{column['name']}` LONGTEXT {nullability}"
                         )
             plan.extend(alterations)
+            plan.extend(post_alterations)
+            needs_history_backfill = (
+                "conversation_message" not in names or not history_seeded or history_schema_changed
+            )
+            if needs_history_backfill:
+                plan.append("backfill exact canonical conversation history")
             if not seeded:
                 plan.append("preserve legacy chats and pause their Python reply controls")
                 if owner["ai_seat_status"] == 1:
@@ -142,6 +197,15 @@ async def migrate(settings: Settings | None = None, *, apply: bool = True) -> li
             await connection.run_sync(career_metadata().create_all)
             for statement in alterations:
                 await connection.execute(text(statement))
+            await connection.execute(
+                text(
+                    "UPDATE conversation_message "
+                    "SET causal_root_message_id=message_id "
+                    "WHERE causal_root_message_id IS NULL OR causal_root_message_id=''"
+                )
+            )
+            for statement in post_alterations:
+                await connection.execute(text(statement))
         await db.open()
         async with db.lock(config.owner_user_id, "migration:cutover"):
             async with db.engine.begin() as connection:
@@ -162,6 +226,14 @@ async def migrate(settings: Settings | None = None, *, apply: bool = True) -> li
                     for key in sorted(set(key for key in keys if key)):
                         await db.set_control(connection, config.owner_user_id, "stop:" + key, True)
                     await db.set_control(connection, config.owner_user_id, PAUSE_MARKER, True)
+                if needs_history_backfill:
+                    stats = await backfill_exact(db, connection, config.owner_user_id)
+                    await db.set_control(
+                        connection,
+                        config.owner_user_id,
+                        MIGRATION_MARKER,
+                        {"version": 2, **stats},
+                    )
         return plan
     finally:
         await db.close()

@@ -317,6 +317,42 @@ CREATE TABLE IF NOT EXISTS automation_job (
 	KEY ix_automation_job_claim (user_id, status, available_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- Canonical, exact-bound conversation messages used by model context freezing.
+CREATE TABLE IF NOT EXISTS conversation_message (
+	id VARCHAR(36) COLLATE utf8mb4_bin NOT NULL,
+	user_id BIGINT NOT NULL,
+	conversation_id VARCHAR(64) COLLATE utf8mb4_bin NOT NULL,
+	platform_account VARCHAR(255) COLLATE utf8mb4_bin NOT NULL,
+	conversation_key VARCHAR(255) COLLATE utf8mb4_bin NOT NULL,
+	boss_id VARCHAR(255) COLLATE utf8mb4_bin NOT NULL,
+	encrypt_job_id VARCHAR(255) COLLATE utf8mb4_bin NOT NULL,
+	message_id VARCHAR(160) COLLATE utf8mb4_bin NOT NULL,
+	client_mid VARCHAR(160) COLLATE utf8mb4_bin,
+	role VARCHAR(8) NOT NULL,
+	author_kind VARCHAR(16) NOT NULL,
+	text LONGTEXT NOT NULL,
+	text_hash VARCHAR(64) NOT NULL,
+	sent_at BIGINT,
+	observed_at BIGINT NOT NULL,
+	order_at BIGINT NOT NULL,
+	order_confidence VARCHAR(16) NOT NULL,
+	causal_after_message_id VARCHAR(160) COLLATE utf8mb4_bin,
+	causal_root_message_id VARCHAR(160) COLLATE utf8mb4_bin NOT NULL,
+	causal_depth INTEGER NOT NULL,
+	delivery_state VARCHAR(24) NOT NULL,
+	model_eligible INTEGER NOT NULL,
+	sources_json LONGTEXT NOT NULL,
+	created_at BIGINT NOT NULL,
+	updated_at BIGINT NOT NULL,
+	PRIMARY KEY (id),
+	CONSTRAINT uq_conversation_message_server_mid
+		UNIQUE (user_id, conversation_id, message_id),
+	CONSTRAINT uq_conversation_message_client_mid
+		UNIQUE (user_id, conversation_id, client_mid),
+	KEY ix_conversation_message_model
+		(user_id, conversation_id, model_eligible, order_at, id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 -- Immutable career facts, resume drafts and approved strategy plans.
 CREATE TABLE IF NOT EXISTS career_application (
 	id VARCHAR(36) COLLATE utf8mb4_bin NOT NULL,

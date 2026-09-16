@@ -160,7 +160,7 @@ def test_passive_hr_reply_is_observed_only_for_unique_cycle_and_real_time(career
                 "bindingObservedAt": timestamp,
                 "messages": [
                     {
-                        "messageId": "hr-mid",
+                        "messageId": "82001",
                         "role": "HR",
                         "text": "明天下午可以来面试吗？",
                         "sentAt": timestamp,
@@ -178,7 +178,7 @@ def test_passive_hr_reply_is_observed_only_for_unique_cycle_and_real_time(career
     assert [e["eventType"] for e in detail["events"]].count("HR_REPLIED") == 1
     assert not any(e["eventType"] == "INTERVIEW_INVITED" for e in detail["events"])
     observation["observations"][0].update(eventId="time-missing")
-    observation["observations"][0]["messages"][0].update(messageId="other-mid", sentAt=None)
+    observation["observations"][0]["messages"][0].update(messageId="82002", sentAt=None)
     response(career.post("/api/job/outcomes/observations", json=observation))
     assert (
         len(response(career.get(CAREER + "/applications/" + app["applicationId"]))["events"]) == 2

@@ -12,8 +12,9 @@ import {scrollElementToBottom, simulateScrollToEnd, TampermonkeyApi, Tools} from
 import logger, {LogLevel} from '../logging'
 import axiosOriginal from "axios";
 import {captureOutcomeContext, observeOutcomeApplication, observeOutcomeContacts} from './boss/outcomeRuntime';
-import {type AutomationAction, type FilterInput, type ActionReceipt} from './unifiedAutomation';
-import {unifiedAutomationEnabled, registerAutomationExecutor, bindAutomationContact, captureAutomationScope, saveAutomationSnapshot,
+import {automationRequestId, type AutomationAction, type AutomationJob, type FilterInput, type ActionReceipt} from './unifiedAutomation';
+import {unifiedAutomationEnabled, registerAutomationExecutor, submitAutomation, cancelAutomationJob,
+    unresolvedAutomationApplication, subscribeUnifiedAutomation, bindAutomationContact, captureAutomationScope, saveAutomationSnapshot,
     holdUnifiedAutomation, currentAutomationPolicy, browserAutomationReady, type BrowserAutomationContext} from './unifiedRuntime';
 import {performUnifiedText, prepareUnifiedChat, unknownPlatformReceipt} from './unifiedBossActions';
 import {PUSH_RUN_LOCK_NAME, PushRunStore} from '../stores/pushRun';
@@ -75,9 +76,70 @@ import {findBossMountTarget} from "../runtime/routeHost";
 import {isSalaryWithinConfiguredRange} from "./salaryPolicy";
 import {weekendBenefitStatus} from './weekendPolicy';
 import {greetingDispatchAuthorized, waitForPushDelay} from './deliveryRunWait';
+import {serializableBossJobDetail} from './boss/automationJob';
 
 let pushResultCounter: any;
 let userStore: any;
+
+const APPLICATION_WAIT_TIMEOUT_MS = 6 * 60_000
+const APPLICATION_TERMINAL_STATUSES = new Set(['COMPLETED', 'SUPERSEDED', 'CANCELLED', 'FAILED', 'UNCERTAIN'])
+
+class ApplicationWaitError extends Error {
+    constructor(readonly reason: 'ABORTED' | 'TIMEOUT', readonly latest: AutomationJob | null) {
+        super(reason === 'ABORTED' ? 'APPLICATION_WAIT_ABORTED' : 'APPLICATION_WAIT_TIMEOUT')
+    }
+}
+
+function applicationOutcomeReady(job: AutomationJob, requireGreetingAcknowledgement: boolean): boolean {
+    const contact = job.actions.find(action => action.kind === 'CONTACT_JOB')
+    if (contact && ['FAILED', 'UNKNOWN'].includes(contact.status)) return true
+    if (contact?.status === 'ACKNOWLEDGED') {
+        if (!requireGreetingAcknowledgement) return true
+        const greeting = job.actions.find(action => action.kind === 'SEND_GREETING')
+        return (!!greeting && ['ACKNOWLEDGED', 'FAILED', 'UNKNOWN', 'CANCELLED'].includes(greeting.status))
+            || APPLICATION_TERMINAL_STATUSES.has(job.status)
+    }
+    return APPLICATION_TERMINAL_STATUSES.has(job.status)
+}
+
+function waitForApplicationOutcome(
+    jobId: string,
+    requireGreetingAcknowledgement: boolean,
+    signal: AbortSignal,
+    timeoutMs = APPLICATION_WAIT_TIMEOUT_MS,
+): Promise<AutomationJob> {
+    return new Promise((resolve, reject) => {
+        let latest: AutomationJob | null = null
+        let unsubscribe: (() => void) | undefined
+        let settled = false
+        let timeout: ReturnType<typeof setTimeout> | undefined
+        let onAbort: () => void = () => undefined
+        const finish = (job?: AutomationJob, error?: Error) => {
+            if (settled) return
+            settled = true
+            if (timeout !== undefined) globalThis.clearTimeout(timeout)
+            signal.removeEventListener('abort', onAbort)
+            unsubscribe?.()
+            if (error) reject(error)
+            else resolve(job!)
+        }
+        onAbort = () => finish(undefined, new ApplicationWaitError('ABORTED', latest))
+        timeout = globalThis.setTimeout(() => finish(undefined, new ApplicationWaitError('TIMEOUT', latest)), timeoutMs)
+        signal.addEventListener('abort', onAbort, {once: true})
+        if (signal.aborted) {
+            onAbort()
+            return
+        }
+        unsubscribe = subscribeUnifiedAutomation(snapshot => {
+            const current = snapshot.jobs.find(job => job.jobId === jobId)
+            if (!current) return
+            latest = current
+            if (applicationOutcomeReady(current, requireGreetingAcknowledgement)) finish(current)
+        })
+        // subscribe() publishes the current snapshot synchronously.
+        if (settled) unsubscribe()
+    })
+}
 
 
 export enum PlatformTypeEnum {
@@ -372,7 +434,7 @@ class BossPlatform extends AbsPlatform {
     private receiptVerifierRunning = false;
     private lastJobSourceDiagnosticKey = "";
     private applicationSnapshotContexts = new Map<string, Omit<ApplicationSnapshotPayload, 'appliedAt'>>();
-    private unifiedFilterInputs = new Map<string, FilterInput>();
+    private unifiedFilterInputs = new Map<string, {input: FilterInput; policy: string}>();
 
     private greetingRunAuthorized(entry: Pick<PendingGreeting, 'runId' | 'account' | 'createdAt' | 'userStoppedAt'>): boolean {
         const run = PushRunStore()
@@ -1189,6 +1251,14 @@ class BossPlatform extends AbsPlatform {
         this.processedJobKeys.add(this.getJobIdentity(jobDetail as BossJobDetail))
     }
 
+    private clearUnifiedApplicationState(encryptJobId: string): void {
+        // submitAutomation persists a structured clone of the graph context. Clear only
+        // from confirmed graph terminal paths; uncertain paths retain both payloads for
+        // reconciliation, and the legacy snapshot retry lifecycle remains untouched.
+        this.unifiedFilterInputs.delete(encryptJobId)
+        this.applicationSnapshotContexts.delete(encryptJobId)
+    }
+
     private getJobIdentity(jobDetail: BossJobDetail): string {
         return jobDetail.encryptJobId || [
             jobDetail.jobName,
@@ -1620,8 +1690,11 @@ class BossPlatform extends AbsPlatform {
             throw new NotMatchException(jobTitle, jobDetailExt.address || jobDetail.businessDistrict, '不满足通勤位置要求')
         }
 
-        // 默认用本地规则完成简历-JD评分；不调用任何外部 AI 或付费接口。
-        // 通勤、双休、五险一金等硬规则已在此前独立执行，评分不会覆盖。
+        // afE/af 是用户明确授权的 AI 岗位筛选提示；关闭时保持空提示，服务端继续使用本地规则。
+        // 通勤、双休、五险一金等硬规则已在此前独立执行，AI 评分不会覆盖。
+        const filterPrompt = userStore.user.preference.afE
+            ? String(userStore.user.preference.af || '').trim()
+            : ''
         const snapshotJobBaseInfo = JSON.stringify(this.unpackBaseInfo(jobDetail))
         const snapshotJobExtInfo = JSON.stringify(this.unpackExtInfo(jobDetailExt))
         let preMatchResult: unknown = {
@@ -1632,21 +1705,29 @@ class BossPlatform extends AbsPlatform {
             matchedKeywords: jobTitleDecision.matchedKeywords,
         }
         const resumeMatchEnabled = userStore.user.preference.resumeMatchE
+        const filterPolicy = currentAutomationPolicy()
         const unified = await unifiedAutomationEnabled()
+        if (unified && filterPolicy !== currentAutomationPolicy()) {
+            throw new AiDecisionUnknownExp(jobTitle, '投递设置在岗位筛选期间发生变化，请按最新设置重新核对')
+        }
         if (unified) this.unifiedFilterInputs.set(String(jobDetail.encryptJobId), {
-            prompt: '', jobBaseInfo: snapshotJobBaseInfo, jobExtInfo: snapshotJobExtInfo, resumeMatchEnabled: !!resumeMatchEnabled,
-            minMatchScore: Number(userStore.user.preference.resumeMatchMinScore) || 0,
-            titleRuleStatus: jobTitleDecision.status, titleMatchedKeywords: jobTitleDecision.matchedKeywords,
+            policy: filterPolicy,
+            input: {
+                prompt: filterPrompt, jobBaseInfo: snapshotJobBaseInfo, jobExtInfo: snapshotJobExtInfo, resumeMatchEnabled: !!resumeMatchEnabled,
+                minMatchScore: Number(userStore.user.preference.resumeMatchMinScore) || 0,
+                titleRuleStatus: jobTitleDecision.status, titleMatchedKeywords: [...jobTitleDecision.matchedKeywords],
+            },
         })
         if (resumeMatchEnabled && !unified) {
             const jobBaseInfo = snapshotJobBaseInfo
             const jobExtInfo = snapshotJobExtInfo
             const minMatchScore = userStore.user.preference.resumeMatchMinScore
             const cacheKey = this.buildAiFilterCacheKey([
-                'local-rules-v2',
+                'job-filter-v3',
                 String(userStore.user.resumeId || ''),
                 String(resumeMatchEnabled),
                 String(minMatchScore),
+                filterPrompt,
                 jobBaseInfo,
                 jobExtInfo,
                 jobTitleDecision.status,
@@ -1659,7 +1740,7 @@ class BossPlatform extends AbsPlatform {
             } else {
                 try {
                     const filterResp = await AiPower.filter(
-                        '',
+                        filterPrompt,
                         jobBaseInfo,
                         jobExtInfo,
                         resumeMatchEnabled,
@@ -1833,10 +1914,6 @@ class BossPlatform extends AbsPlatform {
     }
 
     async doPush(jobDetail: BossJobDetail): Promise<any> {
-        // 岗位投递必须在当前已授权的 Chrome 运行中直接完成。此前把 APPLICATION
-        // 转成统一任务后再等待浏览器领取，会在执行器未领取时永久停在
-        // WAITING_EXECUTION，既没有平台副作用，也没有可见进度。回复任务仍由
-        // 统一自动化处理；首次沟通继续使用下方已有的锁、冷却、风控和回执逻辑。
         const jobTitle = this.getJobKey(jobDetail)
         const activeRiskStop = getBossRiskStop()
         if (activeRiskStop) throw new PublishLimitExp(`BOSS风控熔断：${activeRiskStop.reason}`)
@@ -1857,6 +1934,167 @@ class BossPlatform extends AbsPlatform {
 
         logger.debug("正在投递：" + jobTitle)
         this.logRecorder.info(`工作【${jobTitle}】已通过筛选，正在向 BOSS 发起沟通`)
+
+        if (await unifiedAutomationEnabled()) {
+            const encryptJobId = String(jobDetail.encryptJobId)
+            const filterSnapshot = this.unifiedFilterInputs.get(encryptJobId)
+            if (!filterSnapshot) throw new AiDecisionUnknownExp(jobTitle, '缺少已通过硬过滤的岗位资料')
+
+            const account = exactPlatformId(Tools.window?._PAGE?.uid)
+            const runId = PushRunStore().runId
+            if (!account || !runId || this.pushStatus !== PushStatus.PUSHING || PushRunStore().stopRequested) {
+                throw new PublishStopExp('缺少本轮投递授权')
+            }
+
+            let previous: AutomationJob | null
+            try {
+                previous = await unresolvedAutomationApplication(encryptJobId)
+            } catch (error: any) {
+                holdUnifiedAutomation('旧 APPLICATION 状态暂不可核对；为防重复沟通，本岗位已跳过且不会直连补发')
+                throw new AiDecisionUnknownExp(jobTitle, `旧投递任务核对失败：${error?.message || '未知错误'}`)
+            }
+            if (previous) {
+                throw new AiDecisionUnknownExp(jobTitle,
+                    '同一岗位已有已派发或待核实任务，请先核对原任务；不会新建重复沟通')
+            }
+
+            let selection: {preparedResumeVersionId: string | null; strategyPlanId: string | null}
+            try {
+                const {client: career} = await (await import('./careerApi')).scopedCareerClient()
+                selection = await career.selection()
+            } catch (error: any) {
+                holdUnifiedAutomation('求职资料版本暂不可用，APPLICATION 未提交；不会切回旧投递流程')
+                throw new AiDecisionUnknownExp(jobTitle, `求职资料版本读取失败：${error?.message || '未知错误'}`)
+            }
+
+            const cycleKey = await automationRequestId(['application-cycle', account, runId, encryptJobId])
+            const greetingText = String(userStore.user.preference.cg || '')
+            const greetingEnabled = customGreetingEnabled(greetingMode) && !!greetingText.trim()
+            if (greetingRequiresReadyChannel(greetingMode) && !greetingEnabled) {
+                throw new PublishLimitExp('严格招呼模式缺少有效招呼语；未向 BOSS 发起沟通')
+            }
+
+            // Bind the server decision and every eventual platform action to the exact
+            // preference snapshot that passed matchJob. A newer preference must be
+            // re-matched instead of being paired with stale screening evidence.
+            if (filterSnapshot.policy !== currentAutomationPolicy()) {
+                throw new AiDecisionUnknownExp(jobTitle, '投递设置已变化，请按最新设置重新筛选；APPLICATION 未提交')
+            }
+
+            let graphJob: AutomationJob
+            try {
+                graphJob = await submitAutomation({
+                    requestId: cycleKey,
+                    kind: 'APPLICATION',
+                    platformAccount: account,
+                    conversationKey: null,
+                    bossId: null,
+                    encryptJobId,
+                    input: {
+                        cycleKey,
+                        filterInput: filterSnapshot.input,
+                        localAssessment: {passed: true, reason: '本轮岗位已通过浏览器硬过滤'},
+                        greeting: {enabled: greetingEnabled, text: greetingText},
+                        preparedResumeVersionId: selection.preparedResumeVersionId,
+                        strategyPlanId: selection.strategyPlanId,
+                    },
+                }, {
+                    kind: 'APPLICATION',
+                    account,
+                    runId,
+                    policy: filterSnapshot.policy,
+                    job: serializableBossJobDetail(jobDetail),
+                    encryptJobId,
+                    bossId: null,
+                    conversationKey: null,
+                    snapshot: this.applicationSnapshotContexts.get(encryptJobId),
+                    greetingEnabled,
+                })
+            } catch (error: any) {
+                holdUnifiedAutomation('APPLICATION 提交结果暂不可验证；不会切回旧投递流程')
+                throw new AiDecisionUnknownExp(jobTitle, `统一投递任务提交失败：${error?.message || '未知错误'}`)
+            }
+
+            const strictGreeting = greetingRequiresReadyChannel(greetingMode) && greetingEnabled
+            let current: AutomationJob
+            try {
+                current = await waitForApplicationOutcome(
+                    graphJob.jobId,
+                    strictGreeting,
+                    this.pushAbortController.signal,
+                )
+            } catch (error) {
+                if (!(error instanceof ApplicationWaitError)) throw error
+                let latest = error.latest
+                try {
+                    const cancelled = await cancelAutomationJob(graphJob.jobId)
+                    if (cancelled?.jobId === graphJob.jobId) latest = cancelled as AutomationJob
+                } catch {
+                    holdUnifiedAutomation('APPLICATION 等待已结束，但取消结果尚未确认；原任务仍须按回执核对')
+                }
+                const contactAcknowledged = !!latest?.actions?.some(action =>
+                    action.kind === 'CONTACT_JOB' && action.status === 'ACKNOWLEDGED')
+                if (contactAcknowledged) {
+                    this.clearUnifiedApplicationState(encryptJobId)
+                    return {
+                        code: 0,
+                        message: 'Success',
+                        automationJobId: graphJob.jobId,
+                        automationStopKind: error.reason === 'ABORTED' ? 'stopped' : 'blocked',
+                        automationStopReason: error.reason === 'ABORTED'
+                            ? '用户已暂停；沟通已确认成功，未派发招呼已请求取消'
+                            : '沟通已确认成功，但严格招呼在限定时间内未确认；已停止继续投递',
+                    }
+                }
+                if (error.reason === 'ABORTED') {
+                    throw new PublishStopExp('用户已暂停；未派发动作已请求取消，已有回执保留')
+                }
+                holdUnifiedAutomation('APPLICATION 在限定时间内未获得联系回执；已停止继续投递且不会直连补发')
+                throw new PublishLimitExp('统一投递任务等待超时；已请求取消，禁止直接补发')
+            }
+
+            const contact = current.actions.find(action => action.kind === 'CONTACT_JOB')
+            if (contact?.status === 'ACKNOWLEDGED') {
+                if (strictGreeting) {
+                    const greeting = current.actions.find(action => action.kind === 'SEND_GREETING')
+                    if (greeting?.status !== 'ACKNOWLEDGED') {
+                        const greetingStatus = greeting?.status || current.status
+                        this.clearUnifiedApplicationState(encryptJobId)
+                        return {
+                            code: 0,
+                            message: 'Success',
+                            automationJobId: graphJob.jobId,
+                            automationStopKind: 'blocked',
+                            automationStopReason: `沟通已确认成功，但严格招呼未送达（${greetingStatus}）；已停止继续投递`,
+                        }
+                    }
+                }
+                this.clearUnifiedApplicationState(encryptJobId)
+                return {code: 0, message: 'Success', automationJobId: graphJob.jobId}
+            }
+
+            if (current.decision?.code === 'REJECT' || current.decision?.code === 'STOP') {
+                this.clearUnifiedApplicationState(encryptJobId)
+                throw new NotMatchException(jobTitle, current.decision.reason, 'LangGraph 岗位决策')
+            }
+            if (current.decision?.code === 'MISSING_MATERIALS') {
+                this.clearUnifiedApplicationState(encryptJobId)
+                throw new AiDecisionUnknownExp(jobTitle, current.decision.reason || '统一任务缺少已核实资料')
+            }
+            if (contact?.status === 'FAILED') {
+                this.clearUnifiedApplicationState(encryptJobId)
+                throw new PushReqException(jobTitle, '沟通动作已被平台明确拒绝，请查看统一任务分项回执')
+            }
+            if (contact?.status === 'UNKNOWN' || current.status === 'UNCERTAIN') {
+                throw new AiDecisionUnknownExp(jobTitle, '沟通动作结果未知，请先核对统一任务回执；不会重复沟通')
+            }
+            throw new AiDecisionUnknownExp(jobTitle,
+                current.decision?.reason || `统一任务以 ${current.status} 结束，但没有已确认的沟通回执`)
+        }
+
+        // A mode switch after matchJob can leave a graph-only FilterInput behind while
+        // the explicitly selected legacy path still owns snapshot persistence/retry.
+        this.unifiedFilterInputs.delete(String(jobDetail.encryptJobId))
 
         // 投递请求url
         let publishUrl = `https://www.zhipin.com/wapi/zpgeek/friend/add.json?securityId=` +
@@ -1971,7 +2209,8 @@ class BossPlatform extends AbsPlatform {
 
             const snapshotKey = String(jobDetail.encryptJobId)
             const snapshotContext = this.applicationSnapshotContexts.get(snapshotKey)
-            if ((pushResult as any).automationJobId) {
+            const graphOwned = !!(pushResult as any).automationJobId
+            if (graphOwned) {
                 // The graph's CONTACT receipt hook owns snapshot capture independently of greeting completion.
                 this.applicationSnapshotContexts.delete(snapshotKey)
             } else if (snapshotContext) {
@@ -1994,15 +2233,25 @@ class BossPlatform extends AbsPlatform {
             if (userStore.user.preference.cIE && userStore.user.preference.cI) {
                 this.logRecorder.info(`工作【${jobTitle}】图片简历已等待双方回复后再发送`)
             }
-            try {
-                // 投递后发送自定义消息
-                await this.pushAfterSendMsg(jobDetail);
-            } catch (e: any) {
-                this.logRecorder.error(`工作【${jobTitle}】自定义招呼语发送失败`, e?.message || e)
+            if (!graphOwned) {
+                try {
+                    // 旧模式只在明确禁用统一任务时保留；Graph 的 SEND_GREETING 不能在这里重复发送。
+                    await this.pushAfterSendMsg(jobDetail);
+                } catch (e: any) {
+                    this.logRecorder.error(`工作【${jobTitle}】自定义招呼语发送失败`, e?.message || e)
+                }
             }
 
             // 标记为已沟通，在推荐页面中下一页会获取之前的数据，所以需要标记为已沟通
             jobDetail.contact = true
+            const stopKind = (pushResult as any).automationStopKind
+            const stopReason = String((pushResult as any).automationStopReason || '')
+            if (graphOwned && (stopKind === 'stopped' || stopKind === 'blocked')) {
+                // CONTACT 已有精确 ACK，先持久标记本岗位，避免停止运行后再次发起沟通。
+                this.markJobTerminal(jobDetail)
+                if (stopKind === 'stopped') throw new PublishStopExp(stopReason)
+                throw new PublishLimitExp(stopReason)
+            }
             return jobDetail
         }
 

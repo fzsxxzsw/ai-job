@@ -34,7 +34,14 @@ export type AutomationSubmission = {
 }
 export type ActionReceipt = {status: 'ACKNOWLEDGED' | 'FAILED' | 'UNKNOWN'; serverMid: string | null; platformCode: number | null; occurredAt: number; errorCode: string | null; executionPhase?: 'BEFORE_PLATFORM_CALL' | 'PLATFORM_RESULT'}
 export type AutomationSnapshot = {status: AutomationStatus | null; jobs: AutomationJob[]; error: string; held: number; updatedAt: number}
-type SavedJob<C> = {scope: string; jobId: string; context: C; completed: boolean; reconciledActions?: string[]}
+type SubmissionProof<C> = {
+    schemaVersion: 1; scope: string; recoveryIdentity: string; requestId: string
+    semanticHash: string; recoveryHash: string; body: AutomationSubmission; context: C; createdAt: number
+}
+type SavedJob<C> = {
+    scope: string; jobId: string; context: C; completed: boolean; reconciledActions?: string[]
+    submission?: SubmissionProof<C>
+}
 type Dispatch = {scope: string; jobId: string; actionId: string; executorId: string; dispatchToken: string; clientMid: string | null; dispatchedAt: number; receipt?: ActionReceipt; delivered?: boolean}
 export type AutomationExecution<C> = {
     ready(context: C, action: AutomationAction): boolean
@@ -48,13 +55,29 @@ type Dependencies<C> = {
     request(path: string, body?: unknown): Promise<any>; scope(): string; account(): string; executorId: string; capabilities?(): ActionKind[]
     flags(): {replyEnabled: boolean; deliveryEnabled: boolean}; storage: Pick<Storage, 'getItem' | 'setItem' | 'removeItem' | 'key' | 'length'>
     execution: AutomationExecution<C>; clientMid(): string; acknowledgement?(clientMid: string): string | null; now?(): number
+    recoveryIdentity?(): string
+    recoverSubmissionContext?(stored: C, body: AutomationSubmission, proposed?: C, proposedBody?: AutomationSubmission): C | null
 }
 const PREFIX = 'ai-job-unified-v1:'
 const TERMINAL = new Set(['COMPLETED', 'SUPERSEDED', 'CANCELLED', 'FAILED'])
+const BLOCKING_CONTACT = new Set(['QUEUED', 'LEASED', 'DISPATCHING', 'UNKNOWN', 'ACKNOWLEDGED'])
 export async function automationRequestId(parts: unknown[]): Promise<string> {
     const bytes = new TextEncoder().encode(JSON.stringify(parts))
     const digest = await crypto.subtle.digest('SHA-256', bytes)
     return Array.from(new Uint8Array(digest), value => value.toString(16).padStart(2, '0')).join('')
+}
+
+function applicationRecoveryValue<C>(body: AutomationSubmission, context: C): unknown {
+    if (body.kind !== 'APPLICATION') return [body, context]
+    const {requestId: _requestId, input, ...submission} = body
+    const applicationInput = input && typeof input === 'object'
+        ? Object.fromEntries(Object.entries(input).filter(([key]) => key !== 'cycleKey'))
+        : input
+    if (!context || typeof context !== 'object' || Array.isArray(context)) {
+        return [{...submission, input: applicationInput}, context]
+    }
+    const {runId: _runId, ...stableContext} = context as C & {runId?: string}
+    return [{...submission, input: applicationInput}, stableContext]
 }
 export function createUnifiedAutomation<C>(dependencies: Dependencies<C>) {
     const now = dependencies.now || Date.now
@@ -91,6 +114,7 @@ export function createUnifiedAutomation<C>(dependencies: Dependencies<C>) {
         }
         dependencies.storage.setItem(PREFIX + key, JSON.stringify(value))
     }
+    const remove = (key: string) => dependencies.storage.removeItem(PREFIX + key)
     function list<T>(kind: string): T[] {
         const entries: T[] = []
         for (let index = 0; index < dependencies.storage.length; index++) {
@@ -104,6 +128,221 @@ export function createUnifiedAutomation<C>(dependencies: Dependencies<C>) {
         const result = await dependencies.request('/api/job/automation' + path, body)
         if (captured !== dependencies.scope()) throw new Error('AUTOMATION_SCOPE_CHANGED')
         return result
+    }
+    const recoveryIdentity = () => dependencies.recoveryIdentity?.() || dependencies.scope()
+    const sameApplication = (left: AutomationSubmission | undefined, right: AutomationSubmission) =>
+        left?.kind === 'APPLICATION' && right.kind === 'APPLICATION'
+        && left.platformAccount === right.platformAccount && left.encryptJobId === right.encryptJobId
+    async function proofFor(body: AutomationSubmission, context: C, scope: string): Promise<SubmissionProof<C>> {
+        const stableIdentity = recoveryIdentity()
+        if (!scope || !stableIdentity || body.kind !== 'APPLICATION' || body.platformAccount !== dependencies.account()) {
+            throw new Error('AUTOMATION_SUBMISSION_SCOPE_CHANGED')
+        }
+        return {
+            schemaVersion: 1,
+            scope,
+            recoveryIdentity: stableIdentity,
+            requestId: body.requestId,
+            semanticHash: await automationRequestId(['automation-submission-v1', body, context]),
+            recoveryHash: await automationRequestId(['automation-application-recovery-v1', applicationRecoveryValue(body, context)]),
+            body,
+            context,
+            createdAt: now(),
+        }
+    }
+    async function validateSubmissionProof(proof: SubmissionProof<C>): Promise<void> {
+        if (!proof || proof.schemaVersion !== 1 || proof.body?.kind !== 'APPLICATION'
+            || proof.requestId !== proof.body.requestId || proof.body.platformAccount !== dependencies.account()
+            || typeof proof.scope !== 'string' || !proof.scope || typeof proof.recoveryIdentity !== 'string') {
+            throw new Error('AUTOMATION_PENDING_SUBMISSION_INVALID')
+        }
+        const semanticHash = await automationRequestId(['automation-submission-v1', proof.body, proof.context])
+        const recoveryHash = await automationRequestId([
+            'automation-application-recovery-v1', applicationRecoveryValue(proof.body, proof.context),
+        ])
+        if (semanticHash !== proof.semanticHash || recoveryHash !== proof.recoveryHash) {
+            throw new Error('AUTOMATION_PENDING_SUBMISSION_CORRUPT')
+        }
+        if (!proof.recoveryIdentity || proof.recoveryIdentity !== recoveryIdentity()) {
+            throw new Error('AUTOMATION_RECOVERY_IDENTITY_CHANGED')
+        }
+    }
+    async function authorizedSubmissionContext(
+        proof: SubmissionProof<C>,
+        proposedBody?: AutomationSubmission,
+        proposedContext?: C,
+    ): Promise<C> {
+        await validateSubmissionProof(proof)
+        if (proposedBody) {
+            if (!proposedContext || !sameApplication(proof.body, proposedBody)) {
+                throw new Error('AUTOMATION_SUBMISSION_SEMANTICS_CHANGED')
+            }
+            const proposedHash = await automationRequestId([
+                'automation-application-recovery-v1', applicationRecoveryValue(proposedBody, proposedContext),
+            ])
+            if (proposedHash !== proof.recoveryHash) throw new Error('AUTOMATION_SUBMISSION_SEMANTICS_CHANGED')
+        }
+        const recovered = dependencies.recoverSubmissionContext
+            ? dependencies.recoverSubmissionContext(proof.context, proof.body, proposedContext, proposedBody)
+            : proof.scope === dependencies.scope() ? proof.context : null
+        if (!recovered) throw new Error('AUTOMATION_SUBMISSION_AUTHORIZATION_CHANGED')
+        return recovered
+    }
+    const applicationBlocksNewCycle = (job: AutomationJob) => !TERMINAL.has(job.status)
+        || job.actions.some(action => action.kind === 'CONTACT_JOB' && BLOCKING_CONTACT.has(action.status))
+    const hasDispatch = (saved: SavedJob<C>) =>
+        list<Dispatch>('dispatch:').some(record => record.jobId === saved.jobId)
+    const hasForeignDispatch = (saved: SavedJob<C>, currentScope: string) =>
+        list<Dispatch>('dispatch:').some(record => record.jobId === saved.jobId && record.scope !== currentScope)
+    async function adoptSubmission(proof: SubmissionProof<C>, context: C, job: AutomationJob): Promise<AutomationJob> {
+        if (!job?.jobId || job.kind !== 'APPLICATION') throw new Error('AUTOMATION_SUBMISSION_RESPONSE_INVALID')
+        const key = 'job:' + job.jobId
+        const previous = read<SavedJob<C>>(key)
+        if (previous?.submission && previous.submission.requestId !== proof.requestId) {
+            throw new Error('AUTOMATION_SUBMISSION_JOB_CONFLICT')
+        }
+        write(key, {
+            ...(previous || {}),
+            scope: dependencies.scope(),
+            jobId: job.jobId,
+            context,
+            completed: TERMINAL.has(job.status),
+            submission: proof,
+        } satisfies SavedJob<C>)
+        remove('pending-submit:' + proof.requestId)
+        snapshot.jobs = [job, ...snapshot.jobs.filter(item => item.jobId !== job.jobId)].slice(0, 30)
+        publish()
+        return job
+    }
+    async function absorbEquivalentPending(
+        pending: SubmissionProof<C>,
+        proposedBody?: AutomationSubmission,
+        proposedContext?: C,
+    ): Promise<AutomationJob | null> {
+        // Concurrent tabs may durably write different cycle/request ids before
+        // either POST returns. The API accepts one and rejects the other. A
+        // current-auth read of the accepted, still-blocking job plus an exact
+        // recovery hash is the only evidence allowed to retire the losing intent.
+        await authorizedSubmissionContext(pending, proposedBody, proposedContext)
+        const matches: {saved: SavedJob<C>; job: AutomationJob; context: C}[] = []
+        for (const saved of list<SavedJob<C>>('job:')) {
+            const accepted = saved.submission
+            if (!accepted || !sameApplication(accepted.body, pending.body)
+                || accepted.recoveryHash !== pending.recoveryHash) continue
+            const context = await authorizedSubmissionContext(accepted, proposedBody, proposedContext)
+            const job = await request('/jobs/' + encodeURIComponent(saved.jobId), undefined, dependencies.scope()) as AutomationJob
+            if (job.jobId !== saved.jobId || job.kind !== 'APPLICATION') {
+                throw new Error('AUTOMATION_SUBMISSION_RESPONSE_INVALID')
+            }
+            if (applicationBlocksNewCycle(job)) matches.push({saved, job, context})
+        }
+        if (matches.length > 1) throw new Error('AUTOMATION_SUBMISSION_AMBIGUOUS')
+        if (!matches.length) return null
+        const {saved, job, context} = matches[0]
+        if (!hasDispatch(saved)) {
+            saved.scope = dependencies.scope()
+            saved.context = context
+            saved.completed = TERMINAL.has(job.status)
+            write('job:' + saved.jobId, saved)
+        }
+        remove('pending-submit:' + pending.requestId)
+        snapshot.jobs = [job, ...snapshot.jobs.filter(item => item.jobId !== job.jobId)].slice(0, 30)
+        publish()
+        return job
+    }
+    async function recoverPendingSubmissions(): Promise<void> {
+        for (const proof of list<SubmissionProof<C>>('pending-submit:')) {
+            try {
+                if (await absorbEquivalentPending(proof)) continue
+                const context = await authorizedSubmissionContext(proof)
+                const job = await request('/jobs', proof.body, dependencies.scope()) as AutomationJob
+                await adoptSubmission(proof, context, job)
+            } catch (error) {
+                snapshot.held++
+                snapshot.error = String((error as Error)?.message || error).startsWith('AUTOMATION_')
+                    ? '待恢复投递的服务器、账号、设置或执行授权已变化；未重放旧请求'
+                    : '待恢复投递仍在等待原请求的幂等确认；不会创建新投递轮次'
+            }
+        }
+    }
+    async function recoverPendingForSubmission(body: AutomationSubmission, context: C): Promise<AutomationJob | null> {
+        const exact = read<SubmissionProof<C>>('pending-submit:' + body.requestId)
+        if (exact && !sameApplication(exact.body, body)) {
+            throw new Error('AUTOMATION_SUBMISSION_SEMANTICS_CHANGED')
+        }
+        const matches = list<SubmissionProof<C>>('pending-submit:').filter(proof => sameApplication(proof.body, body))
+        if (matches.length > 1) throw new Error('AUTOMATION_SUBMISSION_AMBIGUOUS')
+        const proof = matches[0]
+        if (!proof) return null
+        const absorbed = await absorbEquivalentPending(proof, body, context)
+        if (absorbed) return absorbed
+        const recovered = await authorizedSubmissionContext(proof, body, context)
+        const job = await request('/jobs', proof.body, dependencies.scope()) as AutomationJob
+        return adoptSubmission(proof, recovered, job)
+    }
+    async function recoverSavedForSubmission(body: AutomationSubmission, context: C): Promise<AutomationJob | null> {
+        const blocking: {saved: SavedJob<C>; proof: SubmissionProof<C>; job: AutomationJob}[] = []
+        for (const saved of list<SavedJob<C>>('job:')) {
+            const proof = saved.submission
+            if (!proof || !sameApplication(proof.body, body)) continue
+            await validateSubmissionProof(proof)
+            const job = await request('/jobs/' + encodeURIComponent(saved.jobId), undefined, dependencies.scope()) as AutomationJob
+            if (job.jobId !== saved.jobId || job.kind !== 'APPLICATION') {
+                throw new Error('AUTOMATION_SUBMISSION_RESPONSE_INVALID')
+            }
+            if (!applicationBlocksNewCycle(job)) {
+                saved.completed = true
+                write('job:' + saved.jobId, saved)
+                continue
+            }
+            blocking.push({saved, proof, job})
+        }
+        if (blocking.length > 1) throw new Error('AUTOMATION_SUBMISSION_AMBIGUOUS')
+        if (!blocking.length) return null
+        const {saved, proof, job} = blocking[0]
+        const currentScope = dependencies.scope()
+        const recovered = await authorizedSubmissionContext(proof, body, context)
+        if (saved.scope !== currentScope && hasForeignDispatch(saved, currentScope)) {
+            throw new Error('AUTOMATION_SUBMISSION_DISPATCH_SCOPE_CHANGED')
+        }
+        saved.scope = currentScope
+        saved.context = recovered
+        saved.completed = false
+        write('job:' + saved.jobId, saved)
+        snapshot.jobs = [job, ...snapshot.jobs.filter(item => item.jobId !== job.jobId)].slice(0, 30)
+        publish()
+        return job
+    }
+    async function reauthorizeSavedApplications(): Promise<void> {
+        for (const saved of list<SavedJob<C>>('job:')) {
+            if (saved.completed || saved.submission?.body.kind !== 'APPLICATION') continue
+            try {
+                const currentScope = dependencies.scope()
+                const context = await authorizedSubmissionContext(saved.submission)
+                if (saved.scope === currentScope && JSON.stringify(saved.context) === JSON.stringify(context)) continue
+                const job = await request('/jobs/' + encodeURIComponent(saved.jobId), undefined, currentScope) as AutomationJob
+                if (job.jobId !== saved.jobId || job.kind !== 'APPLICATION') {
+                    throw new Error('AUTOMATION_SUBMISSION_RESPONSE_INVALID')
+                }
+                snapshot.jobs = [job, ...snapshot.jobs.filter(item => item.jobId !== job.jobId)].slice(0, 30)
+                if (!applicationBlocksNewCycle(job)) {
+                    saved.completed = true
+                    write('job:' + saved.jobId, saved)
+                    continue
+                }
+                if (saved.scope !== currentScope && hasForeignDispatch(saved, currentScope)) {
+                    throw new Error('AUTOMATION_SUBMISSION_DISPATCH_SCOPE_CHANGED')
+                }
+                if (saved.scope !== currentScope || JSON.stringify(saved.context) !== JSON.stringify(context)) {
+                    saved.scope = currentScope
+                    saved.context = context
+                    write('job:' + saved.jobId, saved)
+                }
+            } catch {
+                // The saved job and its dispatch evidence remain intact. A future exact
+                // account/policy authorization can recover it; this pass never sends.
+            }
+        }
     }
     async function status(force = false): Promise<AutomationStatus> {
         const scope = dependencies.scope()
@@ -140,6 +379,27 @@ export function createUnifiedAutomation<C>(dependencies: Dependencies<C>) {
     async function submit(body: AutomationSubmission, context: C): Promise<AutomationJob> {
         if (!(await status()).enabled) throw new Error('AUTOMATION_DISABLED')
         const scope = dependencies.scope()
+        if (body.kind === 'APPLICATION') {
+            const pending = await recoverPendingForSubmission(body, context)
+            if (pending) return pending
+            const saved = await recoverSavedForSubmission(body, context)
+            if (saved) return saved
+            const proof = await proofFor(body, context, scope)
+            const authorizedContext = await authorizedSubmissionContext(proof, body, context)
+            const pendingKey = 'pending-submit:' + proof.requestId
+            const collision = read<SubmissionProof<C>>(pendingKey)
+            if (collision) throw new Error('AUTOMATION_SUBMISSION_REQUEST_CONFLICT')
+            // This durable intent is written before the POST. If the server commits and
+            // the response is lost, every retry must reuse this exact request body/id.
+            write(pendingKey, proof)
+            const persisted = read<SubmissionProof<C>>(pendingKey)
+            if (!persisted || persisted.semanticHash !== proof.semanticHash
+                || persisted.recoveryHash !== proof.recoveryHash) {
+                throw new Error('AUTOMATION_PENDING_SUBMISSION_NOT_DURABLE')
+            }
+            const job = await request('/jobs', proof.body, scope) as AutomationJob
+            return adoptSubmission(proof, authorizedContext, job)
+        }
         const job = await request('/jobs', body, scope) as AutomationJob
         // One key per server job prevents concurrent tabs from replacing an entire queue snapshot.
         const previous = read<SavedJob<C>>('job:' + job.jobId)
@@ -233,6 +493,9 @@ export function createUnifiedAutomation<C>(dependencies: Dependencies<C>) {
     let nextJob = 0
     async function pass() {
         if (!(await status(true)).enabled) return
+        snapshot.held = 0
+        await recoverPendingSubmissions()
+        await reauthorizeSavedApplications()
         await heartbeat()
         snapshot.jobs = await request('/jobs?limit=30&offset=0') as AutomationJob[]
         for (const job of snapshot.jobs) {
@@ -243,7 +506,6 @@ export function createUnifiedAutomation<C>(dependencies: Dependencies<C>) {
                 parkedUnknownUntil.delete(job.jobId)
             }
         }
-        snapshot.held = 0
         for (const record of list<Dispatch>('dispatch:')) {
             if (record.scope !== dependencies.scope()) continue
             // A different tab may still be performing this dispatch. Only the API expires
@@ -328,13 +590,51 @@ export function createUnifiedAutomation<C>(dependencies: Dependencies<C>) {
         getJob: async (jobId: string) => request('/jobs/' + encodeURIComponent(jobId)) as Promise<AutomationJob>,
         cancel: async (jobId: string) => request(`/jobs/${encodeURIComponent(jobId)}/cancel`, {requestId: await automationRequestId(['cancel', jobId])}),
         async unresolvedApplication(encryptJobId: string): Promise<AutomationJob | null> {
+            await recoverPendingSubmissions()
+            const unresolvedPending = list<SubmissionProof<C>>('pending-submit:').filter(proof =>
+                proof?.body?.kind === 'APPLICATION'
+                && proof.body.platformAccount === dependencies.account()
+                && proof.body.encryptJobId === encryptJobId)
+            if (unresolvedPending.length) throw new Error('AUTOMATION_APPLICATION_RECOVERY_PENDING')
             for (const saved of list<SavedJob<C>>('job:')) {
-                if (saved.scope !== dependencies.scope()) continue
-                const context = saved.context as {kind?: string; encryptJobId?: string}
+                const context = saved.context as {kind?: string; account?: string; encryptJobId?: string}
                 if (context.kind !== 'APPLICATION' || context.encryptJobId !== encryptJobId) continue
-                const job = await request('/jobs/' + encodeURIComponent(saved.jobId)) as AutomationJob
-                if (job.actions.some(action => ['DISPATCHING', 'UNKNOWN', 'ACKNOWLEDGED'].includes(action.status))) return job
-                if (!TERMINAL.has(job.status)) return job
+                if (context.account && context.account !== dependencies.account()) continue
+                const currentScope = dependencies.scope()
+                if (saved.submission) await validateSubmissionProof(saved.submission)
+                else if (saved.scope !== currentScope) {
+                    // Legacy records have no stable recovery proof. A current-auth GET may
+                    // block a duplicate cycle, but never grants permission to execute it.
+                    const legacy = await request('/jobs/' + encodeURIComponent(saved.jobId), undefined, currentScope) as AutomationJob
+                    if (legacy.jobId !== saved.jobId || legacy.kind !== 'APPLICATION') {
+                        throw new Error('AUTOMATION_SUBMISSION_RESPONSE_INVALID')
+                    }
+                    if (applicationBlocksNewCycle(legacy)) return legacy
+                    continue
+                }
+                const job = await request('/jobs/' + encodeURIComponent(saved.jobId), undefined, currentScope) as AutomationJob
+                if (job.jobId !== saved.jobId || job.kind !== 'APPLICATION') {
+                    throw new Error('AUTOMATION_SUBMISSION_RESPONSE_INVALID')
+                }
+                if (applicationBlocksNewCycle(job)) {
+                    if (!saved.submission) return job
+                    const recovered = await authorizedSubmissionContext(saved.submission)
+                    const sideEffectStarted = hasDispatch(saved) || job.actions.some(action => action.kind === 'CONTACT_JOB'
+                        && ['DISPATCHING', 'UNKNOWN', 'ACKNOWLEDGED'].includes(action.status))
+                    if (sideEffectStarted || saved.scope !== currentScope && hasForeignDispatch(saved, currentScope)) return job
+                    saved.scope = currentScope
+                    saved.context = recovered
+                    saved.completed = false
+                    write('job:' + saved.jobId, saved)
+                    // A persisted proof with no dispatched side effect is recoverable.
+                    // Let doPush call submit(), which returns this exact server job after
+                    // validating the new run's semantics; it never creates a new cycle.
+                    continue
+                }
+                if (!saved.completed) {
+                    saved.completed = true
+                    write('job:' + saved.jobId, saved)
+                }
             }
             return null
         },

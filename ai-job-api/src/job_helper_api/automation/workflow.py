@@ -269,9 +269,13 @@ class Workflow(Storage):
                     return {"jobId": job_id, "artifactId": job["artifact_id"], "reused": True}
                 if job["compute_started"]:
                     raise ApiError("ANALYSIS_BUSY", 409)
-                changed = job["kind"] != "CAREER_REVIEW" and loads(job["context_json"], {})[
-                    "scopeHash"
-                ] != await self.scope(self.uid, c)
+                changed = (
+                    job["kind"] != "CAREER_REVIEW"
+                    and await self.authority_failure(
+                        c, self.uid, job, await self.scope(self.uid, c)
+                    )
+                    is not None
+                )
                 await self.update_job(c, job, compute_started=1, phase="ANALYZING")
             try:
                 artifact = self.stopped_artifact(job) if changed else await compute(self, job)
@@ -286,9 +290,13 @@ class Workflow(Storage):
                 current = await self.checked(c, job_id, payload)
                 if current["input_hash"] != job["input_hash"]:
                     raise ApiError("INPUT_CHANGED", 409)
-                if job["kind"] != "CAREER_REVIEW" and loads(job["context_json"], {})[
-                    "scopeHash"
-                ] != await self.scope(self.uid, c):
+                if (
+                    job["kind"] != "CAREER_REVIEW"
+                    and await self.authority_failure(
+                        c, self.uid, job, await self.scope(self.uid, c)
+                    )
+                    is not None
+                ):
                     artifact = self.stopped_artifact(job)
                 await self.update_job(
                     c,

@@ -2,7 +2,9 @@ from sqlalchemy import select
 
 from ..contracts import AskInput
 from ..conversation import safe_history
-from ..database import dumps, loads, now_date
+from ..database import dumps, loads, now_date, now_ms
+from ..errors import ApiError
+from .conversation_history import record_action_ack
 from .history import current_rounds, history_key
 
 
@@ -20,6 +22,25 @@ async def acknowledge_text(service, c, uid, job, action):
         if not job["conversation_key"] or not job["boss_id"]:
             return False
         raw.update(platformAccount=job["platform_account"], conversationKey=job["conversation_key"])
+    try:
+        async with c.begin_nested():
+            await record_action_ack(service.db, c, uid, job, action)
+    except ApiError as exc:
+        # The platform ACK is authoritative.  A malformed/conflicting legacy
+        # history edge must not roll back that receipt; retain a durable repair
+        # marker and let exact-history backfill retry from the ACKed action.
+        await service.db.set_control(
+            c,
+            uid,
+            "conversation-history-repair:" + action["id"],
+            {
+                "actionId": action["id"],
+                "jobId": job["id"],
+                "error": exc.message,
+                "code": exc.code,
+                "observedAt": now_ms(),
+            },
+        )
     input_ = raw["input"]
     key = history_key(raw)
     sessions = service.db.table("msg_session")

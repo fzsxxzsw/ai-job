@@ -26,7 +26,7 @@ def test_sql_loader_preserves_quoted_semicolons_and_escaped_quotes():
 def test_entire_standalone_mysql_schema_yields_nine_complete_table_statements():
     source = (Path(__file__).parents[1] / "schema.sql").read_text(encoding="utf-8-sig")
     statements = split_mysql_script(source)
-    assert len(statements) == 23
+    assert len(statements) == 24
     assert all(
         statement.lstrip().upper().startswith("CREATE TABLE IF NOT EXISTS")
         for statement in statements
@@ -39,3 +39,15 @@ def test_entire_standalone_mysql_schema_yields_nine_complete_table_statements():
 
 def test_comment_only_mysql_script_contains_no_queries():
     assert split_mysql_script("-- empty;\n/* also; empty */\n# final;") == []
+
+
+def test_conversation_history_mysql_ddl_persists_binary_causal_metadata():
+    source = (Path(__file__).parents[1] / "schema.sql").read_text(encoding="utf-8-sig")
+    statement = next(
+        sql
+        for sql in split_mysql_script(source)
+        if "CREATE TABLE IF NOT EXISTS conversation_message" in sql
+    )
+    assert "causal_after_message_id VARCHAR(160) COLLATE utf8mb4_bin" in statement
+    assert "causal_root_message_id VARCHAR(160) COLLATE utf8mb4_bin NOT NULL" in statement
+    assert "causal_depth INTEGER NOT NULL" in statement

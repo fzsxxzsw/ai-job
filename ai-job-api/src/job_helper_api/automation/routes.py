@@ -7,6 +7,7 @@ from ..errors import ApiError, envelope
 from . import contracts as dto
 from .actions import Actions
 from .jobs import Jobs
+from .manual_takeover import ManualTakeover
 from .workflow import Workflow
 
 
@@ -47,6 +48,16 @@ def register_routes(app, require_user, writable):
     @app.post("/api/job/automation/jobs")
     async def submit(payload: dto.JobInput, uid=Depends(enabled)):
         return envelope(await service().submit(uid, payload))
+
+    @app.post("/api/job/automation/sessions/manual-takeover")
+    async def manual_takeover(payload: dto.ManualTakeoverInput, uid=Depends(enabled)):
+        return envelope(await service(ManualTakeover).activate(uid, payload))
+
+    @app.post("/api/job/automation/sessions/manual-takeover/status")
+    async def manual_takeover_status(
+        payload: dto.ManualTakeoverStatusInput, uid=Depends(require_user)
+    ):
+        return envelope(await service(ManualTakeover).status(uid, payload))
 
     @app.get("/api/job/automation/jobs")
     async def listing(

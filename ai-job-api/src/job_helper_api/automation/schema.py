@@ -11,7 +11,12 @@ from sqlalchemy import (
 )
 from sqlalchemy.dialects.mysql import LONGTEXT, VARCHAR
 
-TABLES = ("automation_job", "automation_action", "automation_action_event")
+TABLES = (
+    "automation_job",
+    "automation_action",
+    "automation_action_event",
+    "conversation_message",
+)
 
 
 def automation_metadata() -> MetaData:
@@ -100,5 +105,53 @@ def automation_metadata() -> MetaData:
         Column("payload_json", long, nullable=False),
         Column("created_at", BigInteger, nullable=False),
         UniqueConstraint("user_id", "request_id", name="uq_automation_event_request"),
+    )
+    Table(
+        "conversation_message",
+        metadata,
+        *base(),
+        Column("conversation_id", key(64), nullable=False),
+        Column("platform_account", key(255), nullable=False),
+        Column("conversation_key", key(255), nullable=False),
+        Column("boss_id", key(255), nullable=False),
+        Column("encrypt_job_id", key(255), nullable=False),
+        Column("message_id", key(160), nullable=False),
+        Column("client_mid", key(160)),
+        Column("role", String(8), nullable=False),
+        Column("author_kind", String(16), nullable=False),
+        Column("text", long, nullable=False),
+        Column("text_hash", String(64), nullable=False),
+        Column("sent_at", BigInteger),
+        Column("observed_at", BigInteger, nullable=False),
+        Column("order_at", BigInteger, nullable=False),
+        Column("order_confidence", String(16), nullable=False),
+        Column("causal_after_message_id", key(160)),
+        Column("causal_root_message_id", key(160), nullable=False),
+        Column("causal_depth", Integer, nullable=False),
+        Column("delivery_state", String(24), nullable=False),
+        Column("model_eligible", Integer, nullable=False),
+        Column("sources_json", long, nullable=False),
+        Column("created_at", BigInteger, nullable=False),
+        Column("updated_at", BigInteger, nullable=False),
+        UniqueConstraint(
+            "user_id",
+            "conversation_id",
+            "message_id",
+            name="uq_conversation_message_server_mid",
+        ),
+        UniqueConstraint(
+            "user_id",
+            "conversation_id",
+            "client_mid",
+            name="uq_conversation_message_client_mid",
+        ),
+        Index(
+            "ix_conversation_message_model",
+            "user_id",
+            "conversation_id",
+            "model_eligible",
+            "order_at",
+            "id",
+        ),
     )
     return metadata

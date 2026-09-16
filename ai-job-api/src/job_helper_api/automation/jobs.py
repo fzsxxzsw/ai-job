@@ -3,6 +3,8 @@ from sqlalchemy import String, cast, exists, func, literal, or_, select
 from ..database import dumps, loads, now_ms
 from ..errors import ApiError
 from ..outcomes.storage import task_view
+from .conversation_history import record_inbound_job
+from .manual_takeover import consume_manual_takeover_for_reply
 from .storage import TERMINAL, Storage, digest, identifier
 
 UNCERTAIN_REVIEW_PREFIX = "automation:uncertain-review:"
@@ -30,6 +32,37 @@ class Jobs(Storage):
         review = await self.db.control(uid, self.review_key(job), None, c)
         view["reviewedAt"] = review.get("reviewedAt") if isinstance(review, dict) else None
         return view
+
+    async def blocking_application(self, c, uid, payload):
+        """Return a prior job whose CONTACT side effect is unresolved or proven sent.
+
+        Browser storage is only a cache. This transaction-scoped check is the
+        authority that prevents a new run, token rotation, or another device
+        from creating a second CONTACT_JOB for the same account and vacancy.
+        """
+        contact_side_effect = exists(
+            select(self.actions.c.id).where(
+                self.actions.c.user_id == uid,
+                self.actions.c.job_id == self.jobs.c.id,
+                self.actions.c.kind == "CONTACT_JOB",
+                self.actions.c.status.in_(
+                    ["QUEUED", "LEASED", "DISPATCHING", "UNKNOWN", "ACKNOWLEDGED"]
+                ),
+            )
+        )
+        return await self.db.one(
+            select(self.jobs)
+            .where(
+                self.jobs.c.user_id == uid,
+                self.jobs.c.kind == "APPLICATION",
+                self.db.exact(self.jobs.c.platform_account, payload.platformAccount),
+                self.db.exact(self.jobs.c.encrypt_job_id, payload.encryptJobId),
+                or_(self.jobs.c.status.not_in(TERMINAL), contact_side_effect),
+            )
+            .order_by(self.jobs.c.created_at.desc())
+            .limit(1),
+            c,
+        )
 
     async def submit(self, uid, payload):
         raw = payload.model_dump(mode="json")
@@ -82,6 +115,13 @@ class Jobs(Storage):
                     raise ApiError("REQUEST_CONFLICT", 409)
                 await self.event(c, uid, payload.requestId, "JOB_REQUEST", raw, previous["id"])
                 return await self.view(uid, dict(previous), c)
+            if payload.kind == "APPLICATION" and await self.blocking_application(c, uid, payload):
+                raise ApiError("APPLICATION_ALREADY_UNRESOLVED", 409)
+            if payload.kind == "REPLY":
+                takeover = await consume_manual_takeover_for_reply(self.db, c, uid, payload)
+                if takeover["permanentPaused"]:
+                    raise ApiError("MANUAL_TAKEOVER_PERMANENT_PAUSE", 409)
+                await record_inbound_job(self.db, c, uid, payload)
             revision = 1
             uncertain_order = False
             if payload.kind == "REPLY":

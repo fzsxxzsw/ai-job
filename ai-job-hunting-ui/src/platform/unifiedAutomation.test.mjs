@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import {createUnifiedAutomation} from './unifiedAutomation.ts'
+import {automationRequestId, createUnifiedAutomation} from './unifiedAutomation.ts'
 import {automationActionLabel, automationApprovalAvailable, automationJobLabel, outcomeSubscriptionLabel} from './automationPresentation.ts'
 
 class MemoryStorage {
@@ -114,6 +114,7 @@ test('pause after server dispatch but before platform call produces explicit pre
 test('natural exact contact response binds only one ACKed application cycle and survives restart', async () => {
     const contactAction = {...action('CONTACT_JOB'), status: 'ACKNOWLEDGED'}
     const env = rig({actions: [contactAction, action('SEND_GREETING', 'greeting')]})
+    env.state.job.kind = 'APPLICATION'
     const context = {kind:'APPLICATION', account:'40',runId:'run-A',encryptJobId:'job-A',greetingEnabled:true,
         job:{encryptBossId:'BossA',securityId:'SecA'},bossId:null,conversationKey:null}
     await env.api.submit({requestId:'application',kind:'APPLICATION',platformAccount:'40'},context)
@@ -132,6 +133,7 @@ test('another tab binding during a stale tick GET cannot be erased by ACK reconc
     let release, pause = false
     const env=rig({actions:[{...action('CONTACT_JOB'),status:'ACKNOWLEDGED'},action('SEND_GREETING','greeting')],ready:()=>false,
         onGetJob:()=>pause?new Promise(resolve=>{release=resolve}):undefined})
+    env.state.job.kind='APPLICATION'
     await env.api.submit({requestId:'app',kind:'APPLICATION',platformAccount:'40'}, {kind:'APPLICATION',encryptJobId:'job-A',greetingEnabled:true,job:{encryptBossId:'BossA',securityId:'SecA'}})
     pause=true;const tick=env.api.tick();while(!release)await new Promise(resolve=>setImmediate(resolve))
     const observer=rig({shared:env.state,storage:env.storage})
@@ -289,4 +291,189 @@ test('late SDK-remapped ACK is accepted only with exact registered original-MID 
     await env.submit();await env.api.tick()
     await env.api.acknowledge('81111111111111111','90071992547409999');assert.equal(env.state.job.actions[0].status,'UNKNOWN')
     proven=true;await env.api.acknowledge('81111111111111111','90071992547409999');assert.equal(env.state.job.actions[0].status,'ACKNOWLEDGED')
+})
+
+test('committed APPLICATION with a lost response survives reload and token rotation without a second cycle', async () => {
+    const storage = new MemoryStorage()
+    let executionScope = 'token-scope-A'
+    let recoveryIdentity = 'server-A:user-7:account-40'
+    let currentPolicy = 'policy-A'
+    let currentRunId = 'run-A'
+    let committed = false
+    let submitCalls = 0
+    let effects = 0
+    const contact = {...action('CONTACT_JOB'), jobId: 'application-job', payload: {
+        encryptJobId: 'job-A', bossId: null, conversationKey: null,
+    }}
+    const job = {...makeJob([contact]), jobId: 'application-job', kind: 'APPLICATION',
+        decision: {code: 'CONTACT', reason: '合成匹配'}}
+    const body = {
+        requestId: 'original-application-cycle', kind: 'APPLICATION', platformAccount: '40',
+        conversationKey: null, bossId: null, encryptJobId: 'job-A', input: {
+            cycleKey: 'original-application-cycle',
+            filterInput: {prompt: '', jobBaseInfo: '{}', jobExtInfo: '{}', resumeMatchEnabled: false,
+                minMatchScore: 0, titleMatchedKeywords: []},
+            localAssessment: {passed: true, reason: '通过'}, greeting: {enabled: false, text: ''},
+            preparedResumeVersionId: null, strategyPlanId: null,
+        },
+    }
+    const originalContext = {kind: 'APPLICATION', account: '40', policy: 'policy-A', runId: 'run-A',
+        encryptJobId: 'job-A', bossId: null, conversationKey: null, greetingEnabled: false,
+        job: {encryptJobId: 'job-A', encryptBossId: 'boss-A', securityId: 'security-A'}}
+
+    const runtime = () => createUnifiedAutomation({
+        storage, executorId: 'executor-A', scope: () => executionScope,
+        recoveryIdentity: () => recoveryIdentity, account: () => '40',
+        flags: () => ({replyEnabled: true, deliveryEnabled: true}), clientMid: () => '1',
+        recoverSubmissionContext(stored, storedBody, proposed) {
+            const candidate = proposed || stored
+            if (storedBody.kind !== 'APPLICATION' || stored.account !== '40'
+                || stored.policy !== currentPolicy || candidate.policy !== currentPolicy) return null
+            return {...stored, runId: currentRunId}
+        },
+        async request(path, requestBody) {
+            if (path.endsWith('/status')) return {contractVersion: 1, enabled: true, mode: 'LANGGRAPH'}
+            if (path.endsWith('/executors/heartbeat')) return {}
+            if (path === '/api/job/automation/jobs') {
+                submitCalls++
+                assert.deepEqual(requestBody, body, 'recovery must replay the original request semantics')
+                if (!committed) {
+                    committed = true
+                    throw new Error('response lost after commit')
+                }
+                return clone(job)
+            }
+            if (path.includes('/jobs?')) return committed ? [clone(job)] : []
+            if (path.endsWith('/jobs/application-job')) return clone(job)
+            if (path.endsWith('/actions/claim')) {
+                if (job.actions[0].status !== 'QUEUED') return null
+                job.actions[0].status = 'LEASED'
+                job.actions[0].executorId = requestBody.executorId
+                return {...clone(job.actions[0]), leaseToken: 'lease'.repeat(8), leaseUntil: Date.now() + 30_000,
+                    authorizationRevision: 1}
+            }
+            if (path.endsWith('/dispatch')) {
+                job.actions[0].status = 'DISPATCHING'
+                return {dispatchToken: 'dispatch'.repeat(5), clientMid: null}
+            }
+            if (path.endsWith('/receipt')) {
+                job.actions[0].status = requestBody.status
+                job.status = 'COMPLETED'
+                return clone(job.actions[0])
+            }
+            throw new Error('Unexpected API path ' + path)
+        },
+        execution: {
+            ready: () => true,
+            async perform(context) {
+                effects++
+                assert.equal(context.runId, 'run-B', 'reload rebinds only to the newly authorized run')
+                return {status: 'ACKNOWLEDGED', serverMid: null, platformCode: 0,
+                    occurredAt: Date.now(), errorCode: null}
+            },
+        },
+    })
+
+    const beforeReload = runtime()
+    await assert.rejects(beforeReload.submit(body, originalContext), /response lost after commit/)
+    assert.equal(submitCalls, 1)
+    assert.equal(storage.getItem('ai-job-unified-v1:job:application-job'), null)
+    assert.ok(storage.getItem('ai-job-unified-v1:pending-submit:original-application-cycle'))
+
+    executionScope = 'token-scope-B'
+    currentRunId = 'run-B'
+    currentPolicy = 'policy-B'
+    await runtime().tick()
+    assert.equal(submitCalls, 1, 'policy changes fail closed before replay')
+    recoveryIdentity = 'server-B:user-7:account-40'
+    currentPolicy = 'policy-A'
+    await runtime().tick()
+    assert.equal(submitCalls, 1, 'server/account recovery identity changes fail closed before replay')
+
+    recoveryIdentity = 'server-A:user-7:account-40'
+    const afterReload = runtime()
+    assert.equal(await afterReload.unresolvedApplication('job-A'), null,
+        'a proven pre-dispatch recovery rejoins the APPLICATION main chain')
+    const changedBody = clone(body)
+    changedBody.requestId = 'changed-application-cycle'
+    changedBody.input.cycleKey = 'changed-application-cycle'
+    changedBody.input.greeting.text = 'changed semantics'
+    await assert.rejects(afterReload.submit(changedBody, {...originalContext, runId: 'run-B'}),
+        /AUTOMATION_SUBMISSION_SEMANTICS_CHANGED/)
+    assert.equal(submitCalls, 2, 'semantic drift is rejected before another POST')
+    const resumedBody = clone(body)
+    resumedBody.requestId = 'new-run-cycle'
+    resumedBody.input.cycleKey = 'new-run-cycle'
+    const resumed = await afterReload.submit(resumedBody, {...originalContext, runId: 'run-B'})
+    assert.equal(resumed.jobId, 'application-job')
+    assert.equal(submitCalls, 2, 'the new run binds to the recovered job instead of creating another cycle')
+    await afterReload.tick()
+    await afterReload.tick()
+    assert.equal(submitCalls, 2, 'the exact original request is replayed once under the rotated token')
+    assert.equal(effects, 1, 'CONTACT executes exactly once after recovery')
+    assert.equal(storage.getItem('ai-job-unified-v1:pending-submit:original-application-cycle'), null)
+    const saved = JSON.parse(storage.getItem('ai-job-unified-v1:job:application-job'))
+    assert.equal(saved.scope, 'token-scope-B')
+    assert.equal(saved.context.runId, 'run-B')
+})
+
+test('a concurrent APPLICATION_ALREADY_UNRESOLVED loser is absorbed by the equivalent accepted job', async () => {
+    const storage = new MemoryStorage()
+    let currentRunId = 'run-A'
+    let submitCalls = 0
+    const contact = {...action('CONTACT_JOB'), jobId: 'winner-job', payload: {
+        encryptJobId: 'job-A', bossId: null, conversationKey: null,
+    }}
+    const job = {...makeJob([contact]), jobId: 'winner-job', kind: 'APPLICATION',
+        decision: {code: 'CONTACT', reason: '合成匹配'}}
+    const body = {
+        requestId: 'winner-cycle', kind: 'APPLICATION', platformAccount: '40', conversationKey: null,
+        bossId: null, encryptJobId: 'job-A', input: {cycleKey: 'winner-cycle',
+            filterInput: {prompt: '', jobBaseInfo: '{}', jobExtInfo: '{}', resumeMatchEnabled: false,
+                minMatchScore: 0, titleMatchedKeywords: []},
+            localAssessment: {passed: true, reason: '通过'}, greeting: {enabled: false, text: ''},
+            preparedResumeVersionId: null, strategyPlanId: null},
+    }
+    const context = {kind: 'APPLICATION', account: '40', policy: 'policy-A', runId: 'run-A',
+        encryptJobId: 'job-A', bossId: null, conversationKey: null, greetingEnabled: false,
+        job: {encryptJobId: 'job-A', encryptBossId: 'boss-A', securityId: 'security-A'}}
+    const api = createUnifiedAutomation({
+        storage, executorId: 'executor-A', scope: () => 'scope-A',
+        recoveryIdentity: () => 'server-A:user-7:account-40', account: () => '40',
+        flags: () => ({replyEnabled: true, deliveryEnabled: true}), clientMid: () => '1',
+        recoverSubmissionContext(stored, storedBody) {
+            if (storedBody.kind !== 'APPLICATION' || stored.account !== '40' || stored.policy !== 'policy-A') return null
+            return {...stored, runId: currentRunId}
+        },
+        async request(path, requestBody) {
+            if (path.endsWith('/status')) return {contractVersion: 1, enabled: true, mode: 'LANGGRAPH'}
+            if (path.endsWith('/executors/heartbeat')) return {}
+            if (path === '/api/job/automation/jobs') {
+                submitCalls++
+                if (requestBody.requestId !== 'winner-cycle') throw new Error('APPLICATION_ALREADY_UNRESOLVED')
+                return clone(job)
+            }
+            if (path.endsWith('/jobs/winner-job')) return clone(job)
+            if (path.includes('/jobs?')) return [clone(job)]
+            throw new Error('Unexpected API path ' + path)
+        },
+        execution: {ready: () => false, async perform() { throw new Error('must not execute') }},
+    })
+
+    await api.submit(body, context)
+    assert.equal(submitCalls, 1)
+    const saved = JSON.parse(storage.getItem('ai-job-unified-v1:job:winner-job'))
+    const loserBody = clone(body)
+    loserBody.requestId = 'loser-cycle'
+    loserBody.input.cycleKey = 'loser-cycle'
+    const loserContext = {...context, runId: 'run-B'}
+    const loserProof = {...saved.submission, requestId: loserBody.requestId, body: loserBody,
+        context: loserContext, semanticHash: await automationRequestId(['automation-submission-v1', loserBody, loserContext])}
+    storage.setItem('ai-job-unified-v1:pending-submit:loser-cycle', JSON.stringify(loserProof))
+
+    currentRunId = 'run-B'
+    await api.tick()
+    assert.equal(submitCalls, 1, 'the rejected concurrent request is not replayed into a permanent 409 loop')
+    assert.equal(storage.getItem('ai-job-unified-v1:pending-submit:loser-cycle'), null)
+    assert.equal(JSON.parse(storage.getItem('ai-job-unified-v1:job:winner-job')).context.runId, 'run-B')
 })
