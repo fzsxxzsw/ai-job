@@ -43,6 +43,7 @@ import {
     SAFE_MIN_NEXT_PAGE_INTERVAL_SECONDS,
     SAFE_MIN_PUSH_INTERVAL_SECONDS,
 } from "./safetyLimits";
+import {persistReliableValue, recoverReliableValue} from './reliableStorage';
 import {
     canRetryAfterConfirmedUngreeted,
     countDeliveryGateBlockers,
@@ -428,6 +429,7 @@ class BossPlatform extends AbsPlatform {
     private currentExpectationKey = "";
     private greetingSendingKeys = new Set<string>();
     private greetingQueueDrainRunning = false;
+    private greetingQueueHydration: Promise<void> | null = null;
     private greetingRetryTimer: number | null = null;
     private greetingQueueListenerStarted = false;
     private greetingDomFallbackRunning = false;
@@ -578,6 +580,28 @@ class BossPlatform extends AbsPlatform {
         // 同时写 GM 与 localStorage：新版本跨标签页实时同步，旧版本仍可继续领取队列。
         GM_setValue(BossPlatform.GREETING_QUEUE_KEY, raw)
         localStorage.setItem(BossPlatform.GREETING_QUEUE_KEY, raw)
+        void persistReliableValue(BossPlatform.GREETING_QUEUE_KEY, raw).catch(error => {
+            this.logRecorder.error('持久化自定义招呼语补发队列失败', error)
+        })
+    }
+
+    private hydrateGreetingQueue(): Promise<void> {
+        if (this.greetingQueueHydration) return this.greetingQueueHydration
+        this.greetingQueueHydration = (async () => {
+            const gmRaw = GM_getValue(BossPlatform.GREETING_QUEUE_KEY, '') as string
+            const localRaw = localStorage.getItem(BossPlatform.GREETING_QUEUE_KEY) || ''
+            const currentRaw = gmRaw || localRaw || null
+            const recovered = await recoverReliableValue(BossPlatform.GREETING_QUEUE_KEY, currentRaw)
+            if (!currentRaw && recovered) {
+                const queue = JSON.parse(recovered)
+                if (!Array.isArray(queue)) throw new Error('GREETING_QUEUE_DURABLE_SNAPSHOT_INVALID')
+                GM_setValue(BossPlatform.GREETING_QUEUE_KEY, recovered)
+                localStorage.setItem(BossPlatform.GREETING_QUEUE_KEY, recovered)
+            }
+        })().catch(error => {
+            this.logRecorder.warn('自定义招呼语补发队列的IndexedDB恢复失败，继续使用现有同步存储', error)
+        })
+        return this.greetingQueueHydration
     }
 
     private enqueueGreeting(entry: PendingGreeting, preserveExisting = false): boolean {
@@ -1014,8 +1038,9 @@ class BossPlatform extends AbsPlatform {
         if (this.greetingRetryTimer !== null) {
             return
         }
+        const drainGreetings = () => this.hydrateGreetingQueue().then(() => this.drainGreetingQueue())
         this.greetingRetryTimer = window.setInterval(() => {
-            void this.drainGreetingQueue().catch(error => {
+            void drainGreetings().catch(error => {
                 this.logRecorder.error('招呼语后台补发任务失败', error)
             })
         }, GREETING_RETRY_INTERVAL_MS)
@@ -1023,7 +1048,7 @@ class BossPlatform extends AbsPlatform {
         if (!this.greetingQueueListenerStarted) {
             this.greetingQueueListenerStarted = true
             Tools.window.addEventListener(CHAT_BRIDGE_READY_EVENT, () => {
-                void this.drainGreetingQueue().catch(error => {
+                void drainGreetings().catch(error => {
                     this.logRecorder.error('消息通道就绪后的招呼语补发失败', error)
                 })
             })
@@ -1032,13 +1057,13 @@ class BossPlatform extends AbsPlatform {
                     return
                 }
                 try {
-                    await this.drainGreetingQueue()
+                    await drainGreetings()
                 } catch (error) {
                     this.logRecorder.error('跨标签页招呼语补发失败', error)
                 }
             })
             if (Tools.window.AIJobHelperChatBridge?.isReady?.()) {
-                void this.drainGreetingQueue().catch(error => {
+                void drainGreetings().catch(error => {
                     this.logRecorder.error('启动时招呼语补发失败', error)
                 })
             }

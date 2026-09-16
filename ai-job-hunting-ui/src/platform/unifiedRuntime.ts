@@ -9,6 +9,7 @@ import {exactPlatformId} from './boss/outcomeCollector'
 import {ACTION_KINDS, automationRequestId, createUnifiedAutomation, type AutomationAction, type AutomationExecution, type AutomationJob, type AutomationSubmission} from './unifiedAutomation'
 import type {SerializableBossJobDetail} from './boss/automationJob'
 import {deliveryRunAuthorized} from './automationReadiness'
+import {createReliableStorage} from './reliableStorage'
 
 export type BrowserAutomationContext = {
     kind: 'REPLY' | 'APPLICATION' | 'FOLLOW_UP'; account: string; policy: string; encryptJobId: string; conversationKey: string | null
@@ -22,6 +23,9 @@ const executors = new Map<BrowserAutomationContext['kind'], AutomationExecution<
 let rawIdentity = '', scope = '', identityPromise: Promise<void> | null = null
 let runtime: ReturnType<typeof createUnifiedAutomation<BrowserAutomationContext>> | null = null
 let timer: ReturnType<typeof setInterval> | undefined
+const reliableAutomationStorage = createReliableStorage(localStorage, 'ai-job-unified-v1:', {
+    onError: error => console.warn('[Job Helper] IndexedDB automation mirror unavailable; synchronous recovery remains active', error),
+})
 const account = () => String(Tools.window?._PAGE?.uid || '')
 const identity = () => JSON.stringify([ServerStore().baseUrl, localStorage.getItem('Authorization') || '', account()])
 function authorizationPrincipal(token: string): string {
@@ -48,6 +52,7 @@ const recoveryIdentity = () => {
 }
 export const currentAutomationPolicy = () => JSON.stringify([UserStore().user.preference, UserStore().user.resumeId || null])
 async function ensureIdentity() {
+    await reliableAutomationStorage.ready()
     if (rawIdentity === identity() && scope) return
     if (identityPromise) { await identityPromise; if (rawIdentity === identity() && scope) return }
     const captured = identity()
@@ -84,7 +89,8 @@ export function browserAutomationReady(context: BrowserAutomationContext, action
 function getRuntime() {
     if (runtime) return runtime
     runtime = createUnifiedAutomation<BrowserAutomationContext>({
-        scope: () => rawIdentity === identity() ? scope : '', account, executorId: crypto.randomUUID(), flags, storage: localStorage,
+        scope: () => rawIdentity === identity() ? scope : '', account, executorId: crypto.randomUUID(), flags,
+        storage: reliableAutomationStorage.storage,
         recoveryIdentity,
         recoverSubmissionContext(stored, body, proposed, proposedBody) {
             const push = PushRunStore()

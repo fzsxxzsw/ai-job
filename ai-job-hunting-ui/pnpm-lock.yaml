@@ -10,16 +10,22 @@ importers:
     dependencies:
       axios:
         specifier: ^1.6.8
-        version: 1.6.8
+        version: 1.6.8(debug@4.4.3(supports-color@7.2.0))
       element-plus:
         specifier: ^2.6.3
         version: 2.7.0(vue@3.4.21(typescript@5.4.5))
       event-source-polyfill:
         specifier: ^1.0.31
         version: 1.0.31
+      idb:
+        specifier: 8.0.3
+        version: 8.0.3
       long:
         specifier: 5.2.3
         version: 5.2.3
+      p-retry:
+        specifier: 8.0.1
+        version: 8.0.1
       pinia:
         specifier: ^2.1.7
         version: 2.1.7(typescript@5.4.5)(vue@3.4.21(typescript@5.4.5))
@@ -53,16 +59,16 @@ importers:
         version: 0.17.5(@vueuse/core@9.13.0(vue@3.4.21(typescript@5.4.5)))(rollup@4.63.1)
       unplugin-vue-components:
         specifier: ^0.26.0
-        version: 0.26.0(@babel/parser@7.29.8)(rollup@4.63.1)(vue@3.4.21(typescript@5.4.5))
+        version: 0.26.0(@babel/parser@7.29.8)(rollup@4.63.1)(supports-color@7.2.0)(vue@3.4.21(typescript@5.4.5))
       vite:
         specifier: ^5.4.19
         version: 5.4.21(@types/node@20.12.7)(lightningcss@1.33.0)
       vite-node:
         specifier: 3.2.4
-        version: 3.2.4(@types/node@20.12.7)(lightningcss@1.33.0)
+        version: 3.2.4(@types/node@20.12.7)(lightningcss@1.33.0)(supports-color@7.2.0)
       vite-plugin-md:
         specifier: ^0.21.5
-        version: 0.21.5(@vitejs/plugin-vue@5.0.4(vite@5.4.21(@types/node@20.12.7)(lightningcss@1.33.0))(vue@3.4.21(typescript@5.4.5)))(happy-dom@8.9.0)(lightningcss@1.33.0)(vite@5.4.21(@types/node@20.12.7)(lightningcss@1.33.0))
+        version: 0.21.5(@vitejs/plugin-vue@5.0.4(vite@5.4.21(@types/node@20.12.7)(lightningcss@1.33.0))(vue@3.4.21(typescript@5.4.5)))(happy-dom@8.9.0)(lightningcss@1.33.0)(supports-color@7.2.0)(vite@5.4.21(@types/node@20.12.7)(lightningcss@1.33.0))
       vite-plugin-monkey:
         specifier: 3.5.1
         version: 3.5.1(vite@5.4.21(@types/node@20.12.7)(lightningcss@1.33.0))
@@ -71,7 +77,7 @@ importers:
         version: 1.8.27(typescript@5.4.5)
       wxt:
         specifier: 0.20.11
-        version: 0.20.11(@types/node@20.12.7)(lightningcss@1.33.0)(rollup@4.63.1)
+        version: 0.20.11(@types/node@20.12.7)(lightningcss@1.33.0)(rollup@4.63.1)(supports-color@7.2.0)
 
 packages:
 
@@ -610,6 +616,7 @@ packages:
     engines: {node: ^22.20 || ^24.12 || >=25}
     cpu: [x64]
     os: [linux]
+    libc: [glibc]
 
   '@nodelib/fs.scandir@2.1.5':
     resolution: {integrity: sha512-vq24Bq3ym5HEQm2NKCr3yXDwjc7vTsEThRDnkp2DK9p1uqLR+DHurm/NOTo0KG7HYHU7eppKZj3MyqYuMBf62g==}
@@ -708,66 +715,79 @@ packages:
     resolution: {integrity: sha512-YDUNvVM85TI3g/1OpnqKP1h4NeW/j64DfWMf+G3M809xNk1bJSnpFp4sh83NpmVE5DXnkh8ULor4LTVZKoYLHw==}
     cpu: [arm]
     os: [linux]
+    libc: [glibc]
 
   '@rollup/rollup-linux-arm-musleabihf@4.63.1':
     resolution: {integrity: sha512-7Mcn71p9ZuQFAj+h+dhQXy/yeLePRS2yKRnmW1DijA9thKO5qap0GNOIQK4yQ6iP3SU0Mrb/yWo8h8vgRba8lw==}
     cpu: [arm]
     os: [linux]
+    libc: [musl]
 
   '@rollup/rollup-linux-arm64-gnu@4.63.1':
     resolution: {integrity: sha512-4YiLQTX6U4CSl0L9cluep9A9W6UmTfqBDc2/CH6wlu54pl4E7Jn3cOD8oxzvBDEGk/JMKgJ47C8g+radF7mwvg==}
     cpu: [arm64]
     os: [linux]
+    libc: [glibc]
 
   '@rollup/rollup-linux-arm64-musl@4.63.1':
     resolution: {integrity: sha512-2ra8F7w8OquwZN9z2/fKFnli69wa8PLwaVzRMIPGb13ByMJwC28Fbp8YcVGoUhlYMTt7j5j9bNgpysrN2UM+vw==}
     cpu: [arm64]
     os: [linux]
+    libc: [musl]
 
   '@rollup/rollup-linux-loong64-gnu@4.63.1':
     resolution: {integrity: sha512-Sy20ncyhjmBP0Ml+UvQbimjlk6VFgjW5uNP+qqwHB00mTE8Bl2C1TuHTlRwK2YoXeZbee5lP2XevBWVkAQAtSQ==}
     cpu: [loong64]
     os: [linux]
+    libc: [glibc]
 
   '@rollup/rollup-linux-loong64-musl@4.63.1':
     resolution: {integrity: sha512-noITLp8oNjYliPnGWmLyelIHwULGqbHloQHGw1rtxbWhTuWooRpnZarZQJ1y9EUC4szuCusCc+HEpUtxpIwYvA==}
     cpu: [loong64]
     os: [linux]
+    libc: [musl]
 
   '@rollup/rollup-linux-ppc64-gnu@4.63.1':
     resolution: {integrity: sha512-hlxxXd+F1mWiAcaFR7Sv9ZQT6m6UfI8+Vy/kFJzztq2pDMU/0wZ9sish0iszNZvsQDo8Gc0i5yuFEOz5dDf6fA==}
     cpu: [ppc64]
     os: [linux]
+    libc: [glibc]
 
   '@rollup/rollup-linux-ppc64-musl@4.63.1':
     resolution: {integrity: sha512-EF7OpqQTQ/BvGqLzUi4rEHuagCV9MugAUXSHemwPW5vxZ75RR+jxO/2j95Ph2dalMpFHSVECjRoioHZgA9zOYA==}
     cpu: [ppc64]
     os: [linux]
+    libc: [musl]
 
   '@rollup/rollup-linux-riscv64-gnu@4.63.1':
     resolution: {integrity: sha512-wQO3JesW9PRkwlabQ27y7sPfVOOTLRG73I4F2UYHG5PXun3J9U3y+b7ezVKSYbsvSKGQ1k1cq8Qlun4C9kLt3w==}
     cpu: [riscv64]
     os: [linux]
+    libc: [glibc]
 
   '@rollup/rollup-linux-riscv64-musl@4.63.1':
     resolution: {integrity: sha512-ouAGwhO6wHRXdnOVCOsB0tRFkA7nhNB2Nwax6oECXN0YiN8EYUTBAOudADOB1PI+yDL61TeNx/u7MVCzksNbkQ==}
     cpu: [riscv64]
     os: [linux]
+    libc: [musl]
 
   '@rollup/rollup-linux-s390x-gnu@4.63.1':
     resolution: {integrity: sha512-q2R38Sn+1J8RxhfJ+T54wSWmyKXWec+9jgDfqO2AtArEqHO5R2aeayp5H5OYLr5UYDVGsVaZPEFUooMhYCdz5A==}
     cpu: [s390x]
     os: [linux]
+    libc: [glibc]
 
   '@rollup/rollup-linux-x64-gnu@4.63.1':
     resolution: {integrity: sha512-gfI5T24WLLuFfSKw7Go/zDXjAAV0fny0swTaDv+WjK7vqcw4cRhFfdsyKL1n+ukI+ooBxn3bVQnyrn06WpI50w==}
     cpu: [x64]
     os: [linux]
+    libc: [glibc]
 
   '@rollup/rollup-linux-x64-musl@4.63.1':
     resolution: {integrity: sha512-4h6XqthmB4Hspji84wvgk+ElodTsGj+dbZqHJHHtKxj4mYq0ANSEEPX9ys3moJueqsRjwpaJYH7874Itwnj2ow==}
     cpu: [x64]
     os: [linux]
+    libc: [musl]
 
   '@rollup/rollup-openbsd-x64@4.63.1':
     resolution: {integrity: sha512-dlfCOa87o1VAYegLQ9EKilx2JCeRofiyPGhTCmqnuXZ6bMPiycO1rq1+sKoulAp7pGLIsTIw+1x5R+zgh5LhhA==}
@@ -868,6 +888,11 @@ packages:
 
   '@volar/typescript@1.11.1':
     resolution: {integrity: sha512-iU+t2mas/4lYierSnoFOeRFQUhAEMgsFuQxoxvwn5EdQopw43j+J27a4lt9LMInx1gLJBC6qL14WYGlgymaSMQ==}
+    peerDependencies:
+      typescript: '*'
+    peerDependenciesMeta:
+      typescript:
+        optional: true
 
   '@vue/compiler-core@3.4.21':
     resolution: {integrity: sha512-MjXawxZf2SbZszLPYxaFCjxfibYrzr3eYbKxwpLR9EQN+oaziSu3qKVbwBERj1IFIB8OLUewxB5m/BFzi613og==}
@@ -1698,6 +1723,9 @@ packages:
     resolution: {integrity: sha512-4fCk79wshMdzMp2rH06qWrJE4iolqLhCUH+OiuIgU++RB0+94NlDL81atO7GX55uUKueo0txHNtvEyI6D7WdMw==}
     engines: {node: '>=0.10.0'}
 
+  idb@8.0.3:
+    resolution: {integrity: sha512-LtwtVyVYO5BqRvcsKuB2iUMnHwPVByPCXFXOpuU96IZPPoPN6xjOGxZQ74pgSVVLQWtUOYgyeL4GE98BY5D3wg==}
+
   immediate@3.0.6:
     resolution: {integrity: sha512-XXOFtyqDjNDAQxVfYxuF7g9Il/IbWmmlQg2MYKOH8ExIT1qg6xc4zyS3HaEEATgs1btfzxq15ciUiY7gjSXRGQ==}
 
@@ -1790,6 +1818,10 @@ packages:
   is-interactive@2.0.0:
     resolution: {integrity: sha512-qP1vozQRI+BMOPcjFzrjXuQvdak2pHNUMZoeG2eRbiSqyvbEf/wQtEOTOX1guk6E3t36RkaqiSt8A/6YElNxLQ==}
     engines: {node: '>=12'}
+
+  is-network-error@1.3.2:
+    resolution: {integrity: sha512-PhBY86zaxNZUuWP6h13Vu5oFe0XY6/UlKzQnYFELzGVHygP3MxmvTfYSG7GN3aIab/iWudSMgjSnG9Dq+nHrgA==}
+    engines: {node: '>=16'}
 
   is-npm@6.1.0:
     resolution: {integrity: sha512-O2z4/kNgyjhQwVR1Wpkbfc19JIhggF97NZNCpWTnjH7kVcZMUrnut9XSN7txI7VdyIYk5ZatOq3zvSuWpU8hoA==}
@@ -1963,24 +1995,28 @@ packages:
     engines: {node: '>= 12.0.0'}
     cpu: [arm64]
     os: [linux]
+    libc: [glibc]
 
   lightningcss-linux-arm64-musl@1.33.0:
     resolution: {integrity: sha512-yiO5ROMuYQgXbC60yjZU5CYSFZGKXL0HFATXt9mHJn1+zW55oCtMI9NfcVhYLMFDL7gV7oBPon/EmMMGg2OvtQ==}
     engines: {node: '>= 12.0.0'}
     cpu: [arm64]
     os: [linux]
+    libc: [musl]
 
   lightningcss-linux-x64-gnu@1.33.0:
     resolution: {integrity: sha512-ar+Ju7LmcN0Jo4FpL4hpFybwNG9/3A/Br5KW2n2jyODg3MEZXaDYADdemoNS+BDNfMgKvylJLj4S5tyRActuAg==}
     engines: {node: '>= 12.0.0'}
     cpu: [x64]
     os: [linux]
+    libc: [glibc]
 
   lightningcss-linux-x64-musl@1.33.0:
     resolution: {integrity: sha512-RYiYbkokw0trfKqqzfF55lginwEPrD3OJDfTuJzFs1MK6iFnDenaz1fqLLtX4ITG3OktJQXOeTaw1awrBAlZPw==}
     engines: {node: '>= 12.0.0'}
     cpu: [x64]
     os: [linux]
+    libc: [musl]
 
   lightningcss-win32-arm64-msvc@1.33.0:
     resolution: {integrity: sha512-1K+MPfLSFVpphzpdbfkhlWk6wBrTObBzS2T6db10PNOZgR9GoVsAWzwNyuhUYYbTp23j+4RrncfujZ4uAzXvwA==}
@@ -2307,6 +2343,10 @@ packages:
   os-shim@0.1.3:
     resolution: {integrity: sha512-jd0cvB8qQ5uVt0lvCIexBaROw1KyKm5sbulg2fWOHjETisuCzWyt+eTZKEMs8v6HwzoGs8xik26jg7eCM6pS+A==}
     engines: {node: '>= 0.4.0'}
+
+  p-retry@8.0.1:
+    resolution: {integrity: sha512-NAigyu8hfvJe7MsS18mnc4is0MZtau3QMdBklaJKK23oBQb6occO3UPM3vHmTckW8KhfyjMZaUOqdTFEYliHgg==}
+    engines: {node: '>=22'}
 
   package-json@10.0.1:
     resolution: {integrity: sha512-ua1L4OgXSBdsu1FPb7F3tYH0F48a6kxvod4pLUlGY9COeJAJQNX/sNH2IiEmsxw7lqYiAwrdHMjz1FctOsyDQg==}
@@ -3180,13 +3220,13 @@ snapshots:
 
   '@devicefarmer/adbkit-monkey@1.2.1': {}
 
-  '@devicefarmer/adbkit@3.3.8':
+  '@devicefarmer/adbkit@3.3.8(supports-color@7.2.0)':
     dependencies:
       '@devicefarmer/adbkit-logcat': 2.1.3
       '@devicefarmer/adbkit-monkey': 1.2.1
       bluebird: 3.7.2
       commander: 9.5.0
-      debug: 4.3.4
+      debug: 4.3.4(supports-color@7.2.0)
       node-forge: 1.4.0
       split: 1.0.1
     transitivePeerDependencies:
@@ -3648,10 +3688,12 @@ snapshots:
     dependencies:
       muggle-string: 0.3.1
 
-  '@volar/typescript@1.11.1':
+  '@volar/typescript@1.11.1(typescript@5.4.5)':
     dependencies:
       '@volar/language-core': 1.11.1
       path-browserify: 1.0.1
+    optionalDependencies:
+      typescript: 5.4.5
 
   '@vue/compiler-core@3.4.21':
     dependencies:
@@ -3767,14 +3809,14 @@ snapshots:
       '@wxt-dev/browser': 0.2.7
       superlock: 1.3.5
 
-  '@yankeeinlondon/builder-api@1.4.1(@vitejs/plugin-vue@5.0.4(vite@5.4.21(@types/node@20.12.7)(lightningcss@1.33.0))(vue@3.4.21(typescript@5.4.5)))(happy-dom@8.9.0)(lightningcss@1.33.0)(vite@5.4.21(@types/node@20.12.7)(lightningcss@1.33.0))':
+  '@yankeeinlondon/builder-api@1.4.1(@vitejs/plugin-vue@5.0.4(vite@5.4.21(@types/node@20.12.7)(lightningcss@1.33.0))(vue@3.4.21(typescript@5.4.5)))(happy-dom@8.9.0)(lightningcss@1.33.0)(supports-color@7.2.0)(vite@5.4.21(@types/node@20.12.7)(lightningcss@1.33.0))':
     dependencies:
       '@types/markdown-it': 12.2.3
-      '@yankeeinlondon/happy-wrapper': 2.10.1(lightningcss@1.33.0)
+      '@yankeeinlondon/happy-wrapper': 2.10.1(lightningcss@1.33.0)(supports-color@7.2.0)
       fp-ts: 2.16.9
-      inferred-types: 0.37.6(happy-dom@8.9.0)(lightningcss@1.33.0)
+      inferred-types: 0.37.6(happy-dom@8.9.0)(lightningcss@1.33.0)(supports-color@7.2.0)
       markdown-it: 13.0.2
-      vite-plugin-md: 0.22.5(@vitejs/plugin-vue@5.0.4(vite@5.4.21(@types/node@20.12.7)(lightningcss@1.33.0))(vue@3.4.21(typescript@5.4.5)))(happy-dom@8.9.0)(lightningcss@1.33.0)(vite@5.4.21(@types/node@20.12.7)(lightningcss@1.33.0))
+      vite-plugin-md: 0.22.5(@vitejs/plugin-vue@5.0.4(vite@5.4.21(@types/node@20.12.7)(lightningcss@1.33.0))(vue@3.4.21(typescript@5.4.5)))(happy-dom@8.9.0)(lightningcss@1.33.0)(supports-color@7.2.0)(vite@5.4.21(@types/node@20.12.7)(lightningcss@1.33.0))
     transitivePeerDependencies:
       - '@edge-runtime/vm'
       - '@vitejs/plugin-vue'
@@ -3792,9 +3834,9 @@ snapshots:
       - terser
       - vite
 
-  '@yankeeinlondon/gray-matter@6.2.1(happy-dom@8.9.0)(lightningcss@1.33.0)':
+  '@yankeeinlondon/gray-matter@6.2.1(happy-dom@8.9.0)(lightningcss@1.33.0)(supports-color@7.2.0)':
     dependencies:
-      inferred-types: 0.37.6(happy-dom@8.9.0)(lightningcss@1.33.0)
+      inferred-types: 0.37.6(happy-dom@8.9.0)(lightningcss@1.33.0)(supports-color@7.2.0)
       js-yaml: 4.1.0
       kind-of: 6.0.3
       section-matter: 1.0.0
@@ -3813,11 +3855,11 @@ snapshots:
       - supports-color
       - terser
 
-  '@yankeeinlondon/happy-wrapper@2.10.1(lightningcss@1.33.0)':
+  '@yankeeinlondon/happy-wrapper@2.10.1(lightningcss@1.33.0)(supports-color@7.2.0)':
     dependencies:
       fp-ts: 2.16.9
       happy-dom: 8.9.0
-      native-dash: 1.25.0(happy-dom@8.9.0)(lightningcss@1.33.0)
+      native-dash: 1.25.0(happy-dom@8.9.0)(lightningcss@1.33.0)(supports-color@7.2.0)
     transitivePeerDependencies:
       - '@edge-runtime/vm'
       - '@vitest/browser'
@@ -3890,9 +3932,9 @@ snapshots:
       stubborn-fs: 2.0.0
       when-exit: 2.1.5
 
-  axios@1.6.8:
+  axios@1.6.8(debug@4.4.3(supports-color@7.2.0)):
     dependencies:
-      follow-redirects: 1.15.6
+      follow-redirects: 1.15.6(debug@4.4.3(supports-color@7.2.0))
       form-data: 4.0.0
       proxy-from-env: 1.1.0
     transitivePeerDependencies:
@@ -3946,12 +3988,12 @@ snapshots:
     dependencies:
       fill-range: 7.1.1
 
-  brilliant-errors@0.7.3(happy-dom@8.9.0)(lightningcss@1.33.0):
+  brilliant-errors@0.7.3(happy-dom@8.9.0)(lightningcss@1.33.0)(supports-color@7.2.0):
     dependencies:
       bumpp: 8.2.1
       callsites: 4.2.0
-      inferred-types: 0.37.6(happy-dom@8.9.0)(lightningcss@1.33.0)
-      vitest: 0.25.8(happy-dom@8.9.0)(lightningcss@1.33.0)
+      inferred-types: 0.37.6(happy-dom@8.9.0)(lightningcss@1.33.0)(supports-color@7.2.0)
+      vitest: 0.25.8(happy-dom@8.9.0)(lightningcss@1.33.0)(supports-color@7.2.0)
     transitivePeerDependencies:
       - '@edge-runtime/vm'
       - '@vitest/browser'
@@ -4055,12 +4097,12 @@ snapshots:
     dependencies:
       readdirp: 5.1.1
 
-  chrome-launcher@1.2.0:
+  chrome-launcher@1.2.0(supports-color@7.2.0):
     dependencies:
       '@types/node': 20.12.7
       escape-string-regexp: 4.0.0
       is-wsl: 2.2.0
-      lighthouse-logger: 2.0.2
+      lighthouse-logger: 2.0.2(supports-color@7.2.0)
     transitivePeerDependencies:
       - supports-color
 
@@ -4170,13 +4212,17 @@ snapshots:
 
   debounce@1.2.1: {}
 
-  debug@4.3.4:
+  debug@4.3.4(supports-color@7.2.0):
     dependencies:
       ms: 2.1.2
+    optionalDependencies:
+      supports-color: 7.2.0
 
-  debug@4.4.3:
+  debug@4.4.3(supports-color@7.2.0):
     dependencies:
       ms: 2.1.3
+    optionalDependencies:
+      supports-color: 7.2.0
 
   deep-eql@4.1.4:
     dependencies:
@@ -4512,7 +4558,9 @@ snapshots:
       minimist: 1.2.8
       xml2js: 0.6.2
 
-  follow-redirects@1.15.6: {}
+  follow-redirects@1.15.6(debug@4.4.3(supports-color@7.2.0)):
+    optionalDependencies:
+      debug: 4.4.3(supports-color@7.2.0)
 
   form-data-encoder@4.1.0: {}
 
@@ -4641,13 +4689,15 @@ snapshots:
     dependencies:
       safer-buffer: 2.1.2
 
+  idb@8.0.3: {}
+
   immediate@3.0.6: {}
 
   import-meta-resolve@4.2.0: {}
 
-  inferred-types@0.37.6(happy-dom@8.9.0)(lightningcss@1.33.0):
+  inferred-types@0.37.6(happy-dom@8.9.0)(lightningcss@1.33.0)(supports-color@7.2.0):
     dependencies:
-      brilliant-errors: 0.7.3(happy-dom@8.9.0)(lightningcss@1.33.0)
+      brilliant-errors: 0.7.3(happy-dom@8.9.0)(lightningcss@1.33.0)(supports-color@7.2.0)
     transitivePeerDependencies:
       - '@edge-runtime/vm'
       - '@vitest/browser'
@@ -4721,6 +4771,8 @@ snapshots:
       is-path-inside: 4.0.0
 
   is-interactive@2.0.0: {}
+
+  is-network-error@1.3.2: {}
 
   is-npm@6.1.0: {}
 
@@ -4838,9 +4890,9 @@ snapshots:
     dependencies:
       immediate: 3.0.6
 
-  lighthouse-logger@2.0.2:
+  lighthouse-logger@2.0.2(supports-color@7.2.0):
     dependencies:
-      debug: 4.4.3
+      debug: 4.4.3(supports-color@7.2.0)
       marky: 1.3.0
     transitivePeerDependencies:
       - supports-color
@@ -5103,10 +5155,10 @@ snapshots:
 
   nanoid@3.3.7: {}
 
-  native-dash@1.25.0(happy-dom@8.9.0)(lightningcss@1.33.0):
+  native-dash@1.25.0(happy-dom@8.9.0)(lightningcss@1.33.0)(supports-color@7.2.0):
     dependencies:
-      brilliant-errors: 0.7.3(happy-dom@8.9.0)(lightningcss@1.33.0)
-      inferred-types: 0.37.6(happy-dom@8.9.0)(lightningcss@1.33.0)
+      brilliant-errors: 0.7.3(happy-dom@8.9.0)(lightningcss@1.33.0)(supports-color@7.2.0)
+      inferred-types: 0.37.6(happy-dom@8.9.0)(lightningcss@1.33.0)(supports-color@7.2.0)
     transitivePeerDependencies:
       - '@edge-runtime/vm'
       - '@vitest/browser'
@@ -5228,6 +5280,10 @@ snapshots:
       strip-ansi: 7.2.0
 
   os-shim@0.1.3: {}
+
+  p-retry@8.0.1:
+    dependencies:
+      is-network-error: 1.3.2
 
   package-json@10.0.1:
     dependencies:
@@ -5780,12 +5836,12 @@ snapshots:
       pathe: 2.0.3
       picomatch: 4.0.7
 
-  unplugin-vue-components@0.26.0(@babel/parser@7.29.8)(rollup@4.63.1)(vue@3.4.21(typescript@5.4.5)):
+  unplugin-vue-components@0.26.0(@babel/parser@7.29.8)(rollup@4.63.1)(supports-color@7.2.0)(vue@3.4.21(typescript@5.4.5)):
     dependencies:
       '@antfu/utils': 0.7.7
       '@rollup/pluginutils': 5.1.0(rollup@4.63.1)
       chokidar: 3.6.0
-      debug: 4.3.4
+      debug: 4.3.4(supports-color@7.2.0)
       fast-glob: 3.3.2
       local-pkg: 0.4.3
       magic-string: 0.30.9
@@ -5832,10 +5888,10 @@ snapshots:
 
   uuid@8.3.2: {}
 
-  vite-node@3.2.4(@types/node@20.12.7)(lightningcss@1.33.0):
+  vite-node@3.2.4(@types/node@20.12.7)(lightningcss@1.33.0)(supports-color@7.2.0):
     dependencies:
       cac: 6.7.14
-      debug: 4.4.3
+      debug: 4.4.3(supports-color@7.2.0)
       es-module-lexer: 1.7.0
       pathe: 2.0.3
       vite: 5.4.21(@types/node@20.12.7)(lightningcss@1.33.0)
@@ -5850,11 +5906,11 @@ snapshots:
       - supports-color
       - terser
 
-  vite-plugin-md@0.21.5(@vitejs/plugin-vue@5.0.4(vite@5.4.21(@types/node@20.12.7)(lightningcss@1.33.0))(vue@3.4.21(typescript@5.4.5)))(happy-dom@8.9.0)(lightningcss@1.33.0)(vite@5.4.21(@types/node@20.12.7)(lightningcss@1.33.0)):
+  vite-plugin-md@0.21.5(@vitejs/plugin-vue@5.0.4(vite@5.4.21(@types/node@20.12.7)(lightningcss@1.33.0))(vue@3.4.21(typescript@5.4.5)))(happy-dom@8.9.0)(lightningcss@1.33.0)(supports-color@7.2.0)(vite@5.4.21(@types/node@20.12.7)(lightningcss@1.33.0)):
     dependencies:
-      '@yankeeinlondon/builder-api': 1.4.1(@vitejs/plugin-vue@5.0.4(vite@5.4.21(@types/node@20.12.7)(lightningcss@1.33.0))(vue@3.4.21(typescript@5.4.5)))(happy-dom@8.9.0)(lightningcss@1.33.0)(vite@5.4.21(@types/node@20.12.7)(lightningcss@1.33.0))
-      '@yankeeinlondon/gray-matter': 6.2.1(happy-dom@8.9.0)(lightningcss@1.33.0)
-      '@yankeeinlondon/happy-wrapper': 2.10.1(lightningcss@1.33.0)
+      '@yankeeinlondon/builder-api': 1.4.1(@vitejs/plugin-vue@5.0.4(vite@5.4.21(@types/node@20.12.7)(lightningcss@1.33.0))(vue@3.4.21(typescript@5.4.5)))(happy-dom@8.9.0)(lightningcss@1.33.0)(supports-color@7.2.0)(vite@5.4.21(@types/node@20.12.7)(lightningcss@1.33.0))
+      '@yankeeinlondon/gray-matter': 6.2.1(happy-dom@8.9.0)(lightningcss@1.33.0)(supports-color@7.2.0)
+      '@yankeeinlondon/happy-wrapper': 2.10.1(lightningcss@1.33.0)(supports-color@7.2.0)
       markdown-it: 13.0.2
       source-map-js: 1.2.0
       vite: 5.4.21(@types/node@20.12.7)(lightningcss@1.33.0)
@@ -5874,12 +5930,12 @@ snapshots:
       - supports-color
       - terser
 
-  vite-plugin-md@0.22.5(@vitejs/plugin-vue@5.0.4(vite@5.4.21(@types/node@20.12.7)(lightningcss@1.33.0))(vue@3.4.21(typescript@5.4.5)))(happy-dom@8.9.0)(lightningcss@1.33.0)(vite@5.4.21(@types/node@20.12.7)(lightningcss@1.33.0)):
+  vite-plugin-md@0.22.5(@vitejs/plugin-vue@5.0.4(vite@5.4.21(@types/node@20.12.7)(lightningcss@1.33.0))(vue@3.4.21(typescript@5.4.5)))(happy-dom@8.9.0)(lightningcss@1.33.0)(supports-color@7.2.0)(vite@5.4.21(@types/node@20.12.7)(lightningcss@1.33.0)):
     dependencies:
       '@vitejs/plugin-vue': 5.0.4(vite@5.4.21(@types/node@20.12.7)(lightningcss@1.33.0))(vue@3.4.21(typescript@5.4.5))
-      '@yankeeinlondon/builder-api': 1.4.1(@vitejs/plugin-vue@5.0.4(vite@5.4.21(@types/node@20.12.7)(lightningcss@1.33.0))(vue@3.4.21(typescript@5.4.5)))(happy-dom@8.9.0)(lightningcss@1.33.0)(vite@5.4.21(@types/node@20.12.7)(lightningcss@1.33.0))
-      '@yankeeinlondon/gray-matter': 6.2.1(happy-dom@8.9.0)(lightningcss@1.33.0)
-      '@yankeeinlondon/happy-wrapper': 2.10.1(lightningcss@1.33.0)
+      '@yankeeinlondon/builder-api': 1.4.1(@vitejs/plugin-vue@5.0.4(vite@5.4.21(@types/node@20.12.7)(lightningcss@1.33.0))(vue@3.4.21(typescript@5.4.5)))(happy-dom@8.9.0)(lightningcss@1.33.0)(supports-color@7.2.0)(vite@5.4.21(@types/node@20.12.7)(lightningcss@1.33.0))
+      '@yankeeinlondon/gray-matter': 6.2.1(happy-dom@8.9.0)(lightningcss@1.33.0)(supports-color@7.2.0)
+      '@yankeeinlondon/happy-wrapper': 2.10.1(lightningcss@1.33.0)(supports-color@7.2.0)
       markdown-it: 13.0.2
       source-map-js: 1.2.0
       vite: 5.4.21(@types/node@20.12.7)(lightningcss@1.33.0)
@@ -5931,7 +5987,7 @@ snapshots:
       fsevents: 2.3.3
       lightningcss: 1.33.0
 
-  vitest@0.25.8(happy-dom@8.9.0)(lightningcss@1.33.0):
+  vitest@0.25.8(happy-dom@8.9.0)(lightningcss@1.33.0)(supports-color@7.2.0):
     dependencies:
       '@types/chai': 4.3.20
       '@types/chai-subset': 1.3.5
@@ -5939,7 +5995,7 @@ snapshots:
       acorn: 8.18.0
       acorn-walk: 8.3.2
       chai: 4.5.0
-      debug: 4.4.3
+      debug: 4.4.3(supports-color@7.2.0)
       local-pkg: 0.4.3
       source-map: 0.6.1
       strip-literal: 1.3.0
@@ -5969,7 +6025,7 @@ snapshots:
 
   vue-tsc@1.8.27(typescript@5.4.5):
     dependencies:
-      '@volar/typescript': 1.11.1
+      '@volar/typescript': 1.11.1(typescript@5.4.5)
       '@vue/language-core': 1.8.27(typescript@5.4.5)
       semver: 7.6.0
       typescript: 5.4.5
@@ -5989,11 +6045,11 @@ snapshots:
       glob-to-regexp: 0.4.1
       graceful-fs: 4.2.11
 
-  web-ext-run@0.2.4:
+  web-ext-run@0.2.4(supports-color@7.2.0):
     dependencies:
       '@babel/runtime': 7.28.2
-      '@devicefarmer/adbkit': 3.3.8
-      chrome-launcher: 1.2.0
+      '@devicefarmer/adbkit': 3.3.8(supports-color@7.2.0)
+      chrome-launcher: 1.2.0(supports-color@7.2.0)
       debounce: 1.2.1
       es6-error: 4.1.1
       firefox-profile: 4.7.0
@@ -6074,7 +6130,7 @@ snapshots:
     dependencies:
       is-wsl: 3.1.1
 
-  wxt@0.20.11(@types/node@20.12.7)(lightningcss@1.33.0)(rollup@4.63.1):
+  wxt@0.20.11(@types/node@20.12.7)(lightningcss@1.33.0)(rollup@4.63.1)(supports-color@7.2.0):
     dependencies:
       '@1natsu/wait-element': 4.2.0
       '@aklinker1/rollup-plugin-visualizer': 5.12.0(rollup@4.63.1)
@@ -6119,8 +6175,8 @@ snapshots:
       scule: 1.3.0
       unimport: 5.7.0
       vite: 5.4.21(@types/node@20.12.7)(lightningcss@1.33.0)
-      vite-node: 3.2.4(@types/node@20.12.7)(lightningcss@1.33.0)
-      web-ext-run: 0.2.4
+      vite-node: 3.2.4(@types/node@20.12.7)(lightningcss@1.33.0)(supports-color@7.2.0)
+      web-ext-run: 0.2.4(supports-color@7.2.0)
     transitivePeerDependencies:
       - '@types/node'
       - canvas

@@ -1,7 +1,7 @@
 {
   "name": "ai-job-hunting",
   "private": true,
-  "version": "0.0.82",
+  "version": "0.0.83",
   "packageManager": "pnpm@9.15.9",
   "type": "module",
   "scripts": {
@@ -27,7 +27,9 @@
     "axios": "^1.6.8",
     "element-plus": "^2.6.3",
     "event-source-polyfill": "^1.0.31",
+    "idb": "8.0.3",
     "long": "5.2.3",
+    "p-retry": "8.0.1",
     "pinia": "^2.1.7",
     "vue": "^3.4.14"
   },

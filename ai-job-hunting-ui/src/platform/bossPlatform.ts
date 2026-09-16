@@ -60,6 +60,7 @@ import {
     synchronizeManualTakeoverFence,
 } from '../webSocket/manualTakeover';
 import type {FollowUpCandidate, FollowUpPreview} from './careerProtocol';
+import {persistReliableValue, recoverReliableValue} from './reliableStorage';
 
 let userStore = null as any;
 
@@ -105,6 +106,7 @@ export class BossOption {
     private static readonly CONVERSATION_REPLY_LEDGER_KEY = 'ai-job-conversation-replies-v1';
     private static readonly CONVERSATION_REPLY_LEDGER_MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000;
     private static aiReplyRetryTimer: number | null = null;
+    private static aiReplyQueueHydration: Promise<void> | null = null;
     private static aiReplySendingKeys = new Set<string>();
     private static aiReplyDrainRunning = false;
     private static followUpTimer: number | null = null;
@@ -495,9 +497,31 @@ export class BossOption {
             const raw = JSON.stringify(queue.slice(-100))
             GM_setValue(BossOption.AI_REPLY_QUEUE_KEY, raw)
             localStorage.setItem(BossOption.AI_REPLY_QUEUE_KEY, raw)
+            void persistReliableValue(BossOption.AI_REPLY_QUEUE_KEY, raw).catch(error => {
+                BossOption.logRecorder.error('持久化AI坐席补发队列失败', error)
+            })
         } catch (error) {
             BossOption.logRecorder.error('保存AI坐席补发队列失败')
         }
+    }
+
+    private hydrateAiReplyQueue(): Promise<void> {
+        if (BossOption.aiReplyQueueHydration) return BossOption.aiReplyQueueHydration
+        BossOption.aiReplyQueueHydration = (async () => {
+            const gmRaw = GM_getValue(BossOption.AI_REPLY_QUEUE_KEY, '') as string
+            const localRaw = localStorage.getItem(BossOption.AI_REPLY_QUEUE_KEY) || ''
+            const currentRaw = gmRaw || localRaw || null
+            const recovered = await recoverReliableValue(BossOption.AI_REPLY_QUEUE_KEY, currentRaw)
+            if (!currentRaw && recovered) {
+                const queue = JSON.parse(recovered)
+                if (!Array.isArray(queue)) throw new Error('AI_REPLY_QUEUE_DURABLE_SNAPSHOT_INVALID')
+                GM_setValue(BossOption.AI_REPLY_QUEUE_KEY, recovered)
+                localStorage.setItem(BossOption.AI_REPLY_QUEUE_KEY, recovered)
+            }
+        })().catch(error => {
+            BossOption.logRecorder.warn('AI坐席补发队列的IndexedDB恢复失败，继续使用现有同步存储', error)
+        })
+        return BossOption.aiReplyQueueHydration
     }
 
     private enqueueAiReply(entry: PendingAiReply, lastError?: unknown): void {
@@ -872,18 +896,19 @@ export class BossOption {
         if (BossOption.aiReplyRetryTimer !== null) {
             return
         }
+        const drainAiReplies = () => this.hydrateAiReplyQueue().then(() => this.drainAiReplyQueue())
         BossOption.aiReplyRetryTimer = window.setInterval(() => {
-            void this.drainAiReplyQueue().catch(error => {
+            void drainAiReplies().catch(error => {
                 BossOption.logRecorder.error('AI坐席后台补发任务失败', error)
             })
         }, BossOption.AI_REPLY_RETRY_INTERVAL_MS)
         Tools.window.addEventListener(CHAT_BRIDGE_READY_EVENT, () => {
-            void this.drainAiReplyQueue().catch(error => {
+            void drainAiReplies().catch(error => {
                 BossOption.logRecorder.error('消息通道就绪后的AI回复补发失败', error)
             })
         })
         if (Tools.window.AIJobHelperChatBridge?.isReady?.()) {
-            void this.drainAiReplyQueue().catch(error => {
+            void drainAiReplies().catch(error => {
                 BossOption.logRecorder.error('启动时AI回复补发失败', error)
             })
         }
