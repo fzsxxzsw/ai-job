@@ -294,7 +294,14 @@ export class BossOption {
             String(contact.bossId) === candidate.bossId
             && String(contact.encryptJobId) === candidate.encryptJobId
             && makeConversationKey(contact.encryptBossId, contact.securityId) === candidate.conversationKey)
-        return matches.length === 1 ? matches[0] : undefined
+        // BOSS can return the same contact id as either a string or a number. The cache can therefore
+        // contain the same exact binding under two map keys; deduplicate that representation without
+        // weakening the required job/peer/conversation triple.
+        const bindings = new Map(matches.map(contact => [
+            `${String(contact.bossId)}:${String(contact.encryptJobId)}:${makeConversationKey(contact.encryptBossId, contact.securityId)}`,
+            contact,
+        ]))
+        return bindings.size === 1 ? bindings.values().next().value : undefined
     }
 
     private async scanAutomaticFollowUps(): Promise<void> {
@@ -313,10 +320,28 @@ export class BossOption {
                     timeout: 10_000, suppressGlobalErrorToast: true,
                 } as any)
                 const preview = response.data.data as FollowUpPreview
-                candidate = preview.items.find(item => item.eligible && item.platformAccount === account
-                    && !!item.bossId && !!item.conversationKey && !!item.anchorOutboundMessageId && !!item.anchorOutboundAt
-                    && !!this.followUpContact(item))
-                if (candidate) contact = this.followUpContact(candidate)
+                for (const item of preview.items) {
+                    if (!item.eligible || item.platformAccount !== account || !item.bossId || !item.conversationKey
+                        || !item.anchorOutboundMessageId || !item.anchorOutboundAt) continue
+                    let exactContact = this.followUpContact(item)
+                    if (!exactContact) {
+                        const numericBossId = Number(item.bossId)
+                        if (Number.isSafeInteger(numericBossId) && numericBossId > 0) {
+                            try {
+                                // The durable ledger can outlive the in-memory 30-day contact cache. Resolve only
+                                // this already-eligible peer, then re-run the full job/peer/conversation check.
+                                await this.getBossUserInfoByBossId(numericBossId)
+                            } catch (error) {
+                                BossOption.logRecorder.warn('自动跟进联系人解析失败，已跳过本轮候选', error)
+                            }
+                            exactContact = this.followUpContact(item)
+                        }
+                    }
+                    if (!exactContact) continue
+                    candidate = item
+                    contact = exactContact
+                    break
+                }
                 if (preview.items.length < 50) break
             }
             if (!candidate || !contact) return

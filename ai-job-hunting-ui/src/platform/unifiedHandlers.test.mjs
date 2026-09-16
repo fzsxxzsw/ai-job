@@ -127,6 +127,7 @@ function environment() {
     const module={exports:{}}
     const context={module,exports:module.exports,require,fixture,crypto,TextEncoder,structuredClone,FormData,URL,Date,console,AbortController,
         navigator:{locks:{request:async (_name,_options,callback)=>callback({})}},window:fixture.Tools.window,document:{querySelector:()=>null,querySelectorAll:()=>[],addEventListener:noop},
+        location:fixture.Tools.window.location,
         localStorage:{getItem:k=>storage.get(k)??null,setItem:(k,v)=>storage.set(k,v),removeItem:k=>storage.delete(k)},
         setInterval:()=>1,clearInterval:noop,setTimeout:(callback,ms)=>{if(ms===360000)fixture.applicationTimeout=callback;return 1},clearTimeout:noop}
     vm.runInNewContext(result.outputFiles[0].text,context)
@@ -348,6 +349,28 @@ test('automatic follow-up executor requires the exact live conversation and acti
     assert.equal(executor.ready(context,action),false)
     env.fixture.allowed=true;action.payload.conversationKey='BossB:SecB'
     assert.equal(executor.ready(context,action),false)
+})
+test('automatic follow-up scanner resolves an eligible durable candidate missing from the live contact cache', async () => {
+    const env=environment()
+    env.Option.bossUserInfoMap.clear()
+    env.fixture.Tools.window.location.pathname='/web/geek/chat'
+    env.fixture.Tools.window.AIJobHelperChatBridge.isReady=()=>true
+    const candidate={applicationId:'application-A',platformAccount:'40',encryptJobId:'JobA',conversationKey:'BossA:SecA',bossId:'81',
+        jobTitle:'Python后端开发',companyName:'合成公司',recruiterName:'合成HR',salaryText:'10-15K',jdText:'Python、FastAPI 和 MySQL',
+        applicationValidity:'VALID',applicationStatus:'APPLIED',readState:'READ',evidenceTrack:'EXACT_READ_NO_REPLY',requiredAgeHours:24,
+        anchorOutboundMessageId:'90071992547409980',anchorOutboundAt:1788757200000,eligible:true,blocker:null}
+    env.fixture.http=async config=>{
+        env.requests.push(config)
+        if(config.url==='/api/job/career/follow-ups/candidates')return {data:{data:{items:[candidate]}}}
+        if(config.url.includes('getGeekFriendList'))return {data:{code:0,zpData:{result:[peer]}}}
+        throw Error(`unexpected request: ${config.url}`)
+    }
+    await env.option.scanAutomaticFollowUps()
+    assert.equal(env.requests.some(request=>request.url.includes('getGeekFriendList')),true)
+    assert.equal(env.submissions.length,1)
+    assert.equal(env.submissions[0].body.kind,'FOLLOW_UP')
+    assert.equal(env.submissions[0].body.input.applicationId,'application-A')
+    assert.equal(env.submissions[0].context.conversationKey,'BossA:SecA')
 })
 test('manual takeover waits for activation, blocks M1 and clears only after accepted newer M2', async () => {
     const env=environment()
