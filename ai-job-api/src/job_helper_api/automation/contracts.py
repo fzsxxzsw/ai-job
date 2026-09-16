@@ -125,9 +125,7 @@ class FollowUpInput(Input):
     applicationId: Id
     anchorOutboundMessageId: Id
     anchorOutboundAt: int = Field(gt=0)
-    evidenceTrack: Literal[
-        "EXACT_READ_NO_REPLY", "EXACT_UNREAD_NO_REPLY", "ACKNOWLEDGED_WAITING"
-    ]
+    evidenceTrack: Literal["EXACT_READ_NO_REPLY", "EXACT_UNREAD_NO_REPLY", "ACKNOWLEDGED_WAITING"]
     jobKey: str = Field(min_length=1, max_length=64)
     jobInfo: dict[str, Any]
 
