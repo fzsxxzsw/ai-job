@@ -4,7 +4,6 @@ import time
 
 SNAPSHOT = {
     "encryptJobId": "CaseSensitiveJob",
-    "appliedAt": int(time.time() * 1000),
     "jobBaseInfo": '{"jobName":"测试岗位"}',
     "jobExtInfo": "{}",
     "preMatchResult": {"decision": "MATCH"},
@@ -23,14 +22,19 @@ AUDIT = {
 }
 
 
+def current_snapshot(**updates):
+    return {**SNAPSHOT, "appliedAt": int(time.time() * 1000), **updates}
+
+
 def test_snapshot_immutable_and_case_sensitive(client, world):
-    a = client.post("/api/job/ai/applications/snapshot", json=SNAPSHOT).json()["data"]
+    snapshot = current_snapshot()
+    a = client.post("/api/job/ai/applications/snapshot", json=snapshot).json()["data"]
     b = client.post(
-        "/api/job/ai/applications/snapshot", json={**SNAPSHOT, "jobExtInfo": "changed"}
+        "/api/job/ai/applications/snapshot", json={**snapshot, "jobExtInfo": "changed"}
     ).json()["data"]
     c = client.post(
         "/api/job/ai/applications/snapshot",
-        json={**SNAPSHOT, "encryptJobId": SNAPSHOT["encryptJobId"].lower()},
+        json={**snapshot, "encryptJobId": snapshot["encryptJobId"].lower()},
     ).json()["data"]
     assert a == b and a["id"] != c["id"]
 
@@ -81,7 +85,7 @@ def test_rejection_requires_snapshot_and_evidence(client, world):
     assert without_snapshot.status_code == 200
     assert without_snapshot.json()["data"]["applicationSnapshotId"] is None
     assert without_snapshot.json()["data"]["inferredRisks"] == []
-    client.post("/api/job/ai/applications/snapshot", json=SNAPSHOT)
+    client.post("/api/job/ai/applications/snapshot", json=current_snapshot())
     payload["messages"][0]["text"] = "这个岗位已经招满了，联系方式foo@example.com"
     world["fake"].output = json.dumps(
         {
