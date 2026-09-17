@@ -59,7 +59,7 @@ import {
     readManualTakeoverFence,
     synchronizeManualTakeoverFence,
 } from '../webSocket/manualTakeover';
-import type {FollowUpCandidate, FollowUpPreview} from './careerProtocol';
+import type {FollowUpCandidate, FollowUpPreview, OutreachCampaignCandidate, OutreachCampaignPreview} from './careerProtocol';
 import {persistReliableValue, recoverReliableValue} from './reliableStorage';
 
 let userStore = null as any;
@@ -291,7 +291,7 @@ export class BossOption {
         })
     }
 
-    private followUpContact(candidate: FollowUpCandidate): BossUserInfo | undefined {
+    private followUpContact(candidate: Pick<FollowUpCandidate, 'bossId' | 'encryptJobId' | 'conversationKey'>): BossUserInfo | undefined {
         const matches = Array.from(BossOption.bossUserInfoMap.values()).filter(contact =>
             String(contact.bossId) === candidate.bossId
             && String(contact.encryptJobId) === candidate.encryptJobId
@@ -314,6 +314,47 @@ export class BossOption {
             if (!await unifiedAutomationEnabled()) return
             const account = exactPlatformId(Tools.window._PAGE?.uid)
             if (!account) return
+            let outreach: OutreachCampaignCandidate | undefined
+            let outreachContact: BossUserInfo | undefined
+            try {
+                for (let offset = 0; offset < 1000 && !outreach; offset += 50) {
+                    const response = await axios.get('/api/job/career/outreach-campaigns/candidates', {
+                        params: {limit: 50, offset}, timeout: 10_000, suppressGlobalErrorToast: true,
+                    } as any)
+                    const preview = response.data.data as OutreachCampaignPreview
+                    if (!preview?.campaign || !Array.isArray(preview.items)) break
+                    for (const item of preview.items) {
+                        if (item.platformAccount !== account || !item.bossId || !item.conversationKey
+                            || !item.anchorOutboundMessageId || !item.anchorOutboundAt) continue
+                        const exactContact = this.followUpContact(item)
+                        if (!exactContact) continue
+                        outreach = item
+                        outreachContact = exactContact
+                        break
+                    }
+                    if (preview.items.length < 50) break
+                }
+            } catch (_) { /* Older API or inactive campaign: continue with ordinary follow-ups. */ }
+            if (outreach && outreachContact) {
+                const requestId = await automationRequestId([
+                    'outreach-campaign', account, outreach.campaignId,
+                    outreach.applicationId, outreach.campaignStep,
+                ])
+                await submitAutomation({requestId, kind: 'FOLLOW_UP', platformAccount: account,
+                    conversationKey: outreach.conversationKey, encryptJobId: outreach.encryptJobId, bossId: outreach.bossId,
+                    input: {applicationId: outreach.applicationId,
+                        anchorOutboundMessageId: outreach.anchorOutboundMessageId!, anchorOutboundAt: outreach.anchorOutboundAt!,
+                        evidenceTrack: outreach.evidenceTrack, jobKey: `${outreach.encryptJobId}:${account}`,
+                        jobInfo: {jobTitle: outreach.jobTitle, companyName: outreach.companyName,
+                            recruiterName: outreach.recruiterName, salaryText: outreach.salaryText, jdText: outreach.jdText},
+                        campaignId: outreach.campaignId, campaignStep: outreach.campaignStep, fixedText: outreach.fixedText}},
+                    {kind: 'FOLLOW_UP', account, policy: currentAutomationPolicy(), encryptJobId: outreach.encryptJobId,
+                        conversationKey: outreach.conversationKey, bossId: outreach.bossId, contact: {...outreachContact},
+                        applicationId: outreach.applicationId, anchorOutboundMessageId: outreach.anchorOutboundMessageId!,
+                        anchorOutboundAt: outreach.anchorOutboundAt!, campaignId: outreach.campaignId,
+                        campaignStep: outreach.campaignStep})
+                return
+            }
             let candidate: FollowUpCandidate | undefined
             let contact: BossUserInfo | undefined
             for (let offset = 0; offset < 500 && !candidate; offset += 50) {
@@ -392,7 +433,7 @@ export class BossOption {
     private unifiedFollowUpReady(context: BrowserAutomationContext, action: AutomationAction): boolean {
         const contact = context.contact
         const latest = BossOption.latestLiveInbound.get(`${context.account}:${context.bossId}`)
-        if (latest && (!context.anchorOutboundAt || latest.sentAt === null
+        if (!context.campaignId && latest && (!context.anchorOutboundAt || latest.sentAt === null
             || latest.sentAt >= context.anchorOutboundAt
             || latest.conversationKey && latest.conversationKey !== context.conversationKey)) return false
         if (context.bossId && manualFenceBlocks(context.account, context.bossId)) return false

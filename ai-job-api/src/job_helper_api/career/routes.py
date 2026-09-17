@@ -77,6 +77,22 @@ def register_career_routes(app, require_user, writable, internal):
             )
         )
 
+    @app.get("/api/job/career/outreach-campaigns/candidates")
+    async def outreach_campaign_candidates(
+        limit: int = Query(50, ge=1, le=100),
+        offset: int = Query(0, ge=0),
+        uid=Depends(require_user),
+    ):
+        return envelope(await service().outreach_campaign_candidates(uid, limit, offset))
+
+    @app.post("/internal/career/outreach-campaigns/activate", dependencies=[Depends(internal)])
+    async def activate_outreach_campaign(payload: dto.OutreachCampaignInput):
+        return envelope(
+            await service().activate_outreach_campaign(
+                app.state.settings.owner_user_id, payload
+            )
+        )
+
     @app.get("/api/job/career/applications/{ident}")
     async def application(ident: str, uid=Depends(require_user)):
         instance = service()

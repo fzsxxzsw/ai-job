@@ -262,6 +262,106 @@ class Applications(Versions):
         )
         return [await self.application_view(uid, row) for row in rows]
 
+    async def activate_outreach_campaign(self, uid, payload):
+        value = {
+            "campaignId": payload.campaignId,
+            "messages": payload.messages,
+            "status": "ACTIVE",
+            "createdAt": now_ms(),
+        }
+        async with self.transaction(uid) as c:
+            await self.db.set_control(c, uid, "outreach:active", value)
+        return value
+
+    async def outreach_campaign_candidates(self, uid, limit=50, offset=0):
+        """Return exact, non-terminal greeted conversations and the next durable step."""
+        campaign = await self.db.control(uid, "outreach:active", None)
+        if not isinstance(campaign, dict) or campaign.get("status") != "ACTIVE":
+            return {"campaign": None, "items": [], "eligibleCount": 0}
+        messages = campaign.get("messages")
+        if not isinstance(messages, list) or len(messages) != 2:
+            return {"campaign": None, "items": [], "eligibleCount": 0}
+        terminal_statuses = {
+            "WITHDRAWN", "EXPLICIT_REJECTED", "INTERVIEW_SCHEDULED", "OFFER_RECEIVED"
+        }
+        rows = await self.db.rows(
+            select(self.applications)
+            .where(
+                self.applications.c.user_id == uid,
+                self.applications.c.platform_account.is_not(None),
+                self.applications.c.encrypt_job_id.is_not(None),
+                self.applications.c.conversation_key.is_not(None),
+                self.applications.c.boss_id.is_not(None),
+                self.applications.c.application_status.not_in(terminal_statuses),
+            )
+            .order_by(self.applications.c.created_at, self.applications.c.id)
+            .limit(limit)
+            .offset(offset)
+        )
+        items = []
+        for row in rows:
+            events = effective_events(
+                [event for event in await self.timeline(uid, row["id"])
+                 if event["confirmation"] != "INFERRED"]
+            )
+            if not any(event["event_type"] == "CONTACT_INITIATED" for event in events):
+                continue
+            if any(event["event_type"] in {
+                "REJECTED", "INTERVIEW_INVITED", "INTERVIEW_COMPLETED", "OFFER_RECEIVED", "WITHDRAWN"
+            } for event in events):
+                continue
+            step = 1
+            blocked = None
+            for candidate_step in (1, 2):
+                key = digest([
+                    "FOLLOW_UP", row["platform_account"],
+                    [row["id"], campaign["campaignId"], candidate_step],
+                ])
+                job = await self.db.one(
+                    select(self.jobs).where(
+                        self.jobs.c.user_id == uid, self.jobs.c.business_key == key
+                    ).limit(1)
+                )
+                if not job:
+                    step = candidate_step
+                    break
+                actions = await self.action_rows(uid, job["id"])
+                acknowledged = any(
+                    action["kind"] == "SEND_TEXT" and action["status"] == "ACKNOWLEDGED"
+                    for action in actions
+                )
+                if not acknowledged:
+                    blocked = "PREVIOUS_STEP_NOT_ACKNOWLEDGED"
+                    break
+                if candidate_step == 2:
+                    blocked = "CAMPAIGN_COMPLETE"
+                step = candidate_step + 1
+            if blocked:
+                continue
+            items.append({
+                "applicationId": row["id"],
+                "platformAccount": row["platform_account"],
+                "encryptJobId": row["encrypt_job_id"],
+                "conversationKey": row["conversation_key"],
+                "bossId": row["boss_id"],
+                "jobTitle": row["job_title"],
+                "companyName": row["company_name"],
+                "recruiterName": row["recruiter_name"],
+                "salaryText": row["salary_text"],
+                "jdText": (row["jd_text"] or "")[:10000],
+                "campaignId": campaign["campaignId"],
+                "campaignStep": step,
+                "fixedText": messages[step - 1],
+                "anchorOutboundMessageId": "campaign-anchor-" + row["id"],
+                "anchorOutboundAt": row["updated_at"] or row["created_at"],
+                "evidenceTrack": "ACKNOWLEDGED_WAITING",
+            })
+        return {
+            "campaign": {k: campaign[k] for k in ("campaignId", "status", "createdAt")},
+            "items": items,
+            "eligibleCount": len(items),
+        }
+
     async def follow_up_candidates(
         self, uid, limit=50, offset=0, minimum_age_hours=24, fallback_age_hours=48
     ):
@@ -406,7 +506,8 @@ class Applications(Versions):
             ),
             c,
         )
-        if not app or app["application_validity"] != "VALID":
+        campaign_id = raw.get("campaignId")
+        if not app or (not campaign_id and app["application_validity"] != "VALID"):
             return "FOLLOW_UP_APPLICATION_CHANGED"
         if (
             app["platform_account"] != job["platform_account"]
@@ -441,6 +542,18 @@ class Applications(Versions):
             for event in events
         ):
             return "FOLLOW_UP_APPLICATION_TERMINAL"
+        if campaign_id:
+            campaign = await self.db.control(uid, "outreach:active", None, c)
+            if (
+                not isinstance(campaign, dict)
+                or campaign.get("status") != "ACTIVE"
+                or campaign.get("campaignId") != campaign_id
+                or raw.get("campaignStep") not in {1, 2}
+                or campaign.get("messages", [None, None])[raw["campaignStep"] - 1]
+                != raw.get("fixedText")
+            ):
+                return "FOLLOW_UP_APPLICATION_CHANGED"
+            return None
         messages = self.db.table("conversation_message")
         latest = await self.db.one(
             select(messages)

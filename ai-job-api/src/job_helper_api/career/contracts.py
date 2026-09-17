@@ -80,6 +80,18 @@ class FollowUpBindingRefresh(Input):
         return self
 
 
+class OutreachCampaignInput(Input):
+    campaignId: Id
+    messages: list[str] = Field(min_length=2, max_length=2)
+    confirmed: Literal[True]
+
+    @model_validator(mode="after")
+    def valid_messages(self):
+        if any(not message.strip() or len(message) > 500 for message in self.messages):
+            raise ValueError("Campaign messages must contain 1 to 500 characters")
+        return self
+
+
 class ReviewInput(RequestId):
     windowDays: Window = 14
     cutoff: int = Field(gt=0)

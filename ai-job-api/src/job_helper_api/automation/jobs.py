@@ -89,6 +89,12 @@ class Jobs(Storage):
             identity = (
                 payload.input.inboundMessageId
                 if payload.kind == "REPLY"
+                else [
+                    payload.input.applicationId,
+                    payload.input.campaignId,
+                    payload.input.campaignStep,
+                ]
+                if payload.kind == "FOLLOW_UP" and payload.input.campaignId
                 else payload.input.applicationId
                 if payload.kind == "FOLLOW_UP"
                 else payload.input.cycleKey

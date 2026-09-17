@@ -59,6 +59,10 @@ export type FollowUpCandidate = {applicationId: string; platformAccount: string;
     evidenceTrack: 'EXACT_READ_NO_REPLY' | 'EXACT_UNREAD_NO_REPLY' | 'ACKNOWLEDGED_WAITING'; requiredAgeHours: number; jdText: string
     anchorOutboundMessageId: string | null; anchorOutboundAt: number | null; eligible: boolean; blocker: string | null}
 export type FollowUpPreview = {asOf: number; minimumAgeHours: number; fallbackAgeHours: number; exactReadNoReplyCount: number; eligibleCount: number; items: FollowUpCandidate[]}
+export type OutreachCampaignCandidate = Pick<FollowUpCandidate, 'applicationId' | 'platformAccount' | 'encryptJobId' | 'conversationKey' | 'bossId' | 'jobTitle' | 'companyName' | 'recruiterName' | 'salaryText' | 'jdText' | 'anchorOutboundMessageId' | 'anchorOutboundAt' | 'evidenceTrack'> & {
+    campaignId: string; campaignStep: 1 | 2; fixedText: string
+}
+export type OutreachCampaignPreview = {campaign: {campaignId: string; status: string; createdAt: number} | null; eligibleCount: number; items: OutreachCampaignCandidate[]}
 export const metricRateLabel = (metric: Pick<CareerMetric, 'denominator' | 'rate'>) => metric.denominator === 0 || metric.rate === null ? '暂无可计算比例' : `${(metric.rate * 100).toFixed(1)}%`
 export const progressRateLabel = (numerator: number, denominator: number) => denominator === 0 ? '暂无记录' : `${(numerator / denominator * 100).toFixed(1)}%`
 export const previewMatchesSelection = (preview: CareerPreview | null, proposal: CareerProposal, selected: string[]) =>

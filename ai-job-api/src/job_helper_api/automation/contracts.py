@@ -128,6 +128,18 @@ class FollowUpInput(Input):
     evidenceTrack: Literal["EXACT_READ_NO_REPLY", "EXACT_UNREAD_NO_REPLY", "ACKNOWLEDGED_WAITING"]
     jobKey: str = Field(min_length=1, max_length=64)
     jobInfo: dict[str, Any]
+    campaignId: Id | None = None
+    campaignStep: Literal[1, 2] | None = None
+    fixedText: str | None = Field(default=None, min_length=1, max_length=500)
+
+    @model_validator(mode="after")
+    def campaign_binding(self):
+        supplied = (self.campaignId is not None, self.campaignStep is not None, self.fixedText is not None)
+        if any(supplied) and not all(supplied):
+            raise ValueError("Campaign id, step and fixed text must be supplied together")
+        if self.fixedText is not None and not self.fixedText.strip():
+            raise ValueError("Campaign text must contain text")
+        return self
 
 
 class JobInput(RequestId):

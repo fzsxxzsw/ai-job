@@ -16,6 +16,7 @@ export type BrowserAutomationContext = {
     bossId: string | null; contact?: BossUserInfo; job?: SerializableBossJobDetail; runId?: string
     inboundMessageId?: string; inboundMessageMid?: string; question?: string
     applicationId?: string; anchorOutboundMessageId?: string; anchorOutboundAt?: number
+    campaignId?: string; campaignStep?: 1 | 2
     snapshot?: {encryptJobId: string; jobBaseInfo: string; jobExtInfo: string; preMatchResult: unknown}
     greetingEnabled?: boolean
 }

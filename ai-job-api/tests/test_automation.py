@@ -216,6 +216,45 @@ def test_follow_up_is_deduplicated_and_text_action_needs_no_manual_approval(auto
     assert len(world["fake"].calls) == 1
 
 
+def test_confirmed_outreach_campaign_keeps_two_exact_idempotent_steps(auto, world):
+    seed_follow_up_application(world)
+    with sqlite3.connect(world["path"]) as db:
+        stamp = now_ms() - 47 * 60 * 60 * 1000
+        db.execute(
+            "INSERT INTO career_application_event "
+            "(id,user_id,application_id,event_type,occurred_at,confirmation,evidence_json,created_at) "
+            "VALUES (?,?,?,?,?,?,?,?)",
+            ("contact-case", world["settings"].owner_user_id, "application-case",
+             "CONTACT_INITIATED", stamp, "OBSERVED", "{}", stamp),
+        )
+    messages = ["第一段固定内容", "第二段固定内容"]
+    response(
+        auto.post(
+            "/internal/career/outreach-campaigns/activate",
+            json={"campaignId": "campaign-case", "messages": messages, "confirmed": True},
+            headers=INTERNAL,
+        )
+    )
+    preview = response(auto.get("/api/job/career/outreach-campaigns/candidates"))
+    assert preview["items"][0]["campaignStep"] == 1
+    assert preview["items"][0]["fixedText"] == messages[0]
+    jobs = []
+    for step, text in enumerate(messages, 1):
+        raw = follow_up_input()
+        raw["requestId"] = f"campaign-case-{step}"
+        raw["input"].update(
+            campaignId="campaign-case", campaignStep=step, fixedText=text
+        )
+        job = response(auto.post(BASE + "/jobs", json=raw))
+        jobs.append(job)
+        worker(auto, job)
+        detail = response(auto.get(BASE + "/jobs/" + job["jobId"]))
+        assert detail["actions"][0]["payload"]["text"] == text
+        assert detail["actions"][0]["approvalStatus"] == "NOT_REQUIRED"
+    assert jobs[0]["jobId"] != jobs[1]["jobId"]
+    assert len(world["fake"].calls) == 0
+
+
 def test_follow_up_dispatch_rechecks_terminal_application_in_same_transaction(auto, world):
     seed_follow_up_application(world)
     job = response(auto.post(BASE + "/jobs", json=follow_up_input()))

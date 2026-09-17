@@ -142,6 +142,13 @@ async def compute(service, job):
         ):
             result["decision"] = decision("STOP", "命中现有岗位或对话排除规则")
             return artifact
+        fixed_text = input_.get("fixedText")
+        if fixed_text:
+            action("SEND_TEXT", {"text": fixed_text})
+            result["decision"] = decision(
+                "SEND", f"已确认活动第 {input_.get('campaignStep')} 段固定消息，等待安全发送与平台回执"
+            )
+            return artifact
         system, _, config = await system_prompt(frozen, uid)
         prompt = (
             "请根据真实简历、岗位资料和已有对话，生成一条自然、克制的中文求职跟进消息。"
