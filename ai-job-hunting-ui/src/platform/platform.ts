@@ -1670,8 +1670,7 @@ class BossPlatform extends AbsPlatform {
         //  活跃度
         let activeTimeDesc = jobDetailExt.activeTimeDesc;
         if (!this.bossIsActive(activeTimeDesc)) {
-            // HR近期不活跃只降低优先级，不得在“不限量投递”模式下直接卡掉待遇合适的岗位。
-            this.logRecorder.info(`工作【${jobTitle}】Boss活跃度较低（${activeTimeDesc}），已作为参考继续投递`)
+            throw new NotMatchException(jobTitle, activeTimeDesc, '招聘者近期不活跃')
         }
 
         // 工作内容排除
