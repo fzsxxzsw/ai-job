@@ -224,8 +224,16 @@ def test_confirmed_outreach_campaign_keeps_two_exact_idempotent_steps(auto, worl
             "INSERT INTO career_application_event "
             "(id,user_id,application_id,event_type,occurred_at,confirmation,evidence_json,created_at) "
             "VALUES (?,?,?,?,?,?,?,?)",
-            ("contact-case", world["settings"].owner_user_id, "application-case",
-             "CONTACT_INITIATED", stamp, "OBSERVED", "{}", stamp),
+            (
+                "contact-case",
+                world["settings"].owner_user_id,
+                "application-case",
+                "CONTACT_INITIATED",
+                stamp,
+                "OBSERVED",
+                "{}",
+                stamp,
+            ),
         )
     messages = ["第一段固定内容", "第二段固定内容"]
     response(
@@ -242,9 +250,7 @@ def test_confirmed_outreach_campaign_keeps_two_exact_idempotent_steps(auto, worl
     for step, text in enumerate(messages, 1):
         raw = follow_up_input()
         raw["requestId"] = f"campaign-case-{step}"
-        raw["input"].update(
-            campaignId="campaign-case", campaignStep=step, fixedText=text
-        )
+        raw["input"].update(campaignId="campaign-case", campaignStep=step, fixedText=text)
         job = response(auto.post(BASE + "/jobs", json=raw))
         jobs.append(job)
         worker(auto, job)

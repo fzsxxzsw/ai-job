@@ -282,7 +282,10 @@ class Applications(Versions):
         if not isinstance(messages, list) or len(messages) != 2:
             return {"campaign": None, "items": [], "eligibleCount": 0}
         terminal_statuses = {
-            "WITHDRAWN", "EXPLICIT_REJECTED", "INTERVIEW_SCHEDULED", "OFFER_RECEIVED"
+            "WITHDRAWN",
+            "EXPLICIT_REJECTED",
+            "INTERVIEW_SCHEDULED",
+            "OFFER_RECEIVED",
         }
         rows = await self.db.rows(
             select(self.applications)
@@ -301,26 +304,40 @@ class Applications(Versions):
         items = []
         for row in rows:
             events = effective_events(
-                [event for event in await self.timeline(uid, row["id"])
-                 if event["confirmation"] != "INFERRED"]
+                [
+                    event
+                    for event in await self.timeline(uid, row["id"])
+                    if event["confirmation"] != "INFERRED"
+                ]
             )
             if not any(event["event_type"] == "CONTACT_INITIATED" for event in events):
                 continue
-            if any(event["event_type"] in {
-                "REJECTED", "INTERVIEW_INVITED", "INTERVIEW_COMPLETED", "OFFER_RECEIVED", "WITHDRAWN"
-            } for event in events):
+            if any(
+                event["event_type"]
+                in {
+                    "REJECTED",
+                    "INTERVIEW_INVITED",
+                    "INTERVIEW_COMPLETED",
+                    "OFFER_RECEIVED",
+                    "WITHDRAWN",
+                }
+                for event in events
+            ):
                 continue
             step = 1
             blocked = None
             for candidate_step in (1, 2):
-                key = digest([
-                    "FOLLOW_UP", row["platform_account"],
-                    [row["id"], campaign["campaignId"], candidate_step],
-                ])
+                key = digest(
+                    [
+                        "FOLLOW_UP",
+                        row["platform_account"],
+                        [row["id"], campaign["campaignId"], candidate_step],
+                    ]
+                )
                 job = await self.db.one(
-                    select(self.jobs).where(
-                        self.jobs.c.user_id == uid, self.jobs.c.business_key == key
-                    ).limit(1)
+                    select(self.jobs)
+                    .where(self.jobs.c.user_id == uid, self.jobs.c.business_key == key)
+                    .limit(1)
                 )
                 if not job:
                     step = candidate_step
@@ -338,24 +355,26 @@ class Applications(Versions):
                 step = candidate_step + 1
             if blocked:
                 continue
-            items.append({
-                "applicationId": row["id"],
-                "platformAccount": row["platform_account"],
-                "encryptJobId": row["encrypt_job_id"],
-                "conversationKey": row["conversation_key"],
-                "bossId": row["boss_id"],
-                "jobTitle": row["job_title"],
-                "companyName": row["company_name"],
-                "recruiterName": row["recruiter_name"],
-                "salaryText": row["salary_text"],
-                "jdText": (row["jd_text"] or "")[:10000],
-                "campaignId": campaign["campaignId"],
-                "campaignStep": step,
-                "fixedText": messages[step - 1],
-                "anchorOutboundMessageId": "campaign-anchor-" + row["id"],
-                "anchorOutboundAt": row["updated_at"] or row["created_at"],
-                "evidenceTrack": "ACKNOWLEDGED_WAITING",
-            })
+            items.append(
+                {
+                    "applicationId": row["id"],
+                    "platformAccount": row["platform_account"],
+                    "encryptJobId": row["encrypt_job_id"],
+                    "conversationKey": row["conversation_key"],
+                    "bossId": row["boss_id"],
+                    "jobTitle": row["job_title"],
+                    "companyName": row["company_name"],
+                    "recruiterName": row["recruiter_name"],
+                    "salaryText": row["salary_text"],
+                    "jdText": (row["jd_text"] or "")[:10000],
+                    "campaignId": campaign["campaignId"],
+                    "campaignStep": step,
+                    "fixedText": messages[step - 1],
+                    "anchorOutboundMessageId": "campaign-anchor-" + row["id"],
+                    "anchorOutboundAt": row["updated_at"] or row["created_at"],
+                    "evidenceTrack": "ACKNOWLEDGED_WAITING",
+                }
+            )
         return {
             "campaign": {k: campaign[k] for k in ("campaignId", "status", "createdAt")},
             "items": items,

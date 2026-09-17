@@ -88,9 +88,7 @@ def register_career_routes(app, require_user, writable, internal):
     @app.post("/internal/career/outreach-campaigns/activate", dependencies=[Depends(internal)])
     async def activate_outreach_campaign(payload: dto.OutreachCampaignInput):
         return envelope(
-            await service().activate_outreach_campaign(
-                app.state.settings.owner_user_id, payload
-            )
+            await service().activate_outreach_campaign(app.state.settings.owner_user_id, payload)
         )
 
     @app.get("/api/job/career/applications/{ident}")

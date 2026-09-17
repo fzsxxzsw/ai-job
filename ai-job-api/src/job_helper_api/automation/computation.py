@@ -146,7 +146,8 @@ async def compute(service, job):
         if fixed_text:
             action("SEND_TEXT", {"text": fixed_text})
             result["decision"] = decision(
-                "SEND", f"已确认活动第 {input_.get('campaignStep')} 段固定消息，等待安全发送与平台回执"
+                "SEND",
+                f"已确认活动第 {input_.get('campaignStep')} 段固定消息，等待安全发送与平台回执",
             )
             return artifact
         system, _, config = await system_prompt(frozen, uid)

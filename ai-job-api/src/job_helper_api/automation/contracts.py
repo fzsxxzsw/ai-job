@@ -134,7 +134,11 @@ class FollowUpInput(Input):
 
     @model_validator(mode="after")
     def campaign_binding(self):
-        supplied = (self.campaignId is not None, self.campaignStep is not None, self.fixedText is not None)
+        supplied = (
+            self.campaignId is not None,
+            self.campaignStep is not None,
+            self.fixedText is not None,
+        )
         if any(supplied) and not all(supplied):
             raise ValueError("Campaign id, step and fixed text must be supplied together")
         if self.fixedText is not None and not self.fixedText.strip():
