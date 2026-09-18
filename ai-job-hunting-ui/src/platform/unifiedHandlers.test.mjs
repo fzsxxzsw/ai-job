@@ -95,6 +95,10 @@ const result = await build({stdin: {contents: `export {BossOption} from './bossP
 const peer = {uid: '81', encryptBossId: 'BossA', encryptJobId: 'JobA', securityId: 'SecA', brandName: '合成公司', title: 'Java开发', name: '合成HR'}
 const raw = (text='请介绍一下相关经验', mid='90071992547409941', type=1) => ({messages: [{mid, time: '1788757200000', type:1,
     from: {uid:'81'}, to:{uid:'40'}, body:{type,text}}]})
+async function waitUntil(predicate, timeoutMs=2000) {
+    const deadline=Date.now()+timeoutMs
+    while(!predicate()&&Date.now()<deadline)await new Promise(resolve=>setTimeout(resolve,1))
+}
 function environment() {
     const storage = new Map()
     const noop = () => {}
@@ -290,7 +294,7 @@ test('APPLICATION timeout is bounded, cancels the graph job and never falls back
     env.platform.obtainBossJobDetailExt=async()=>({postDescription:'Python、FastAPI 和 MySQL',friendStatus:0,activeTimeDesc:'今日活跃'})
     await env.platform.matchJob(job);env.platform.pushStatus=1;env.fixture.autoExecuteApplication=false
     const pending=assert.rejects(env.platform.doPush(job),/统一投递任务等待超时/)
-    for(let attempt=0;attempt<20&&!env.fixture.applicationTimeout;attempt++)await new Promise(resolve=>setImmediate(resolve))
+    await waitUntil(()=>typeof env.fixture.applicationTimeout==='function')
     assert.equal(typeof env.fixture.applicationTimeout,'function')
     env.fixture.applicationTimeout()
     await pending
@@ -432,7 +436,7 @@ test('manual takeover waits for activation, blocks M1 and clears only after acce
     }
     const first=raw('第一条')
     const pendingFirst=env.option.handlerBossMessage(first,81,'第一条')
-    for(let attempt=0;attempt<200&&!releaseActivation;attempt++)await new Promise(resolve=>setImmediate(resolve))
+    await waitUntil(()=>typeof releaseActivation==='function')
     assert.equal(typeof releaseActivation,'function')
     assert.equal(env.submissions.length,0)
     releaseActivation();await pendingFirst
@@ -444,7 +448,7 @@ test('manual takeover waits for activation, blocks M1 and clears only after acce
     env.fixture.submitGate=new Promise(resolve=>{releaseSubmit=resolve})
     const second=raw('第二条','90071992547409942');second.messages[0].time='1788757201000'
     const pendingSecond=env.option.handlerBossMessage(second,81,'第二条')
-    for(let attempt=0;attempt<200&&env.submissions.length===0;attempt++)await new Promise(resolve=>setImmediate(resolve))
+    await waitUntil(()=>env.submissions.length>0)
     assert.equal(env.submissions.length,1)
     assert.equal(JSON.parse(env.storage.get(key)).status,'ACTIVE','fence remains until server accepts M2')
     releaseSubmit();await pendingSecond
