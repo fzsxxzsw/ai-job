@@ -163,7 +163,9 @@ export function readDeliveryAudit(): DeliveryAuditEntry[] {
 function writeDeliveryAudit(entries: DeliveryAuditEntry[]): void {
     const raw = JSON.stringify(entries.slice(-MAX_ENTRIES))
     GM_setValue(DELIVERY_AUDIT_KEY, raw)
-    localStorage.setItem(DELIVERY_AUDIT_KEY, raw)
+    // GM storage is authoritative. A full legacy mirror must not turn a
+    // confirmed platform action into an apparent delivery failure.
+    try { localStorage.setItem(DELIVERY_AUDIT_KEY, raw) } catch { /* Legacy mirror only. */ }
 }
 
 let auditUploadRunning = false

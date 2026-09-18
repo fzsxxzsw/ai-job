@@ -55,3 +55,17 @@ test('manual stop clears the lease', () => {
     clearPushRunLease(storage)
     assert.equal(storage.getItem(PUSH_RUN_LEASE_KEY), null)
 })
+
+test('a full browser storage does not block the explicitly started run', () => {
+    const storage = {
+        setItem() { throw Object.assign(new Error('Setting the value exceeded the quota'), {name: 'QuotaExceededError'}) },
+    }
+    const originalWarn = console.warn
+    console.warn = () => undefined
+    try {
+        const lease = writePushRunLease(storage, identity, Date.now())
+        assert.equal(lease.bossAccountUid, identity.bossAccountUid)
+    } finally {
+        console.warn = originalWarn
+    }
+})

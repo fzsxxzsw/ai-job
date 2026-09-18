@@ -579,7 +579,11 @@ class BossPlatform extends AbsPlatform {
         const raw = JSON.stringify(queue.slice(-100))
         // 同时写 GM 与 localStorage：新版本跨标签页实时同步，旧版本仍可继续领取队列。
         GM_setValue(BossPlatform.GREETING_QUEUE_KEY, raw)
-        localStorage.setItem(BossPlatform.GREETING_QUEUE_KEY, raw)
+        try {
+            localStorage.setItem(BossPlatform.GREETING_QUEUE_KEY, raw)
+        } catch {
+            this.logRecorder.warn('页面存储空间不足，已继续使用 GM 与 IndexedDB 保存招呼语队列')
+        }
         void persistReliableValue(BossPlatform.GREETING_QUEUE_KEY, raw).catch(error => {
             this.logRecorder.error('持久化自定义招呼语补发队列失败', error)
         })

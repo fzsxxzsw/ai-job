@@ -63,11 +63,17 @@ test('receipt-only pruning requires current ownership and every exact message id
     }
 })
 
-function auditHarness(shared = new Map()) {
+function auditHarness(shared = new Map(), {rejectLocalWrites = false} = {}) {
     const requests = [], exports = {}
     let now = 1_800_000_000_000
     const win = {_PAGE: {uid: '7'}}
-    const localStorage = {getItem: key => shared.get(key) ?? null, setItem: (key, value) => shared.set(key, value)}
+    const localStorage = {
+        getItem: key => shared.get(key) ?? null,
+        setItem: (key, value) => {
+            if (rejectLocalWrites) throw Object.assign(new Error('quota exceeded'), {name: 'QuotaExceededError'})
+            shared.set(key, value)
+        },
+    }
     if (!shared.has('Authorization')) shared.set('Authorization', 'synthetic-login-A')
     const source = readFileSync(new URL('./deliveryAudit.ts', import.meta.url), 'utf8')
     runInNewContext(ts.transpileModule(source, {compilerOptions: {target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS}}).outputText, {
@@ -83,6 +89,12 @@ function auditHarness(shared = new Map()) {
         settle: async () => { for (let i = 0; i < 20; i++) await new Promise(resolve => setTimeout(resolve, 2)) }}
 }
 const input = {key: 'new', kind: 'ai-reply', status: 'queued', content: 'private message'}
+
+test('a full legacy localStorage mirror cannot block authoritative audit persistence', () => {
+    const h = auditHarness(new Map(), {rejectLocalWrites: true})
+    assert.doesNotThrow(() => h.api.recordDeliveryAudit(input))
+    assert.equal(h.api.readDeliveryAudit()[0].key, input.key)
+})
 
 test('audit persists before request, retries after reload and stops after five failures', async () => {
     let h = auditHarness()

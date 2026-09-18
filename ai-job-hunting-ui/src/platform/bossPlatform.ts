@@ -500,7 +500,11 @@ export class BossOption {
             .slice(-300))
         const raw = JSON.stringify(trimmed)
         GM_setValue(BossOption.CONVERSATION_REPLY_LEDGER_KEY, raw)
-        localStorage.setItem(BossOption.CONVERSATION_REPLY_LEDGER_KEY, raw)
+        try {
+            localStorage.setItem(BossOption.CONVERSATION_REPLY_LEDGER_KEY, raw)
+        } catch {
+            BossOption.logRecorder.warn('页面存储空间不足，已继续使用 GM 保存会话回复记录')
+        }
     }
 
     private markHrReply(bossUserInfo: BossUserInfo, messageId: string): void {
@@ -554,7 +558,11 @@ export class BossOption {
         try {
             const raw = JSON.stringify(queue.slice(-100))
             GM_setValue(BossOption.AI_REPLY_QUEUE_KEY, raw)
-            localStorage.setItem(BossOption.AI_REPLY_QUEUE_KEY, raw)
+            try {
+                localStorage.setItem(BossOption.AI_REPLY_QUEUE_KEY, raw)
+            } catch {
+                BossOption.logRecorder.warn('页面存储空间不足，已继续使用 GM 与 IndexedDB 保存 AI 回复队列')
+            }
             void persistReliableValue(BossOption.AI_REPLY_QUEUE_KEY, raw).catch(error => {
                 BossOption.logRecorder.error('持久化AI坐席补发队列失败', error)
             })

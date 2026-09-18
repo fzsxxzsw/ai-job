@@ -57,7 +57,11 @@ export function writePushRunLease(
     now = Date.now(),
 ): PushRunLease {
     const lease = createPushRunLease(identity, now)
-    storage.setItem(PUSH_RUN_LEASE_KEY, JSON.stringify(lease))
+    try {
+        storage.setItem(PUSH_RUN_LEASE_KEY, JSON.stringify(lease))
+    } catch {
+        console.warn('[AI工作猎手] 页面存储空间不足；本次手动投递继续，但刷新后不会自动续跑')
+    }
     return lease
 }
 
