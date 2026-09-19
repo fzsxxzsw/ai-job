@@ -207,15 +207,15 @@ test('actual matchJob preserves hard filters and captures graph FilterInput with
     await assert.rejects(env.platform.matchJob({...job,brandName:'潮一'}))
     env.platform.pushStatus='PUSHING'
 })
-test('actual matchJob rejects recruiters inactive for months before creating an application task', async () => {
+test('actual matchJob keeps recruiters inactive for months eligible for configured filters', async () => {
     const job={encryptJobId:'JobA',encryptBossId:'BossA',securityId:'SecA',lid:'LidA',brandName:'合成公司',jobName:'Python后端开发',salaryDesc:'10-15K',cityName:'测试市'}
     for (const activeTimeDesc of ['4月内活跃','半年前活跃']) {
         const env=environment()
         env.platform.obtainBossJobDetailExt=async()=>({postDescription:'Python、FastAPI 和 MySQL',friendStatus:0,activeTimeDesc})
-        await assert.rejects(env.platform.matchJob({...job}),/招聘者近期不活跃/)
+        await env.platform.matchJob({...job})
         assert.equal(env.submissions.length,0)
         assert.equal(env.requests.filter(request=>request.url.includes('/friend/add.json')).length,0)
-        assert.equal(env.platform.unifiedFilterInputs.size,0)
+        assert.equal(env.platform.unifiedFilterInputs.size,1)
     }
 })
 test('actual startPush submits APPLICATION, accepts CONTACT ACK and leaves greeting solely to the graph', async () => {

@@ -1674,7 +1674,7 @@ class BossPlatform extends AbsPlatform {
         //  活跃度
         let activeTimeDesc = jobDetailExt.activeTimeDesc;
         if (!this.bossIsActive(activeTimeDesc)) {
-            throw new NotMatchException(jobTitle, activeTimeDesc, '招聘者近期不活跃')
+            this.logRecorder.info(`工作【${jobTitle}】Boss活跃度较低（${activeTimeDesc}），已作为参考继续投递`)
         }
 
         // 工作内容排除
