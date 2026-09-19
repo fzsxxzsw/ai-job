@@ -64,7 +64,6 @@ import {
 } from "./greetingPolicy";
 import {makeGreetingTaskKey, migrateAndDedupeGreetingTasks} from "./greetingIdentity";
 import {findBossMountTarget} from "../runtime/routeHost";
-import {isSalaryWithinConfiguredRange} from "./salaryPolicy";
 
 let pushResultCounter: any;
 let userStore: any;
@@ -1412,15 +1411,7 @@ class BossPlatform extends AbsPlatform {
             throw new NotMatchException(jobTitle, jobDetail.jobName, '满足排除工作名')
         }
 
-        // 只要填写了薪资范围，就把它作为硬限制；不能被旧版 srE=false 迁移值绕过。
-        const configuredSalaryRange = String(userStore.user.preference.sr || '').trim()
-        const pageSalaryRange = String(jobDetail.salaryDesc || '').split(".")[0]
-        if (configuredSalaryRange
-            && !isSalaryWithinConfiguredRange(configuredSalaryRange, pageSalaryRange)) {
-            throw new NotMatchException(jobTitle, pageSalaryRange || '薪资未知',
-                `不满足薪资硬范围 ${configuredSalaryRange}K`)
-        }
-
+        // 薪资范围只作为排序/提示参考，不应阻止开发岗位投递。
         // 公司规模
         let pageCompanyScaleRange = userStore.user.preference.csr;
         if (userStore.user.preference.csrE && !Tools.isRangeOverlap(pageCompanyScaleRange, jobDetail.brandScaleName)) {
