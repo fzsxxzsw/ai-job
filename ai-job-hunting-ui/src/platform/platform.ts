@@ -1642,19 +1642,12 @@ class BossPlatform extends AbsPlatform {
             throw new NotMatchException(jobTitle, jobDetail.jobName, '满足排除工作名')
         }
 
-        // 薪资允许 3K 容忍带；超出容忍带的上沿只在简历高匹配时例外放行。
+        // 薪资范围只作为排序/提示参考，不应阻止开发岗位投递。
         const configuredSalaryRange = String(userStore.user.preference.sr || '').trim()
         const pageSalaryRange = String(jobDetail.salaryDesc || '').split(".")[0]
         const salaryFit = evaluateSalaryRange(configuredSalaryRange, pageSalaryRange)
-        if (salaryFit === 'OUTSIDE' || salaryFit === 'UNKNOWN') {
-            throw new NotMatchException(jobTitle, pageSalaryRange || '薪资未知',
-                salaryFit === 'UNKNOWN'
-                    ? `无法确认岗位薪资是否落在 ${configuredSalaryRange}K 附近`
-                    : `岗位薪资与 ${configuredSalaryRange}K 的差距超过 3K 容忍带`)
-        }
-        if (salaryFit === 'STRETCH' && !userStore.user.preference.resumeMatchE) {
-            throw new NotMatchException(jobTitle, pageSalaryRange,
-                '薪资上限超过 3K 容忍带，需开启简历匹配后才允许高匹配例外')
+        if (salaryFit === 'OUTSIDE' || salaryFit === 'UNKNOWN' || salaryFit === 'STRETCH') {
+            this.logRecorder.info(`工作【${jobTitle}】薪资（${pageSalaryRange || '未知'}）偏离配置 ${configuredSalaryRange || '未设置'}K，保留岗位并作为待遇参考`)
         }
 
         // 公司规模
@@ -1667,7 +1660,7 @@ class BossPlatform extends AbsPlatform {
         let jobDetailExt = await this.obtainBossJobDetailExt(jobDetail);
         const jdExclusion = matchEmploymentExclusion(userStore.user.preference, jobDetailExt)
         if (jdExclusion) {
-            throw new NotMatchException(jobTitle, jdExclusion, '命中 JD／对话排除词')
+            throw new NotMatchException(jobTitle, jdExclusion, `命中 JD／对话排除词：${jdExclusion}`)
         }
         logger.debug(`获取工作【${jobTitle}】详情扩展信息用于过滤 `, jobDetail)
 
@@ -1805,10 +1798,6 @@ class BossPlatform extends AbsPlatform {
             if (filterResult.status === 'REJECT') {
                 const source = filterResult.engine?.startsWith('LOCAL_RULES') ? '本地简历匹配' : 'AI过滤'
                 throw new NotMatchException(jobTitle, filterResult.reason, source)
-            }
-            if (salaryFit === 'STRETCH' && (!Number.isFinite(filterResult.score) || Number(filterResult.score) < 85)) {
-                throw new NotMatchException(jobTitle, pageSalaryRange,
-                    `薪资上限超过容忍带，简历匹配度需达到 85 分（当前 ${filterResult.score ?? '未知'} 分）`)
             }
             preMatchResult = filterResult
         }
