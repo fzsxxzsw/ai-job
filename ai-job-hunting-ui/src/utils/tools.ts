@@ -6,6 +6,7 @@ import {ElMessage as originalElMessage, MessageParams} from "element-plus";
 import {LogRecorder} from "../logging/record";
 import axiosOriginal from "axios";
 import {GM_xmlhttpRequest} from "$";
+import {setAuthorization} from './authStorage';
 
 const logRecorder = new LogRecorder();
 let loginIng = false;
@@ -52,7 +53,7 @@ export const silentlyLogin = async (bossUserId: string) => {
             loginStore.loginSuccess()
             return;
         }
-        localStorage.setItem('Authorization', resp.data.data);
+        setAuthorization(resp.data.data);
         loginStore.loginSuccess()
         logRecorder.info("静默登录成功")
     }).catch(e => {
@@ -187,7 +188,7 @@ export const handlerImport = async (importResumeLoading: { value: boolean }) => 
         return;
     }
     let loginResp = await axios.post("/api/user/silently/login?uniqueId=" + bossUserId)
-    localStorage.setItem('Authorization', loginResp.data.data);
+    setAuthorization(loginResp.data.data);
     if (!importResp.data.data.email) {
         importResumeLoading.value = false;
         return;

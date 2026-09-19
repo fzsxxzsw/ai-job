@@ -1,6 +1,7 @@
 import {isProdEnv} from "./tools";
 import {EventSourcePolyfill as ESP} from "event-source-polyfill";
 import EventSourcePolyfillDefault from "event-source-polyfill";
+import {getAuthorization} from './authStorage';
 
 const EventSourcePolyfill = isProdEnv() ? EventSourcePolyfillDefault : ESP;
 
@@ -15,7 +16,7 @@ export class SSEClient {
     }
 
     public start(): void {
-        let authorization = localStorage.getItem('Authorization');
+        let authorization = getAuthorization();
         this.eventSource = new EventSourcePolyfill(this.url, {
             withCredentials: true,
             // 5分钟超时(略小于nginx sse超时时间)

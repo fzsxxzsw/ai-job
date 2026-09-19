@@ -1,5 +1,6 @@
 import {GM_getValue, GM_setValue, GM_xmlhttpRequest} from "$";
 import {hasMaterialDeliveryAuditChange} from "./deliveryAuditState";
+import {getAuthorization} from "../utils/authStorage";
 
 export const DELIVERY_AUDIT_KEY = 'ai-job-delivery-audit-v1'
 
@@ -165,7 +166,7 @@ function writeDeliveryAudit(entries: DeliveryAuditEntry[]): void {
 }
 
 function reportDeliveryAudit(entry: DeliveryAuditEntry): void {
-    const authorization = localStorage.getItem('Authorization')
+    const authorization = getAuthorization()
     if (!authorization) return
     try {
         GM_xmlhttpRequest({

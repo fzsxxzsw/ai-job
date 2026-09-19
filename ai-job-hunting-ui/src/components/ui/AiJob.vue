@@ -293,6 +293,7 @@ import {PushStatus} from "../../enums";
 import {AbsPlatform} from "../../platform/platform";
 import {TampermonkeyApi, Tools} from "../../platform/utils";
 import {ElMessage, fetchWithGM_request, isProdEnv, loginInterceptor, silentlyLogin} from "../../utils/tools";
+import {setAuthorization} from "../../utils/authStorage";
 import logger from '../../logging'
 import {SSEClient} from "../../utils/sse";
 import {LoginStore, pushResultCount, UserStore} from "../../stores";
@@ -612,7 +613,7 @@ const handlerImport = async () => {
         return;
     }
     let loginResp = await axios.post("/api/user/silently/login?uniqueId=" + bossUserId)
-    localStorage.setItem('Authorization', loginResp.data.data);
+    setAuthorization(loginResp.data.data);
     if(!importResp.data.data.email){
         ElMessage({
             message: "导入简历成功；但未识别到邮箱，请在偏好设置中完善[通知邮箱]",

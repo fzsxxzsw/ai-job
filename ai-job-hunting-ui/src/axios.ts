@@ -3,6 +3,7 @@ import {ElMessage} from "./utils/tools";
 import {BizCodeEnum} from "./types";
 import {ProductStore} from "./stores";
 import {DEFAULT_SERVER_URL, ServerStore} from "./stores/server";
+import {getAuthorization} from "./utils/authStorage";
 
 
 /**
@@ -30,7 +31,7 @@ request.interceptors.request.use(req => {
             req.baseURL = DEFAULT_SERVER_URL
         }
 
-        let authorization = localStorage.getItem('Authorization');
+        let authorization = getAuthorization();
         // 请求时携带token
         if (authorization) {
             req.headers['Authorization'] = authorization;
@@ -67,7 +68,7 @@ request.interceptors.response.use((resp: any) => {
         }
 
         if (result.code === 401) {
-            let authorization = localStorage.getItem('Authorization');
+            let authorization = getAuthorization();
             if (authorization) {
                 ElMessage({
                     type: "error",
